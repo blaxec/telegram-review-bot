@@ -1,6 +1,7 @@
 # file: database/db_manager.py
 
 import datetime
+import logging # <-- ДОБАВЛЕН ИМПОРТ
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete
 from sqlalchemy.orm import selectinload
@@ -8,6 +9,8 @@ from typing import Union
 
 from database.models import Base, User, Review, Link
 from config import DATABASE_URL
+
+logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
 
 # Убираем создание engine и async_session отсюда
 engine = None
@@ -38,7 +41,13 @@ async def get_user(user_id: int) -> Union[User, None]:
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
     user = await get_user(user_id)
-    return (user.balance, user.hold_balance) if user else (0.0, 0.0)
+    # ИЗМЕНЕНО: Добавлено логирование для отладки
+    if user:
+        logger.info(f"DB get_user_balance for user {user_id}: Found user. Raw balance: '{user.balance}' (type: {type(user.balance)})")
+        return (user.balance, user.hold_balance)
+    else:
+        logger.warning(f"DB get_user_balance for user {user_id}: User not found. Returning (0.0, 0.0)")
+        return (0.0, 0.0)
 
 async def update_balance(user_id: int, amount: float):
     async with async_session() as session:

@@ -63,7 +63,6 @@ async def go_profile_handler(callback: CallbackQuery, state: FSMContext):
 async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
     
-    # ИЗМЕНЕНО: Принудительное приведение к float для надежного сравнения
     try:
         balance = float(balance)
     except (ValueError, TypeError):
@@ -180,30 +179,40 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
 
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
-    balance, _ = await db_manager.get_user_balance(callback.from_user.id)
-    
-    # ИЗМЕНЕНО: Принудительное приведение к float для надежного сравнения
-    try:
-        # Пытаемся преобразовать полученное значение в float.
-        # Это защитит от случаев, когда из базы приходит строка или другой тип.
-        balance = float(balance)
-    except (ValueError, TypeError):
-        # Если преобразование не удалось, считаем баланс нулевым.
-        balance = 0.0
+    user_id = callback.from_user.id
+    logger.info(f"--- Withdraw process started for user {user_id} ---")
 
-    logger.info(f"Withdraw check for user {callback.from_user.id}: Balance is {balance} (type: {type(balance)})")
-    
-    # ИЗМЕНЕНО: Сравниваем float с float (15.0) для точности.
-    if balance < 15.0:
-        # ИЗМЕНЕНО: Более информативное сообщение об ошибке для отладки
-        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
+    # Шаг 1: Получаем "сырое" значение из базы данных
+    raw_balance, _ = await db_manager.get_user_balance(user_id)
+    logger.info(f"Step 1: Raw balance received from DB for user {user_id}: '{raw_balance}' (type: {type(raw_balance)})")
+
+    # Шаг 2: Надежно преобразуем значение в float, обрабатывая возможные ошибки
+    balance_float = 0.0
+    try:
+        balance_float = float(raw_balance)
+        logger.info(f"Step 2: Balance for user {user_id} successfully converted to float: {balance_float}")
+    except (ValueError, TypeError) as e:
+        logger.error(f"Step 2 FAILED for user {user_id}: Could not convert '{raw_balance}' to float. Error: {e}")
+        await callback.answer("Произошла системная ошибка при чтении вашего баланса. Пожалуйста, обратитесь в поддержку.", show_alert=True)
         return
 
+    # Шаг 3: Выполняем сравнение и логируем результат
+    is_insufficient = balance_float < 15.0
+    logger.info(f"Step 3: Comparison for user {user_id}: '{balance_float} < 15.0' resulted in: {is_insufficient}")
+
+    # Шаг 4: Реагируем на результат сравнения
+    if is_insufficient:
+        logger.warning(f"Step 4: Insufficient balance detected for user {user_id}. Notifying user.")
+        await callback.answer(f"Недостаточно звезд для вывода. Ваш текущий баланс: {balance_float} ⭐.", show_alert=True)
+        return
+
+    logger.info(f"Step 4: Balance for user {user_id} is sufficient. Proceeding to withdraw amount selection.")
     await state.set_state(UserState.WITHDRAW_AMOUNT)
     await callback.message.edit_text(
         "Сколько звезд вы хотите вывести?",
         reply_markup=inline.get_withdraw_amount_keyboard()
     )
+
 
 async def process_withdraw_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
