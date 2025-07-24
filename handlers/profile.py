@@ -68,8 +68,6 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
     except (ValueError, TypeError):
         balance = 0.0
 
-    logger.info(f"Transfer check for user {callback.from_user.id}: Balance is {balance} (type: {type(balance)})")
-    
     if balance < 1.0:
         await callback.answer("Недостаточно звезд на балансе для выполнения этой операции.", show_alert=True)
         return
@@ -179,34 +177,17 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
 
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
-    user_id = callback.from_user.id
-    logger.info(f"--- Withdraw process started for user {user_id} ---")
-
-    # Шаг 1: Получаем "сырое" значение из базы данных
-    raw_balance, _ = await db_manager.get_user_balance(user_id)
-    logger.info(f"Step 1: Raw balance received from DB for user {user_id}: '{raw_balance}' (type: {type(raw_balance)})")
-
-    # Шаг 2: Надежно преобразуем значение в float, обрабатывая возможные ошибки
-    balance_float = 0.0
+    balance, _ = await db_manager.get_user_balance(callback.from_user.id)
+    
     try:
-        balance_float = float(raw_balance)
-        logger.info(f"Step 2: Balance for user {user_id} successfully converted to float: {balance_float}")
-    except (ValueError, TypeError) as e:
-        logger.error(f"Step 2 FAILED for user {user_id}: Could not convert '{raw_balance}' to float. Error: {e}")
-        await callback.answer("Произошла системная ошибка при чтении вашего баланса. Пожалуйста, обратитесь в поддержку.", show_alert=True)
+        balance = float(balance)
+    except (ValueError, TypeError):
+        balance = 0.0
+    
+    if balance < 15.0:
+        await callback.answer(f"Недостаточно звезд для вывода. Ваш текущий баланс: {balance} ⭐.", show_alert=True)
         return
 
-    # Шаг 3: Выполняем сравнение и логируем результат
-    is_insufficient = balance_float < 15.0
-    logger.info(f"Step 3: Comparison for user {user_id}: '{balance_float} < 15.0' resulted in: {is_insufficient}")
-
-    # Шаг 4: Реагируем на результат сравнения
-    if is_insufficient:
-        logger.warning(f"Step 4: Insufficient balance detected for user {user_id}. Notifying user.")
-        await callback.answer(f"Недостаточно звезд для вывода. Ваш текущий баланс: {balance_float} ⭐.", show_alert=True)
-        return
-
-    logger.info(f"Step 4: Balance for user {user_id} is sufficient. Proceeding to withdraw amount selection.")
     await state.set_state(UserState.WITHDRAW_AMOUNT)
     await callback.message.edit_text(
         "Сколько звезд вы хотите вывести?",
@@ -214,7 +195,30 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
     )
 
 
+# ИЗМЕНЕНО: Эта функция была переписана, чтобы избежать ошибки с ID пользователя
+@router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
+async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
+    # Используем callback.from_user.id, который всегда указывает на того, кто нажал кнопку
+    user_id = callback.from_user.id
+    amount = float(callback.data.split('_')[-1])
+
+    # Повторно проверяем баланс, используя правильный ID
+    balance, _ = await db_manager.get_user_balance(user_id)
+    if float(balance) < amount:
+        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐", show_alert=True)
+        return
+
+    # Если все в порядке, продолжаем сценарий
+    await state.update_data(withdraw_amount=amount)
+    await state.set_state(UserState.WITHDRAW_RECIPIENT)
+    await callback.message.edit_text(
+        "Кому вы хотите отправить подарок?",
+        reply_markup=inline.get_withdraw_recipient_keyboard()
+    )
+
+# ИЗМЕНЕНО: Эта вспомогательная функция больше не нужна для кнопок, но оставим ее для ввода "другой суммы"
 async def process_withdraw_amount(amount: float, message: Message, state: FSMContext):
+    # Здесь message.from_user.id будет правильным, так как пользователь сам пишет сообщение
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
     if amount > float(balance):
         await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
@@ -227,16 +231,12 @@ async def process_withdraw_amount(amount: float, message: Message, state: FSMCon
         reply_markup=inline.get_withdraw_recipient_keyboard()
     )
 
-@router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
-async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
-    amount = float(callback.data.split('_')[-1])
-    await callback.message.delete()
-    await process_withdraw_amount(amount, callback.message, state)
 
 @router.callback_query(F.data == 'withdraw_amount_other', UserState.WITHDRAW_AMOUNT)
 async def withdraw_other_amount_request(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
     await callback.message.edit_text("Введите сумму для вывода:", reply_markup=inline.get_cancel_inline_keyboard())
+
 
 @router.message(UserState.WITHDRAW_AMOUNT_OTHER)
 async def withdraw_other_amount_input(message: Message, state: FSMContext):
@@ -246,7 +246,9 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
     except (ValueError, TypeError):
         await message.answer("Неверный формат. Пожалуйста, введите число (минимум 15).")
         return
+    # Эта функция вызывается из правильного контекста (сообщение от пользователя)
     await process_withdraw_amount(amount, message, state)
+
 
 @router.callback_query(F.data.startswith('withdraw_recipient_'), UserState.WITHDRAW_RECIPIENT)
 async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext, bot: Bot):
