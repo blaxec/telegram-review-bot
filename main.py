@@ -5,6 +5,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import BotCommand  # <-- ИМПОРТИРУЕМ BotCommand
 from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -16,6 +17,16 @@ from utils.blocking import BlockingMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# --- ДОБАВЛЕНА ФУНКЦИЯ УСТАНОВКИ КОМАНД ---
+async def set_bot_commands(bot: Bot):
+    """Устанавливает команды, которые будут видны в меню Telegram."""
+    commands = [
+        BotCommand(command="start", description="🚀 Перезапустить бота"),
+        BotCommand(command="stars", description="✨ Мой профиль и баланс")
+    ]
+    await bot.set_my_commands(commands)
+
 
 async def main():
     bot = None
@@ -37,15 +48,17 @@ async def main():
 
         dp = Dispatcher(storage=storage)
 
-        # Middleware регистрируются в том порядке, в котором должны срабатывать
         dp.message.middleware(AntiFloodMiddleware())
         dp.message.middleware(BlockingMiddleware())
-        # Блокировка для callback'ов не нужна, т.к. прерывающие команды - текстовые
         
         dp.include_routers(*routers_list)
 
         logger.info("Starting bot...")
         await bot.delete_webhook(drop_pending_updates=True)
+        
+        # --- ВЫЗЫВАЕМ ФУНКЦИЮ УСТАНОВКИ КОМАНД ---
+        await set_bot_commands(bot)
+        
         scheduler.start()
 
         await dp.start_polling(bot, scheduler=scheduler, dp=dp)

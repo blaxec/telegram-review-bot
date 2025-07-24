@@ -1,6 +1,7 @@
 # file: handlers/profile.py
 
 from aiogram import Router, F, Bot
+from aiogram.filters import Command  # <-- ИМПОРТИРУЕМ Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -11,8 +12,6 @@ from keyboards import inline, reply
 from database import db_manager
 
 router = Router()
-
-# <--- ИЗМЕНЕНО: Декоратор `block_if_in_state` удален, так как его заменяет Middleware ---
 
 # --- Главный экран профиля и навигация ---
 
@@ -31,8 +30,10 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     )
     
     if isinstance(message_or_callback, Message):
+        # Отвечаем новым сообщением для команды /stars или текстовой кнопки
         await message_or_callback.answer(profile_text, reply_markup=inline.get_profile_keyboard())
     else: 
+        # Редактируем сообщение для callback-кнопок
         try:
             await message_or_callback.message.edit_text(profile_text, reply_markup=inline.get_profile_keyboard())
         except TelegramBadRequest as e:
@@ -45,7 +46,9 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
                     pass
                 await message_or_callback.message.answer(profile_text, reply_markup=inline.get_profile_keyboard())
 
-
+# --- ОБНОВЛЕННЫЙ ОБРАБОТЧИК ---
+# Теперь он срабатывает на команду /stars, на текстовую кнопку "Профиль" и сбрасывает состояние
+@router.message(Command("stars"))
 @router.message(F.text == 'Профиль', UserState.MAIN_MENU)
 async def profile_handler(message: Message, state: FSMContext):
     await show_profile_menu(message, state)

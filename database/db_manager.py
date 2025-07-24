@@ -4,15 +4,23 @@ import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete
 from sqlalchemy.orm import selectinload
+from typing import Union
 
 from database.models import Base, User, Review, Link
 from config import DATABASE_URL
 
-engine = create_async_engine(DATABASE_URL)
-async_session = async_sessionmaker(engine, expire_on_commit=False)
+# Убираем создание engine и async_session отсюда
+engine = None
+async_session = None
 
 
 async def init_db():
+    global engine, async_session
+    
+    # Создаем engine и сессию здесь, когда DATABASE_URL уже точно определен
+    engine = create_async_engine(DATABASE_URL)
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -24,7 +32,7 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
                 new_user = User(id=user_id, username=username, referrer_id=referrer_id)
                 session.add(new_user)
 
-async def get_user(user_id: int) -> User | None:
+async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
         return await session.get(User, user_id)
 
@@ -46,7 +54,7 @@ async def get_referrer_info(user_id: int) -> str:
         return f"@{referrer.username}" if referrer and referrer.username else f"ID: {user.referrer_id}"
     return "-"
 
-async def find_user_by_identifier(identifier: str) -> int | None:
+async def find_user_by_identifier(identifier: str) -> Union[int, None]:
     async with async_session() as session:
         try:
             user_id = int(identifier)
@@ -86,7 +94,7 @@ async def claim_referral_earnings(user_id: int):
                 user.balance += user.referral_earnings
                 user.referral_earnings = 0
 
-async def check_platform_cooldown(user_id: int, platform: str) -> datetime.timedelta | None:
+async def check_platform_cooldown(user_id: int, platform: str) -> Union[datetime.timedelta, None]:
     user = await get_user(user_id)
     if not user:
         return None
@@ -159,13 +167,13 @@ async def get_user_hold_reviews(user_id: int) -> list:
         result = await session.execute(query)
         return result.scalars().all()
 
-async def get_review_by_id(review_id: int) -> Review | None:
+async def get_review_by_id(review_id: int) -> Union[Review, None]:
     async with async_session() as session:
         query = select(Review).where(Review.id == review_id).options(selectinload(Review.link))
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
-async def admin_reject_review(review_id: int) -> Review | None:
+async def admin_reject_review(review_id: int) -> Union[Review, None]:
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -209,7 +217,7 @@ async def db_add_reference(url: str, platform: str) -> bool:
             session.add(new_link)
         return True
 
-async def db_get_available_reference(platform: str) -> Link | None:
+async def db_get_available_reference(platform: str) -> Union[Link, None]:
     async with async_session() as session:
         async with session.begin():
             query = select(Link).where(
@@ -245,6 +253,6 @@ async def db_delete_reference(link_id: int):
             delete_stmt = delete(Link).where(Link.id == link_id)
             await session.execute(delete_stmt)
 
-async def db_get_link_by_id(link_id: int) -> Link | None:
+async def db_get_link_by_id(link_id: int) -> Union[Link, None]:
     async with async_session() as session:
         return await session.get(Link, link_id)
