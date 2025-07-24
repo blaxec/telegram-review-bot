@@ -1,3 +1,5 @@
+# file: handlers/admin.py
+
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -266,7 +268,8 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку."
 
         try:
-            await bot.send_message(user_id, user_message_text, reply_markup=reply.get_main_menu_keyboard())
+            # ИЗМЕНЕНО: Замена reply_markup на инлайн-клавиатуру
+            await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
             await bot.send_message(admin_id, f"Предупреждение успешно отправлено пользователю {user_id}.")
         except Exception as e:
             await bot.send_message(admin_id, f"Не удалось отправить предупреждение пользователю {user_id}. Ошибка: {e}")
@@ -388,7 +391,8 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp
     user_message_text = f"❌ Ваш запрос был отклонен администратором.\n\nПричина: «{reason}»"
     await user_state.clear()
     try:
-        await bot.send_message(user_id, user_message_text, reply_markup=reply.get_main_menu_keyboard())
+        # ИЗМЕНЕНО: Замена reply_markup на инлайн-клавиатуру
+        await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
         await bot.send_message(admin_id, f"Сообщение об отклонении отправлено пользователю {user_id}.")
     except Exception as e:
         await bot.send_message(admin_id, f"Не удалось отправить сообщение пользователю {user_id}. Ошибка: {e}")
@@ -436,7 +440,9 @@ async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext)
         await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, 72)
         await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
         try:
-            await callback.bot.send_message(rejected_review.user_id, f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней.")
+            user_message = f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней."
+            # ИЗМЕНЕНО: Добавлена инлайн-клавиатура для возврата в главное меню
+            await callback.bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
         except Exception as e:
             print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
 
@@ -523,7 +529,9 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
         new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН @{callback.from_user.username}"
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         try:
-            await bot.send_message(rejected_review.user_id, f"❌ Ваш отзыв (ID: {review_id}) был отклонен администратором после проверки. Звезды списаны из холда.")
+            user_message = f"❌ Ваш отзыв (ID: {review_id}) был отклонен администратором после проверки. Звезды списаны из холда."
+            # ИЗМЕНЕНО: Добавлена инлайн-клавиатура для возврата в главное меню
+            await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
         except Exception as e:
             print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
     else:

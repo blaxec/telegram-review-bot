@@ -1,3 +1,5 @@
+# file: keyboards/inline.py
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -8,7 +10,8 @@ def get_agreement_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_back_to_main_menu_keyboard() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='Назад', callback_data='go_main_menu')]]
+    # ИЗМЕНЕНО: Текст кнопки сделан более универсальным для разных контекстов
+    buttons = [[InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_cancel_inline_keyboard() -> InlineKeyboardMarkup:
