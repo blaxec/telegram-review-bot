@@ -1,7 +1,8 @@
 # file: handlers/profile.py
 
+import logging # <-- ДОБАВЛЕН ИМПОРТ
 from aiogram import Router, F, Bot
-from aiogram.filters import Command  # <-- ИМПОРТИРУЕМ Command
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -12,6 +13,7 @@ from keyboards import inline, reply
 from database import db_manager
 
 router = Router()
+logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
 
 # --- Главный экран профиля и навигация ---
 
@@ -30,10 +32,8 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     )
     
     if isinstance(message_or_callback, Message):
-        # Отвечаем новым сообщением для команды /stars или текстовой кнопки
         await message_or_callback.answer(profile_text, reply_markup=inline.get_profile_keyboard())
     else: 
-        # Редактируем сообщение для callback-кнопок
         try:
             await message_or_callback.message.edit_text(profile_text, reply_markup=inline.get_profile_keyboard())
         except TelegramBadRequest as e:
@@ -46,8 +46,7 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
                     pass
                 await message_or_callback.message.answer(profile_text, reply_markup=inline.get_profile_keyboard())
 
-# --- ОБНОВЛЕННЫЙ ОБРАБОТЧИК ---
-# Теперь он срабатывает на команду /stars, на текстовую кнопку "Профиль" и сбрасывает состояние
+
 @router.message(Command("stars"))
 @router.message(F.text == 'Профиль', UserState.MAIN_MENU)
 async def profile_handler(message: Message, state: FSMContext):
@@ -63,6 +62,8 @@ async def go_profile_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == 'profile_transfer')
 async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
+    # ИЗМЕНЕНО: Добавлено логирование
+    logger.info(f"Transfer check for user {callback.from_user.id}: Balance is {balance}")
     if balance < 1:
         await callback.answer("Недостаточно звезд на балансе для выполнения этой операции.", show_alert=True)
         return
@@ -173,8 +174,10 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
+    # ИЗМЕНЕНО: Добавлено логирование для отладки
+    logger.info(f"Withdraw check for user {callback.from_user.id}: Balance is {balance}")
     if balance < 15:
-        await callback.answer("Минимальная сумма для вывода 15 звезд.", show_alert=True)
+        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐", show_alert=True)
         return
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
