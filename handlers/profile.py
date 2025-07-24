@@ -1,6 +1,6 @@
 # file: handlers/profile.py
 
-import logging # <-- ДОБАВЛЕН ИМПОРТ
+import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,7 +13,7 @@ from keyboards import inline, reply
 from database import db_manager
 
 router = Router()
-logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
+logger = logging.getLogger(__name__)
 
 # --- Главный экран профиля и навигация ---
 
@@ -62,9 +62,16 @@ async def go_profile_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == 'profile_transfer')
 async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
-    # ИЗМЕНЕНО: Добавлено логирование
-    logger.info(f"Transfer check for user {callback.from_user.id}: Balance is {balance}")
-    if balance < 1:
+    
+    # ИЗМЕНЕНО: Принудительное приведение к float для надежного сравнения
+    try:
+        balance = float(balance)
+    except (ValueError, TypeError):
+        balance = 0.0
+
+    logger.info(f"Transfer check for user {callback.from_user.id}: Balance is {balance} (type: {type(balance)})")
+    
+    if balance < 1.0:
         await callback.answer("Недостаточно звезд на балансе для выполнения этой операции.", show_alert=True)
         return
 
@@ -76,7 +83,7 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
 
 async def process_transfer_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
-    if amount > balance:
+    if amount > float(balance):
         await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
         return
 
@@ -174,10 +181,22 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
-    # ИЗМЕНЕНО: Добавлено логирование для отладки
-    logger.info(f"Withdraw check for user {callback.from_user.id}: Balance is {balance}")
-    if balance < 15:
-        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐", show_alert=True)
+    
+    # ИЗМЕНЕНО: Принудительное приведение к float для надежного сравнения
+    try:
+        # Пытаемся преобразовать полученное значение в float.
+        # Это защитит от случаев, когда из базы приходит строка или другой тип.
+        balance = float(balance)
+    except (ValueError, TypeError):
+        # Если преобразование не удалось, считаем баланс нулевым.
+        balance = 0.0
+
+    logger.info(f"Withdraw check for user {callback.from_user.id}: Balance is {balance} (type: {type(balance)})")
+    
+    # ИЗМЕНЕНО: Сравниваем float с float (15.0) для точности.
+    if balance < 15.0:
+        # ИЗМЕНЕНО: Более информативное сообщение об ошибке для отладки
+        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
@@ -188,7 +207,7 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
 
 async def process_withdraw_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
-    if amount > balance:
+    if amount > float(balance):
         await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
         return
 
