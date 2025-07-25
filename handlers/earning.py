@@ -9,11 +9,12 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message, CallbackQuery
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from states.user_states import UserState
-from keyboards import inline, reply
-from database import db_manager
-from references import reference_manager
-from config import ADMIN_ID_1, ADMIN_ID_2, FINAL_CHECK_ADMIN
+# ИСПРАВЛЕНО: Изменен путь импорта на относительный
+from ..states.user_states import UserState 
+from ..keyboards import inline, reply
+from ..database import db_manager
+from ..references import reference_manager
+from ..config import ADMIN_ID_1, ADMIN_ID_2, FINAL_CHECK_ADMIN
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -241,7 +242,6 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
             await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
     except Exception as e:
         logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
-        # Fallback to text message if photo fails for some reason
         await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
 
 
@@ -385,18 +385,18 @@ async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, b
         return
     task_text = (
         "Отлично! Выполните следующие действия:\n\n"
-        "⏳ На данные действия дается **30 минут**.\n"
+        "⏳ На данные действия дается **25 минут**.\n"
         f"🔗 [Перейти по ссылке]({link.url}) **Переходить по ней через Telegram нельзя!**\n"
         "👀 Просмотрите всю страницу.\n"
         "👍 Поставьте на положительные отзывы лайки.\n\n"
-        "Через 10 минут появится кнопка \"Выполнено\"."
+        "Через 6 минут появится кнопка \"Выполнено\"."
     )
     await callback.message.answer(task_text, parse_mode='Markdown', disable_web_page_preview=True)
     await state.set_state(UserState.YANDEX_REVIEW_TASK_ACTIVE)
     await state.update_data(username=callback.from_user.username)
     now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, user_id, 'yandex'])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=30), args=[bot, dp, user_id, 'yandex', 'основное задание'])
+    scheduler.add_job(send_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=6), args=[bot, user_id, 'yandex'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=25), args=[bot, dp, user_id, 'yandex', 'основное задание'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'yandex_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
