@@ -7,7 +7,6 @@ from sqlalchemy import select, update, and_, delete
 from sqlalchemy.orm import selectinload
 from typing import Union
 
-# ИЗМЕНЕНО: Импортируем новую модель
 from database.models import Base, User, Review, Link, WithdrawalRequest
 from config import DATABASE_URL
 
@@ -207,9 +206,10 @@ async def admin_approve_review(review_id: int) -> bool:
             review.status = 'approved'
         return True
 
+# ИЗМЕНЕНО: Добавлена опция selectinload для "жадной" загрузки связанных ссылок
 async def get_all_hold_reviews() -> list[Review]:
     async with async_session() as session:
-        query = select(Review).where(Review.status == 'on_hold')
+        query = select(Review).where(Review.status == 'on_hold').options(selectinload(Review.link))
         result = await session.execute(query)
         return result.scalars().all()
 
@@ -264,8 +264,6 @@ async def db_get_link_by_id(link_id: int) -> Union[Link, None]:
     async with async_session() as session:
         return await session.get(Link, link_id)
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ЗАПРОСАМИ НА ВЫВОД ---
-
 async def create_withdrawal_request(user_id: int, amount: float, recipient_info: str, comment: str = None) -> Union[int, None]:
     """Создает запрос на вывод и списывает деньги с баланса."""
     async with async_session() as session:
@@ -274,7 +272,6 @@ async def create_withdrawal_request(user_id: int, amount: float, recipient_info:
             if not user or user.balance < amount:
                 return None
             
-            # Списываем сумму с основного баланса
             user.balance -= amount
             
             new_request = WithdrawalRequest(
@@ -312,7 +309,7 @@ async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest,
             
             user = await session.get(User, request.user_id)
             if user:
-                user.balance += request.amount # Возвращаем средства
+                user.balance += request.amount
             
             request.status = 'rejected'
             return request
