@@ -1,18 +1,18 @@
 # file: database/db_manager.py
 
 import datetime
-import logging # <-- ДОБАВЛЕН ИМПОРТ
+import logging
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete
 from sqlalchemy.orm import selectinload
 from typing import Union
 
-from database.models import Base, User, Review, Link
+# ИЗМЕНЕНО: Импортируем новую модель
+from database.models import Base, User, Review, Link, WithdrawalRequest
 from config import DATABASE_URL
 
-logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
+logger = logging.getLogger(__name__)
 
-# Убираем создание engine и async_session отсюда
 engine = None
 async_session = None
 
@@ -20,7 +20,6 @@ async_session = None
 async def init_db():
     global engine, async_session
     
-    # Создаем engine и сессию здесь, когда DATABASE_URL уже точно определен
     engine = create_async_engine(DATABASE_URL)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -41,7 +40,6 @@ async def get_user(user_id: int) -> Union[User, None]:
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
     user = await get_user(user_id)
-    # ИЗМЕНЕНО: Добавлено логирование для отладки
     if user:
         logger.info(f"DB get_user_balance for user {user_id}: Found user. Raw balance: '{user.balance}' (type: {type(user.balance)})")
         return (user.balance, user.hold_balance)
@@ -265,3 +263,56 @@ async def db_delete_reference(link_id: int):
 async def db_get_link_by_id(link_id: int) -> Union[Link, None]:
     async with async_session() as session:
         return await session.get(Link, link_id)
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ЗАПРОСАМИ НА ВЫВОД ---
+
+async def create_withdrawal_request(user_id: int, amount: float, recipient_info: str, comment: str = None) -> Union[int, None]:
+    """Создает запрос на вывод и списывает деньги с баланса."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if not user or user.balance < amount:
+                return None
+            
+            # Списываем сумму с основного баланса
+            user.balance -= amount
+            
+            new_request = WithdrawalRequest(
+                user_id=user_id,
+                amount=amount,
+                recipient_info=recipient_info,
+                comment=comment
+            )
+            session.add(new_request)
+            await session.flush()
+            return new_request.id
+
+async def get_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
+    """Получает запрос на вывод по его ID."""
+    async with async_session() as session:
+        return await session.get(WithdrawalRequest, request_id, options=[selectinload(WithdrawalRequest.user)])
+
+async def approve_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
+    """Подтверждает запрос на вывод."""
+    async with async_session() as session:
+        async with session.begin():
+            request = await session.get(WithdrawalRequest, request_id)
+            if not request or request.status != 'pending':
+                return None
+            request.status = 'approved'
+            return request
+
+async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
+    """Отклоняет запрос на вывод и возвращает средства на баланс пользователя."""
+    async with async_session() as session:
+        async with session.begin():
+            request = await session.get(WithdrawalRequest, request_id)
+            if not request or request.status != 'pending':
+                return None
+            
+            user = await session.get(User, request.user_id)
+            if user:
+                user.balance += request.amount # Возвращаем средства
+            
+            request.status = 'rejected'
+            return request

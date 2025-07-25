@@ -10,7 +10,6 @@ def get_agreement_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_back_to_main_menu_keyboard() -> InlineKeyboardMarkup:
-    # ИЗМЕНЕНО: Текст кнопки сделан более универсальным для разных контекстов
     buttons = [[InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -250,4 +249,15 @@ def get_admin_final_verdict_keyboard(review_id: int) -> InlineKeyboardMarkup:
 
 def get_delete_ref_keyboard(link_id: int) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='🗑️ Удалить эту ссылку', callback_data=f'admin_refs:delete:{link_id}')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# ДОБАВЛЕНА НОВАЯ КЛАВИАТУРА
+def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для админа для подтверждения/отклонения вывода."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_withdraw_approve:{request_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_withdraw_reject:{request_id}")
+        ]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

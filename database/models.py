@@ -1,3 +1,5 @@
+# file: database/models.py
+
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger,
                         DateTime, ForeignKey, Float, Enum)
@@ -31,10 +33,10 @@ class Review(Base):
     user_id = Column(BigInteger, ForeignKey('users.id'))
     platform = Column(String)
     link_id = Column(Integer, ForeignKey('links.id'), nullable=True)
-    status = Column(String, default='pending') # pending -> on_hold -> approved/rejected
+    status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     hold_until = Column(DateTime, nullable=True)
-    amount = Column(Float, nullable=True) # Может быть NULL до одобрения
+    amount = Column(Float, nullable=True)
     
     review_text = Column(String, nullable=True)
     admin_message_id = Column(BigInteger, nullable=True)
@@ -51,3 +53,19 @@ class Link(Base):
     status = Column(Enum('available', 'assigned', 'used', 'expired', name='link_status_enum'), default='available')
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
+
+# ДОБАВЛЕНА НОВАЯ МОДЕЛЬ ДЛЯ ЗАПРОСОВ НА ВЫВОД
+class WithdrawalRequest(Base):
+    __tablename__ = 'withdrawal_requests'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    status = Column(Enum('pending', 'approved', 'rejected', name='withdrawal_status_enum'), default='pending', nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Информация о получателе (может быть "Себе" или ID/username другого)
+    recipient_info = Column(String, nullable=False)
+    comment = Column(String, nullable=True)
+
+    user = relationship("User")

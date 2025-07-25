@@ -4,13 +4,14 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, User
 from aiogram.exceptions import TelegramBadRequest
 from functools import wraps
 
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
+from config import FINAL_CHECK_ADMIN # <-- ИМПОРТИРУЕМ ID АДМИНА
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -185,7 +186,7 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         balance = 0.0
     
     if balance < 15.0:
-        await callback.answer(f"Недостаточно звезд для вывода. Ваш текущий баланс: {balance} ⭐.", show_alert=True)
+        await callback.answer(f"Минимальная сумма для вывода 15 звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
@@ -194,21 +195,23 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         reply_markup=inline.get_withdraw_amount_keyboard()
     )
 
-
-# ИЗМЕНЕНО: Эта функция была переписана, чтобы избежать ошибки с ID пользователя
 @router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
 async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
-    # Используем callback.from_user.id, который всегда указывает на того, кто нажал кнопку
     user_id = callback.from_user.id
-    amount = float(callback.data.split('_')[-1])
+    amount_str = callback.data.split('_')[-1]
+    
+    if amount_str == 'other':
+        await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
+        await callback.message.edit_text("Введите сумму для вывода (минимум 15):", reply_markup=inline.get_cancel_inline_keyboard())
+        return
 
-    # Повторно проверяем баланс, используя правильный ID
+    amount = float(amount_str)
+    
     balance, _ = await db_manager.get_user_balance(user_id)
     if float(balance) < amount:
         await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐", show_alert=True)
         return
 
-    # Если все в порядке, продолжаем сценарий
     await state.update_data(withdraw_amount=amount)
     await state.set_state(UserState.WITHDRAW_RECIPIENT)
     await callback.message.edit_text(
@@ -216,11 +219,19 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
         reply_markup=inline.get_withdraw_recipient_keyboard()
     )
 
-# ИЗМЕНЕНО: Эта вспомогательная функция больше не нужна для кнопок, но оставим ее для ввода "другой суммы"
-async def process_withdraw_amount(amount: float, message: Message, state: FSMContext):
-    # Здесь message.from_user.id будет правильным, так как пользователь сам пишет сообщение
+@router.message(UserState.WITHDRAW_AMOUNT_OTHER)
+async def withdraw_other_amount_input(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text)
+        if amount < 15.0:
+            await message.answer("Минимальная сумма для вывода - 15 звезд.")
+            return
+    except (ValueError, TypeError):
+        await message.answer("Неверный формат. Пожалуйста, введите число.")
+        return
+
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
-    if amount > float(balance):
+    if float(balance) < amount:
         await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
         return
 
@@ -230,39 +241,55 @@ async def process_withdraw_amount(amount: float, message: Message, state: FSMCon
         "Кому вы хотите отправить подарок?",
         reply_markup=inline.get_withdraw_recipient_keyboard()
     )
+    
+async def _create_and_notify_withdrawal(user: User, amount: float, recipient_info: str, comment: str | None, bot: Bot, state: FSMContext):
+    """Вспомогательная функция для создания запроса и отправки уведомления админу."""
+    request_id = await db_manager.create_withdrawal_request(user.id, amount, recipient_info, comment)
 
-
-@router.callback_query(F.data == 'withdraw_amount_other', UserState.WITHDRAW_AMOUNT)
-async def withdraw_other_amount_request(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
-    await callback.message.edit_text("Введите сумму для вывода:", reply_markup=inline.get_cancel_inline_keyboard())
-
-
-@router.message(UserState.WITHDRAW_AMOUNT_OTHER)
-async def withdraw_other_amount_input(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text)
-        if amount < 15: raise ValueError
-    except (ValueError, TypeError):
-        await message.answer("Неверный формат. Пожалуйста, введите число (минимум 15).")
+    if request_id is None:
+        await bot.send_message(user.id, "❌ Произошла ошибка при создании запроса. Возможно, на балансе недостаточно средств. Попробуйте снова.")
+        await state.clear()
+        await state.set_state(UserState.MAIN_MENU)
         return
-    # Эта функция вызывается из правильного контекста (сообщение от пользователя)
-    await process_withdraw_amount(amount, message, state)
 
+    admin_message = (
+        f"🚨 **Новый запрос на вывод средств!** 🚨\n\n"
+        f"👤 **Отправитель:** @{user.username} (ID: `{user.id}`)\n"
+        f"💰 **Сумма:** {amount} ⭐\n"
+        f"🎯 **Получатель:** {recipient_info}\n"
+    )
+    if comment:
+        admin_message += f"💬 **Комментарий:** {comment}\n"
+    
+    admin_message += f"\n*Запрос ID: `{request_id}`*"
+
+    try:
+        await bot.send_message(
+            chat_id=FINAL_CHECK_ADMIN,
+            text=admin_message,
+            parse_mode="Markdown",
+            reply_markup=inline.get_admin_withdrawal_keyboard(request_id)
+        )
+        await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.")
+    except Exception as e:
+        logger.error(f"Failed to send withdrawal request to admin: {e}")
+        await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Пожалуйста, обратитесь в поддержку.")
+        # Возвращаем средства, если админу не ушло уведомление
+        await db_manager.update_balance(user.id, amount)
+    
+    await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
 
 @router.callback_query(F.data.startswith('withdraw_recipient_'), UserState.WITHDRAW_RECIPIENT)
 async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext, bot: Bot):
     recipient_type = callback.data.split('_')[-1]
+    data = await state.get_data()
+    amount = data['withdraw_amount']
     
     await callback.message.delete()
 
     if recipient_type == 'self':
-        data = await state.get_data()
-        amount = data['withdraw_amount']
-        await db_manager.update_balance(callback.from_user.id, -amount)
-        await bot.send_message(callback.from_user.id, "Запрос на вывод звезд создан. Звезды будут отправлены вам.")
-        await state.clear()
-        await state.set_state(UserState.MAIN_MENU)
+        await _create_and_notify_withdrawal(callback.from_user, amount, "Себе", None, bot, state)
     elif recipient_type == 'other':
         await state.set_state(UserState.WITHDRAW_USER_ID)
         await bot.send_message(
@@ -274,8 +301,8 @@ async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext,
 @router.message(UserState.WITHDRAW_USER_ID)
 async def process_withdraw_user_id(message: Message, state: FSMContext):
     recipient_id = await db_manager.find_user_by_identifier(message.text)
-    if not recipient_id:
-        await message.answer("Не могу найти пользователя с таким никнеймом или ID.")
+    if not recipient_id or recipient_id == message.from_user.id:
+        await message.answer("Пользователь не найден или вы пытаетесь отправить подарок себе. Попробуйте еще раз.")
         return
         
     await state.update_data(withdraw_recipient_id=recipient_id)
@@ -299,31 +326,15 @@ async def process_withdraw_yes_comment(callback: CallbackQuery, state: FSMContex
 async def process_withdraw_comment_input(message: Message, state: FSMContext, bot: Bot):
     await finish_withdraw(message.from_user, state, bot, comment=message.text)
 
-async def finish_withdraw(user, state: FSMContext, bot: Bot, comment: str | None):
+async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str | None):
     data = await state.get_data()
-    sender_id = user.id
-    recipient_id = data['withdraw_recipient_id']
     amount = data['withdraw_amount']
+    recipient_id = data.get('withdraw_recipient_id')
     
-    await db_manager.update_balance(sender_id, -amount)
-    
-    notification_text = (
-        f"🎁 Вам отправлен подарок! 🎁\n\n"
-        f"Отправитель: @{user.username}\n"
-        f"Количество: {amount} ⭐"
-    )
-    if comment:
-        notification_text += f"\nКомментарий: {comment}"
-        
-    try:
-        await bot.send_message(recipient_id, notification_text)
-    except Exception as e:
-        print(f"Не удалось уведомить о подарке {recipient_id}: {e}")
+    recipient_user = await db_manager.get_user(recipient_id)
+    recipient_info = f"@{recipient_user.username} (ID: `{recipient_id}`)" if recipient_user else f"ID: {recipient_id}"
 
-    await bot.send_message(sender_id, f"Подарок в {amount} ⭐ успешно отправлен!", reply_markup=reply.get_main_menu_keyboard())
-
-    await state.clear()
-    await state.set_state(UserState.MAIN_MENU)
+    await _create_and_notify_withdrawal(user, amount, recipient_info, comment, bot, state)
 
 
 # --- Подмодуль: "Реф. ссылка" и "Холд" ---

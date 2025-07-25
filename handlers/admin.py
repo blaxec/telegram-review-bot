@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import logging # <-- ДОБАВЛЕН ИМПОРТ
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
@@ -16,6 +17,7 @@ from handlers.earning import send_confirmation_button, handle_task_timeout
 import datetime
 
 router = Router()
+logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
 ADMINS = set(ADMIN_IDS)
 LINK_ADMIN = {ADMIN_ID_1}
 TEXT_ADMIN = ADMIN_ID_1
@@ -268,7 +270,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку."
 
         try:
-            # ИЗМЕНЕНО: Замена reply_markup на инлайн-клавиатуру
             await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
             await bot.send_message(admin_id, f"Предупреждение успешно отправлено пользователю {user_id}.")
         except Exception as e:
@@ -391,7 +392,6 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp
     user_message_text = f"❌ Ваш запрос был отклонен администратором.\n\nПричина: «{reason}»"
     await user_state.clear()
     try:
-        # ИЗМЕНЕНО: Замена reply_markup на инлайн-клавиатуру
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
         await bot.send_message(admin_id, f"Сообщение об отклонении отправлено пользователю {user_id}.")
     except Exception as e:
@@ -441,7 +441,6 @@ async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext)
         await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
         try:
             user_message = f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней."
-            # ИЗМЕНЕНО: Добавлена инлайн-клавиатура для возврата в главное меню
             await callback.bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
         except Exception as e:
             print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
@@ -530,7 +529,6 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         try:
             user_message = f"❌ Ваш отзыв (ID: {review_id}) был отклонен администратором после проверки. Звезды списаны из холда."
-            # ИЗМЕНЕНО: Добавлена инлайн-клавиатура для возврата в главное меню
             await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
         except Exception as e:
             print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
@@ -622,3 +620,58 @@ async def admin_reject_gmail_account(callback: CallbackQuery, bot: Bot, state: F
         f"✍️ **Теперь, пожалуйста, введите причину отказа следующим сообщением.**",
         reply_markup=None
     )
+
+# --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ВЫВОДА СРЕДСТВ ---
+
+@router.callback_query(F.data.startswith("admin_withdraw_approve:"))
+async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
+    request_id = int(callback.data.split(":")[1])
+    
+    request = await db_manager.approve_withdrawal_request(request_id)
+    
+    if request is None:
+        await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        return
+
+    await callback.answer("✅ Вывод подтвержден.", show_alert=True)
+    
+    # Редактируем сообщение у админа
+    new_text = callback.message.text + f"\n\n**[ ✅ ПОДТВЕРЖДЕНО администратором @{callback.from_user.username} ]**"
+    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+    
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(
+            request.user_id,
+            f"✅ Ваш запрос на вывод {request.amount} ⭐ был **подтвержден** администратором."
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user {request.user_id} about withdrawal approval: {e}")
+
+@router.callback_query(F.data.startswith("admin_withdraw_reject:"))
+async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
+    request_id = int(callback.data.split(":")[1])
+    
+    request = await db_manager.reject_withdrawal_request(request_id)
+    
+    if request is None:
+        await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        return
+
+    await callback.answer("❌ Вывод отклонен. Средства возвращены пользователю.", show_alert=True)
+    
+    # Редактируем сообщение у админа
+    new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО администратором @{callback.from_user.username} ]**"
+    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+    
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(
+            request.user_id,
+            f"❌ Ваш запрос на вывод {request.amount} ⭐ был **отклонен** администратором. "
+            "Средства возвращены на ваш основной баланс."
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
