@@ -300,7 +300,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 @router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
-    # Теперь сообщение может быть с фото, поэтому нужно проверять caption
     is_photo = bool(callback.message.photo)
     message_text = callback.message.caption if is_photo else callback.message.text
 
@@ -318,7 +317,6 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         )
     else:
         await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
-
 
 
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
@@ -511,24 +509,25 @@ async def admin_review_hold(message: Message, bot: Bot):
 @router.callback_query(F.data.startswith('admin_hold_approve:'), F.from_user.id == TEXT_ADMIN)
 async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
     review_id = int(callback.data.split(':')[1])
-
-    review_before_approval = await db_manager.get_review_by_id(review_id)
-    if not review_before_approval or review_before_approval.status != 'on_hold':
+    
+    # ИЗМЕНЕНО: Используем новую функцию, которая возвращает объект review
+    approved_review = await db_manager.admin_approve_review(review_id)
+    if not approved_review:
         await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=None)
         return
 
-    success = await db_manager.admin_approve_review(review_id)
-    if success:
-        await callback.answer("✅ Отзыв одобрен!", show_alert=True)
-        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН @{callback.from_user.username}"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
-        try:
-            await bot.send_message(review_before_approval.user_id, f"✅ Ваш отзыв (ID: {review_id}) был одобрен администратором! +{review_before_approval.amount} ⭐ зачислены на ваш основной баланс.")
-        except Exception as e:
-            print(f"Не удалось уведомить пользователя {review_before_approval.user_id} об одобрении: {e}")
-    else:
-        await callback.answer("❌ Не удалось одобрить отзыв.", show_alert=True)
+    # Если отзыв успешно одобрен, начисляем реферальный бонус
+    if approved_review.platform == 'google': # Проверяем, что отзыв для нужной платформы
+        await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
+    
+    await callback.answer("✅ Отзыв одобрен!", show_alert=True)
+    new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН @{callback.from_user.username}"
+    await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+    try:
+        await bot.send_message(approved_review.user_id, f"✅ Ваш отзыв (ID: {review_id}) был одобрен администратором! +{approved_review.amount} ⭐ зачислены на ваш основной баланс.")
+    except Exception as e:
+        print(f"Не удалось уведомить пользователя {approved_review.user_id} об одобрении: {e}")
 
 
 @router.callback_query(F.data.startswith('admin_hold_reject:'), F.from_user.id == TEXT_ADMIN)

@@ -53,6 +53,19 @@ async def update_balance(user_id: int, amount: float):
             if user:
                 user.balance += amount
 
+# ДОБАВЛЕНА НОВАЯ ФУНКЦИЯ
+async def add_referral_earning(user_id: int, amount: float):
+    """Начисляет вознаграждение рефереру пользователя."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            # Проверяем, есть ли у этого пользователя реферер
+            if user and user.referrer_id:
+                referrer = await session.get(User, user.referrer_id)
+                if referrer:
+                    referrer.referral_earnings += amount
+                    logger.info(f"Added {amount} stars to referrer {referrer.id} from user {user_id}")
+
 async def get_referrer_info(user_id: int) -> str:
     user = await get_user(user_id)
     if user and user.referrer_id:
@@ -193,20 +206,20 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             review.status = 'rejected'
             return review
 
-async def admin_approve_review(review_id: int) -> bool:
+async def admin_approve_review(review_id: int) -> Union[Review, None]:
+    """Изменено: теперь функция возвращает объект Review, чтобы получить доступ к данным."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
             if not review or review.status != 'on_hold':
-                return False
+                return None
             user = await session.get(User, review.user_id)
             if user:
                 user.hold_balance -= review.amount
                 user.balance += review.amount
             review.status = 'approved'
-        return True
+            return review # Возвращаем объект
 
-# ИЗМЕНЕНО: Добавлена опция selectinload для "жадной" загрузки связанных ссылок
 async def get_all_hold_reviews() -> list[Review]:
     async with async_session() as session:
         query = select(Review).where(Review.status == 'on_hold').options(selectinload(Review.link))
