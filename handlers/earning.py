@@ -241,6 +241,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
             await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
     except Exception as e:
         logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
+        # Fallback to text message if photo fails for some reason
         await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
 
 

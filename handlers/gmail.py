@@ -115,7 +115,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
 
 # --- ХЭНДЛЕРЫ АДМИНА ДЛЯ УПРАВЛЕНИЯ GMAIL ---
 
-@router.callback_query(F.data.startswith('admin_gmail_reject_request:'), F.from_user.id == FINAL_CHECK_ADMIN)
+@router.callback_query(F.data.startswith('admin_gmail_reject_request:'))
 async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])
@@ -132,7 +132,7 @@ async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMCon
     )
 
 
-@router.callback_query(F.data.startswith('admin_gmail_send_data:'), F.from_user.id == FINAL_CHECK_ADMIN)
+@router.callback_query(F.data.startswith('admin_gmail_send_data:'))
 async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])
@@ -145,7 +145,7 @@ async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMConte
     )
 
 
-@router.message(AdminState.ENTER_GMAIL_DATA, F.from_user.id == FINAL_CHECK_ADMIN)
+@router.message(AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot):
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
@@ -178,7 +178,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     await state.clear()
 
 
-@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'), F.from_user.id == FINAL_CHECK_ADMIN)
+@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'))
 async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
     await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды.", show_alert=True)
     user_id = int(callback.data.split(':')[1])
@@ -190,7 +190,7 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
     await callback.message.edit_text(f"{callback.message.text}\n\n✅ АККАУНТ ПОДТВЕРЖДЕН (админ @{callback.from_user.username})", reply_markup=None)
 
 
-@router.callback_query(F.data.startswith('admin_gmail_reject_account:'), F.from_user.id == FINAL_CHECK_ADMIN)
+@router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
 async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])

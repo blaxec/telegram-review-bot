@@ -1,6 +1,6 @@
 # file: handlers/__init__.py
 
-from . import start, profile, support, earning, admin, gmail # <-- ДОБАВЛЕН ИМПОРТ
+from . import start, profile, support, earning, admin, gmail
 
 # Собираем все роутеры из модулей в один список
 routers_list = [
@@ -9,4 +9,5 @@ routers_list = [
     support.router,
     earning.router,
     admin.router,
-    gmail.router, ]
+    gmail.router,
+]
