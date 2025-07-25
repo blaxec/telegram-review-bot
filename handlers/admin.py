@@ -6,22 +6,21 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import logging # <-- ДОБАВЛЕН ИМПОРТ
+import logging
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS
+from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
 from handlers.earning import send_confirmation_button, handle_task_timeout
 import datetime
 
 router = Router()
-logger = logging.getLogger(__name__) # <-- ДОБАВЛЕН ЛОГГЕР
+logger = logging.getLogger(__name__)
 ADMINS = set(ADMIN_IDS)
 LINK_ADMIN = {ADMIN_ID_1}
 TEXT_ADMIN = ADMIN_ID_1
-FINAL_CHECK_ADMIN = ADMIN_ID_2
 
 router.message.filter(F.from_user.id.in_(ADMINS))
 router.callback_query.filter(F.from_user.id.in_(ADMINS))
@@ -372,14 +371,17 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
         AdminState.REJECT_REASON_YANDEX_PROFILE,
         AdminState.REJECT_REASON_GOOGLE_REVIEW,
         AdminState.REJECT_REASON_YANDEX_REVIEW,
-        AdminState.REJECT_REASON_GMAIL_ACCOUNT
+        AdminState.REJECT_REASON_GMAIL_ACCOUNT,
+        AdminState.REJECT_REASON_GMAIL_DATA_REQUEST # <-- ИЗМЕНЕНО: Добавлено новое состояние
     })
 )
 async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     reason = message.text
     admin_id = message.from_user.id
+    current_state = await state.get_state()
+    logger.info(f"Admin {admin_id} is providing a rejection reason. State: {current_state}")
+    
     admin_data = await state.get_data()
-
     user_id = admin_data.get("target_user_id")
 
     if not user_id:
@@ -388,14 +390,21 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp
         return
 
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-
-    user_message_text = f"❌ Ваш запрос был отклонен администратором.\n\nПричина: «{reason}»"
-    await user_state.clear()
+    
+    # ИЗМЕНЕНО: Разная логика для разных отказов
+    if current_state == AdminState.REJECT_REASON_GMAIL_DATA_REQUEST:
+        user_message_text = f"❌ Ваш запрос на получение данных для регистрации Gmail был отклонен.\n\nПричина: «{reason}»"
+        # Возвращаем пользователя в начальное состояние создания Gmail
+        await user_state.set_state(UserState.GMAIL_ACCOUNT_INIT)
+    else:
+        user_message_text = f"❌ Ваш запрос был отклонен администратором.\n\nПричина: «{reason}»"
+        await user_state.clear()
+        
     try:
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
-        await bot.send_message(admin_id, f"Сообщение об отклонении отправлено пользователю {user_id}.")
+        await message.answer(f"Сообщение об отклонении отправлено пользователю {user_id}.")
     except Exception as e:
-        await bot.send_message(admin_id, f"Не удалось отправить сообщение пользователю {user_id}. Ошибка: {e}")
+        await message.answer(f"Не удалось отправить сообщение пользователю {user_id}. Ошибка: {e}")
 
     await state.clear()
 
@@ -537,13 +546,15 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
 
 
 # --- БЛОК: УПРАВЛЕНИЕ GMAIL ---
+# ИЗМЕНЕНО: Исправлено состояние на REJECT_REASON_GMAIL_DATA_REQUEST
 @router.callback_query(F.data.startswith('admin_gmail_reject_request:'), F.from_user.id == FINAL_CHECK_ADMIN)
 async def admin_reject_gmail_request(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])
     original_text = callback.message.text
+    logger.info(f"Admin {callback.from_user.id} rejected Gmail data request for user {user_id}. Setting state to REJECT_REASON_GMAIL_DATA_REQUEST.")
 
-    await state.set_state(AdminState.REJECT_REASON_GMAIL_ACCOUNT)
+    await state.set_state(AdminState.REJECT_REASON_GMAIL_DATA_REQUEST)
     await state.update_data(target_user_id=user_id)
 
     await callback.message.edit_text(
@@ -586,6 +597,8 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
         f"Почта: <code>{full_email}</code>"
     )
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    
+    logger.info(f"Admin {message.from_user.id} is sending data to user {user_id}. Setting user state to GMAIL_AWAITING_VERIFICATION.")
     await user_state.set_state(UserState.GMAIL_AWAITING_VERIFICATION)
     await user_state.update_data(gmail_details={"name": name, "surname": surname, "password": password, "email": full_email})
     try:

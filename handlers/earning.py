@@ -1,6 +1,7 @@
 # file: handlers/earning.py
 
 import datetime
+import logging
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
@@ -15,6 +16,7 @@ from references import reference_manager
 from config import ADMIN_ID_1, ADMIN_ID_2
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 TEXT_ADMIN = ADMIN_ID_1
 FINAL_CHECK_ADMIN = ADMIN_ID_2
@@ -512,15 +514,21 @@ async def request_gmail_data_from_admin(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    user_id = callback.from_user.id
+    current_state = await state.get_state()
+    logger.info(f"Handler 'send_gmail_for_verification' triggered for user {user_id}. Current state: {current_state}")
+
     await callback.answer()
     await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
+    
     if not gmail_details:
+        logger.error(f"Critical error for user {user_id}: gmail_details not found in state data.")
         await callback.message.answer("Произошла ошибка, не найдены данные вашего аккаунта. Начните заново.")
         await state.clear()
         return
-    user_id = callback.from_user.id
+
     admin_notification = (
         f"🚨 Проверка созданного Gmail аккаунта 🚨\n\n"
         f"Пользователь: @{callback.from_user.username} (ID: `{user_id}`)\n\n"
@@ -538,7 +546,8 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         )
     except Exception as e:
         await callback.message.answer("Не удалось отправить аккаунт на проверку. Попробуйте позже.")
-        print(f"Ошибка отправки Gmail на проверку админу {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Failed to send Gmail for verification to admin {FINAL_CHECK_ADMIN}: {e}")
+    
     await state.clear()
 
 
