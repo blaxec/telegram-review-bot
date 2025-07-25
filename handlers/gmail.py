@@ -4,6 +4,7 @@ import datetime
 import logging
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey # <-- ИСПРАВЛЕНО: Добавлен недостающий импорт
 from aiogram.types import Message, CallbackQuery
 
 from states.user_states import UserState, AdminState
