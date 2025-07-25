@@ -8,11 +8,13 @@ from aiogram.types import CallbackQuery, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 
+# ИСПРАВЛЕНО: Все импорты сделаны абсолютными от корня проекта
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
+# ИСПРАВЛЕНО: импорт earling теперь тоже прямой
 from handlers.earning import send_confirmation_button, handle_task_timeout
 import datetime
 
