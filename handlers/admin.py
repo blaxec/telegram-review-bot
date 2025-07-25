@@ -510,15 +510,13 @@ async def admin_review_hold(message: Message, bot: Bot):
 async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
     review_id = int(callback.data.split(':')[1])
     
-    # ИЗМЕНЕНО: Используем новую функцию, которая возвращает объект review
     approved_review = await db_manager.admin_approve_review(review_id)
     if not approved_review:
         await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=None)
         return
 
-    # Если отзыв успешно одобрен, начисляем реферальный бонус
-    if approved_review.platform == 'google': # Проверяем, что отзыв для нужной платформы
+    if approved_review.platform == 'google':
         await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
     
     await callback.answer("✅ Отзыв одобрен!", show_alert=True)
@@ -553,94 +551,6 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
     else:
         await callback.answer("❌ Не удалось отклонить отзыв.", show_alert=True)
 
-
-# --- БЛОК: УПРАВЛЕНИЕ GMAIL ---
-@router.callback_query(F.data.startswith('admin_gmail_reject_request:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_reject_gmail_request(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    user_id = int(callback.data.split(':')[1])
-    original_text = callback.message.text
-    
-    logger.info(f"Admin {callback.from_user.id} is rejecting Gmail data request for user {user_id}. Setting state to REJECT_REASON_GMAIL_DATA_REQUEST.")
-    await state.set_state(AdminState.REJECT_REASON_GMAIL_DATA_REQUEST)
-    await state.update_data(target_user_id=user_id)
-
-    await callback.message.edit_text(
-        f"{original_text}\n\n❌ ЗАПРОС ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
-        f"✍️ **Теперь, пожалуйста, отправьте причину отказа следующим сообщением.**",
-        reply_markup=None
-    )
-
-
-@router.callback_query(F.data.startswith('admin_gmail_send_data:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    user_id = int(callback.data.split(':')[1])
-    await state.update_data(gmail_user_id=user_id)
-    await state.set_state(AdminState.ENTER_GMAIL_DATA)
-    await callback.message.edit_text(
-        "Введите данные для создания аккаунта в формате:\n"
-        "Имя\nФамилия\nПароль\nПочта (без @gmail.com)",
-        reply_markup=None
-    )
-
-
-@router.message(AdminState.ENTER_GMAIL_DATA, F.from_user.id == FINAL_CHECK_ADMIN)
-async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
-    admin_data = await state.get_data()
-    user_id = admin_data.get('gmail_user_id')
-    data_lines = message.text.strip().split('\n')
-    if len(data_lines) != 4:
-        await message.answer("Неверный формат. Нужно 4 строки: Имя, Фамилия, Пароль, Почта. Попробуйте снова.")
-        return
-    name, surname, password, email = data_lines
-    full_email = f"{email}@gmail.com"
-    user_message = (
-        "Ваши данные для создания аккаунта:\n"
-        'Не знаете как создать аккаунт? Прочитайте информацию, нажав на "Как создать аккаунт".\n\n'
-        "<b>Данные для создания:</b>\n"
-        f"Имя: <code>{name}</code>\n"
-        f"Фамилия: <code>{surname}</code>\n"
-        f"Пароль: <code>{password}</code>\n"
-        f"Почта: <code>{full_email}</code>"
-    )
-    user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    
-    logger.info(f"Admin {message.from_user.id} is sending data to user {user_id}. Setting user state to GMAIL_AWAITING_VERIFICATION.")
-    await user_state.set_state(UserState.GMAIL_AWAITING_VERIFICATION)
-    await user_state.update_data(gmail_details={"name": name, "surname": surname, "password": password, "email": full_email})
-    try:
-        await bot.send_message(user_id, user_message, reply_markup=inline.get_gmail_verification_keyboard())
-        await message.answer(f"Данные успешно отправлены пользователю {user_id}.")
-    except Exception as e:
-        await message.answer(f"Не удалось отправить данные пользователю {user_id}. Возможно, он заблокировал бота.")
-        print(e)
-    await state.clear()
-
-
-@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды.", show_alert=True)
-    user_id = int(callback.data.split(':')[1])
-    await db_manager.update_balance(user_id, 5.0)
-    try:
-        await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
-    except Exception as e:
-        print(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
-    await callback.message.edit_text(f"{callback.message.text}\n\n✅ АККАУНТ ПОДТВЕРЖДЕН (админ @{callback.from_user.username})", reply_markup=None)
-
-
-@router.callback_query(F.data.startswith('admin_gmail_reject_account:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    user_id = int(callback.data.split(':')[1])
-    await state.update_data(target_user_id=user_id)
-    await state.set_state(AdminState.REJECT_REASON_GMAIL_ACCOUNT)
-    await callback.message.edit_text(
-        f"{callback.message.text}\n\n❌ АККАУНТ ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
-        f"✍️ **Теперь, пожалуйста, введите причину отказа следующим сообщением.**",
-        reply_markup=None
-    )
 
 # --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ВЫВОДА СРЕДСТВ ---
 
