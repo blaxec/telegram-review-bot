@@ -13,13 +13,12 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, ADMIN_ID_2
+from config import ADMIN_ID_1, ADMIN_ID_2, FINAL_CHECK_ADMIN
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 TEXT_ADMIN = ADMIN_ID_1
-FINAL_CHECK_ADMIN = ADMIN_ID_2
 
 # --- Вспомогательные функции ---
 
@@ -138,6 +137,9 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    photo_file_id = message.photo[-1].file_id
+    await state.update_data(profile_screenshot_id=photo_file_id)
+    
     await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
     await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: `{message.from_user.id}`)"
@@ -145,7 +147,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
+            photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile")
         )
@@ -215,6 +217,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     user_info = await bot.get_chat(callback.from_user.id)
     link_id = user_data.get('active_link_id')
     link = await db_manager.db_get_link_by_id(link_id)
+    profile_screenshot_id = user_data.get("profile_screenshot_id")
 
     if not link:
         await callback.message.answer("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.")
@@ -225,7 +228,22 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         f"Пользователь @{user_info.username} (ID: `{callback.from_user.id}`) прошел этап 'лайков' и ожидает текст для отзыва Google.\n\n"
         f"🔗 Ссылка для отзыва: `{link.url}`"
     )
-    await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
+    
+    try:
+        if profile_screenshot_id:
+            await bot.send_photo(
+                chat_id=TEXT_ADMIN,
+                photo=profile_screenshot_id,
+                caption=admin_notification_text,
+                reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id)
+            )
+        else:
+            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
+    except Exception as e:
+        logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
+        # Fallback to text message if photo fails for some reason
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
+
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
 async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
@@ -295,6 +313,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
     
     await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
 
 # --- Логика для Yandex Карт ---
 
@@ -454,6 +473,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         return
 
     await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
 
 # --- Логика для Gmail ---
 
@@ -525,8 +545,9 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     
     if not gmail_details:
         logger.error(f"Critical error for user {user_id}: gmail_details not found in state data.")
-        await callback.message.answer("Произошла ошибка, не найдены данные вашего аккаунта. Начните заново.")
+        await callback.message.answer("Произошла ошибка, не найдены данные вашего аккаунта. Начните заново.", reply_markup=reply.get_main_menu_keyboard())
         await state.clear()
+        await state.set_state(UserState.MAIN_MENU)
         return
 
     admin_notification = (
@@ -549,6 +570,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         logger.error(f"Failed to send Gmail for verification to admin {FINAL_CHECK_ADMIN}: {e}")
     
     await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
 
 
 # --- Прочие хэндлеры ---

@@ -300,13 +300,25 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 @router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
+    # Теперь сообщение может быть с фото, поэтому нужно проверять caption
+    is_photo = bool(callback.message.photo)
+    message_text = callback.message.caption if is_photo else callback.message.text
+
     _, user_id_str, link_id_str = callback.data.split(':')
     user_id = int(user_id_str)
     link_id = int(link_id_str)
 
     await state.set_state(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
     await state.update_data(target_user_id=user_id, target_link_id=link_id)
-    await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
+    
+    if is_photo:
+        await callback.message.edit_caption(
+            caption=f"{message_text}\n\n✍️ Введите текст отзыва для пользователя ID: {user_id}",
+            reply_markup=None
+        )
+    else:
+        await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
+
 
 
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
@@ -372,10 +384,10 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
         AdminState.REJECT_REASON_GOOGLE_REVIEW,
         AdminState.REJECT_REASON_YANDEX_REVIEW,
         AdminState.REJECT_REASON_GMAIL_ACCOUNT,
-        AdminState.REJECT_REASON_GMAIL_DATA_REQUEST # <-- ИЗМЕНЕНО: Добавлено новое состояние
+        AdminState.REJECT_REASON_GMAIL_DATA_REQUEST
     })
 )
-async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
+async def process_admin_reason(message: Message, state: FSMContext, bot: Bot):
     reason = message.text
     admin_id = message.from_user.id
     current_state = await state.get_state()
@@ -389,16 +401,14 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot, dp
         await state.clear()
         return
 
-    user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    user_fsm_context = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
-    # ИЗМЕНЕНО: Разная логика для разных отказов
     if current_state == AdminState.REJECT_REASON_GMAIL_DATA_REQUEST:
         user_message_text = f"❌ Ваш запрос на получение данных для регистрации Gmail был отклонен.\n\nПричина: «{reason}»"
-        # Возвращаем пользователя в начальное состояние создания Gmail
-        await user_state.set_state(UserState.GMAIL_ACCOUNT_INIT)
+        await user_fsm_context.set_state(UserState.GMAIL_ACCOUNT_INIT)
     else:
-        user_message_text = f"❌ Ваш запрос был отклонен администратором.\n\nПричина: «{reason}»"
-        await user_state.clear()
+        user_message_text = f"❌ Ваша проверка была отклонена администратором.\n\nПричина: «{reason}»"
+        await user_fsm_context.set_state(UserState.MAIN_MENU)
         
     try:
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
@@ -546,14 +556,13 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
 
 
 # --- БЛОК: УПРАВЛЕНИЕ GMAIL ---
-# ИЗМЕНЕНО: Исправлено состояние на REJECT_REASON_GMAIL_DATA_REQUEST
 @router.callback_query(F.data.startswith('admin_gmail_reject_request:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_reject_gmail_request(callback: CallbackQuery, bot: Bot, state: FSMContext):
+async def admin_reject_gmail_request(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])
     original_text = callback.message.text
-    logger.info(f"Admin {callback.from_user.id} rejected Gmail data request for user {user_id}. Setting state to REJECT_REASON_GMAIL_DATA_REQUEST.")
-
+    
+    logger.info(f"Admin {callback.from_user.id} is rejecting Gmail data request for user {user_id}. Setting state to REJECT_REASON_GMAIL_DATA_REQUEST.")
     await state.set_state(AdminState.REJECT_REASON_GMAIL_DATA_REQUEST)
     await state.update_data(target_user_id=user_id)
 
@@ -623,7 +632,7 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith('admin_gmail_reject_account:'), F.from_user.id == FINAL_CHECK_ADMIN)
-async def admin_reject_gmail_account(callback: CallbackQuery, bot: Bot, state: FSMContext):
+async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = int(callback.data.split(':')[1])
     await state.update_data(target_user_id=user_id)
@@ -649,11 +658,9 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("✅ Вывод подтвержден.", show_alert=True)
     
-    # Редактируем сообщение у админа
     new_text = callback.message.text + f"\n\n**[ ✅ ПОДТВЕРЖДЕНО администратором @{callback.from_user.username} ]**"
     await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
     
-    # Уведомляем пользователя
     try:
         await bot.send_message(
             request.user_id,
@@ -675,11 +682,9 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("❌ Вывод отклонен. Средства возвращены пользователю.", show_alert=True)
     
-    # Редактируем сообщение у админа
     new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО администратором @{callback.from_user.username} ]**"
     await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
     
-    # Уведомляем пользователя
     try:
         await bot.send_message(
             request.user_id,

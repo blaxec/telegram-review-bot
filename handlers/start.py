@@ -1,4 +1,7 @@
+# file: handlers/start.py
+
 import re
+import asyncio # <-- ДОБАВЛЕН ИМПОРТ
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -54,6 +57,10 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
         "Добро пожаловать в главное меню!",
         reply_markup=reply.get_main_menu_keyboard()
     )
+    
+    # ИЗМЕНЕНО: Добавлен эффект сердечка
+    await asyncio.sleep(0.5)
+    await callback.message.answer("❤️")
 
 
 # --- Универсальные обработчики отмены и возврата ---
@@ -110,4 +117,5 @@ async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.MAIN_MENU)
     await callback.message.answer(
         "Вы вернулись в главное меню.",
-        reply_markup=reply.get_main_menu_keyboard())
+        reply_markup=reply.get_main_menu_keyboard()
+    )

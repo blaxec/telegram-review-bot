@@ -1,5 +1,3 @@
-# file: states/user_states.py
-
 from aiogram.fsm.state import State, StatesGroup
 
 class UserState(StatesGroup):
@@ -57,7 +55,7 @@ class AdminState(StatesGroup):
     REJECT_REASON_GOOGLE_REVIEW = State()
     REJECT_REASON_YANDEX_REVIEW = State()
     REJECT_REASON_GMAIL_ACCOUNT = State()
-    # ИЗМЕНЕНО: Добавлено недостающее состояние
+    # ИЗМЕНЕНО: Добавлено новое состояние для отказа в выдаче данных
     REJECT_REASON_GMAIL_DATA_REQUEST = State()
 
     # Состояния для предоставления текста отзыва
