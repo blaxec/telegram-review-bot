@@ -53,13 +53,11 @@ async def update_balance(user_id: int, amount: float):
             if user:
                 user.balance += amount
 
-# ДОБАВЛЕНА НОВАЯ ФУНКЦИЯ
 async def add_referral_earning(user_id: int, amount: float):
     """Начисляет вознаграждение рефереру пользователя."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
-            # Проверяем, есть ли у этого пользователя реферер
             if user and user.referrer_id:
                 referrer = await session.get(User, user.referrer_id)
                 if referrer:
@@ -207,7 +205,6 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             return review
 
 async def admin_approve_review(review_id: int) -> Union[Review, None]:
-    """Изменено: теперь функция возвращает объект Review, чтобы получить доступ к данным."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -218,7 +215,7 @@ async def admin_approve_review(review_id: int) -> Union[Review, None]:
                 user.hold_balance -= review.amount
                 user.balance += review.amount
             review.status = 'approved'
-            return review # Возвращаем объект
+            return review
 
 async def get_all_hold_reviews() -> list[Review]:
     async with async_session() as session:
@@ -326,3 +323,18 @@ async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest,
             
             request.status = 'rejected'
             return request
+
+async def reset_user_cooldowns(user_id: int) -> bool:
+    """Сбрасывает все кулдауны для указанного пользователя."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if not user:
+                return False
+            
+            user.google_cooldown_until = None
+            user.yandex_cooldown_until = None
+            user.blocked_until = None
+            user.warnings = 0
+            logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
+            return True

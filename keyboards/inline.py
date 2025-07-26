@@ -143,6 +143,7 @@ def get_google_continue_writing_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_liking_confirmation_keyboard() -> InlineKeyboardMarkup:
+    # ИСПРАВЛЕНО: Убеждаемся, что callback_data здесь верный
     buttons = [[InlineKeyboardButton(text='Выполнено', callback_data='google_confirm_liking_task')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -251,9 +252,7 @@ def get_delete_ref_keyboard(link_id: int) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='🗑️ Удалить эту ссылку', callback_data=f'admin_refs:delete:{link_id}')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ДОБАВЛЕНА НОВАЯ КЛАВИАТУРА
 def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для админа для подтверждения/отклонения вывода."""
     buttons = [
         [
             InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_withdraw_approve:{request_id}"),

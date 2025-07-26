@@ -8,13 +8,11 @@ from aiogram.types import CallbackQuery, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 
-# ИСПРАВЛЕНО: Все импорты сделаны абсолютными от корня проекта
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
-# ИСПРАВЛЕНО: импорт earling теперь тоже прямой
 from handlers.earning import send_confirmation_button, handle_task_timeout
 import datetime
 
@@ -604,3 +602,27 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
         )
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
+
+# ДОБАВЛЕН НОВЫЙ БЛОК ДЛЯ СБРОСА КУЛДАУНОВ
+@router.message(Command("reset_cooldown"))
+async def reset_cooldown_handler(message: Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("⚠️ **Ошибка!**\nИспользуйте команду так: `/reset_cooldown ID_пользователя_или_@username`")
+        return
+    
+    identifier = args[1]
+    user_id = await db_manager.find_user_by_identifier(identifier)
+
+    if not user_id:
+        await message.answer(f"❌ Пользователь `{identifier}` не найден в базе данных.")
+        return
+
+    success = await db_manager.reset_user_cooldowns(user_id)
+    
+    if success:
+        user = await db_manager.get_user(user_id)
+        username = f"@{user.username}" if user.username else f"ID: {user_id}"
+        await message.answer(f"✅ Все кулдауны и предупреждения для пользователя **{username}** были успешно сброшены.")
+    else:
+        await message.answer(f"❌ Произошла неизвестная ошибка при сбросе кулдаунов для пользователя `{identifier}`.")
