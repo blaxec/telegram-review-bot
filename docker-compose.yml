@@ -6,9 +6,9 @@ services:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASS:-password}
       POSTGRES_DB: ${DB_NAME:-telegram_bot_db}
+    # Порт больше не нужно пробрасывать наружу, так как бот будет в той же сети.
+    # Но мы оставим его для удобства, если вы захотите подключиться к БД напрямую.
     ports:
-      # ИЗМЕНЕНО: Мы меняем внешний порт с 5432 на 5433.
-      # Теперь база данных будет доступна на localhost:5433
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -20,6 +20,28 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
+
+  # ДОБАВЛЕНО: Новый сервис для нашего телеграм-бота
+  bot:
+    # Указываем Docker собрать образ из Dockerfile в текущей директории
+    build: .
+    container_name: my_telegram_bot_app
+    # Указываем Docker, что этот контейнер нужно запускать только ПОСЛЕ
+    # того, как запустятся и будут готовы postgres_db и redis_db.
+    # Это решает проблему "гонки состояний" на уровне Docker.
+    depends_on:
+      - postgres_db
+      - redis_db
+    # Пробрасываем файл .env в контейнер, чтобы он знал все наши секреты
+    env_file:
+      - .env
+    # "Монтируем" текущую папку с кодом внутрь контейнера.
+    # Это позволит вам менять код, и изменения будут сразу видны в контейнере
+    # без необходимости полной пересборки.
+    volumes:
+      - .:/app
+    # Перезапускать, если он упадет
+    restart: always
 
 volumes:
   postgres_data:
