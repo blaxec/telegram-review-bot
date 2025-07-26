@@ -2,7 +2,7 @@
 
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger,
-                        DateTime, ForeignKey, Float, Enum)
+                        DateTime, ForeignKey, Float, Enum, Boolean) # <-- ДОБАВЛЕН Boolean
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -25,6 +25,11 @@ class User(Base):
     yandex_cooldown_until = Column(DateTime, nullable=True)
     blocked_until = Column(DateTime, nullable=True)
 
+    # ДОБАВЛЕНО: Новое поле для анонимности в статистике
+    is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
+    
+    reviews = relationship("Review", back_populates="user")
+
 
 class Review(Base):
     __tablename__ = 'reviews'
@@ -42,19 +47,19 @@ class Review(Base):
     admin_message_id = Column(BigInteger, nullable=True)
     
     link = relationship("Link")
+    user = relationship("User", back_populates="reviews")
 
 
 class Link(Base):
     __tablename__ = 'links'
     
     id = Column(Integer, primary_key=True, index=True)
-    url = Column(String, unique=True, nullable=False)
+    url = Column(String, nullable=False)
     platform = Column(String)
     status = Column(Enum('available', 'assigned', 'used', 'expired', name='link_status_enum'), default='available')
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
 
-# ДОБАВЛЕНА НОВАЯ МОДЕЛЬ ДЛЯ ЗАПРОСОВ НА ВЫВОД
 class WithdrawalRequest(Base):
     __tablename__ = 'withdrawal_requests'
 
@@ -64,7 +69,6 @@ class WithdrawalRequest(Base):
     status = Column(Enum('pending', 'approved', 'rejected', name='withdrawal_status_enum'), default='pending', nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    # Информация о получателе (может быть "Себе" или ID/username другого)
     recipient_info = Column(String, nullable=False)
     comment = Column(String, nullable=True)
 

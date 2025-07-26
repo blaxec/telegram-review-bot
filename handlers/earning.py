@@ -7,14 +7,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ИСПРАВЛЕНО: Все импорты сделаны абсолютными от корня проекта
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, ADMIN_ID_2, FINAL_CHECK_ADMIN
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -38,8 +38,10 @@ async def send_liking_confirmation_button(bot: Bot, user_id: int):
             "Кнопка для подтверждения выполнения задания теперь доступна.",
             reply_markup=inline.get_liking_confirmation_keyboard()
         )
+    except TelegramNetworkError as e:
+        logger.error(f"Не удалось отправить кнопку подтверждения 'лайков' пользователю {user_id}: {e}")
     except Exception as e:
-        print(f"Не удалось отправить кнопку подтверждения 'лайков' пользователю {user_id}: {e}")
+        logger.error(f"Неизвестная ошибка при отправке кнопки 'лайков' пользователю {user_id}: {e}")
 
 async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
     """Отправляет пользователю кнопку подтверждения основного задания."""
@@ -49,8 +51,10 @@ async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
             "Кнопка для подтверждения выполнения задания теперь доступна.",
             reply_markup=inline.get_task_confirmation_keyboard(platform)
         )
+    except TelegramNetworkError as e:
+        logger.error(f"Не удалось отправить кнопку подтверждения пользователю {user_id} для платформы {platform}: {e}")
     except Exception as e:
-        print(f"Не удалось отправить кнопку подтверждения пользователю {user_id}: {e}")
+        logger.error(f"Неизвестная ошибка при отправке кнопки подтверждения пользователю {user_id}: {e}")
 
 async def handle_task_timeout(bot: Bot, dp: Dispatcher, user_id: int, platform: str, message_to_admins: str):
     """Обрабатывает истечение времени на любом из этапов задания."""
@@ -61,23 +65,27 @@ async def handle_task_timeout(bot: Bot, dp: Dispatcher, user_id: int, platform: 
         return
 
     user_data = await state.get_data()
-    await reference_manager.release_reference_from_user(user_id, final_status='expired')
+    await reference_manager.release_reference_from_user(user_id, final_status='available')
     await db_manager.set_platform_cooldown(user_id, platform, 72)
     await state.clear()
     
     timeout_message = "Время, выделенное на выполнение работы, истекло. Следующая возможность написать отзыв будет через три дня (72:00:00)."
-    admin_notification = f"❗️ Пользователь @{user_data.get('username', '???')} (ID: {user_id}) не успел выполнить задание ({message_to_admins}) вовремя."
+    admin_notification = f"❗️ Пользователь @{user_data.get('username', '???')} (ID: {user_id}) не успел выполнить задание ({message_to_admins}) вовремя. Ссылка была возвращена в пул доступных."
     
     try:
         await bot.send_message(user_id, timeout_message, reply_markup=reply.get_main_menu_keyboard())
         await bot.send_message(FINAL_CHECK_ADMIN, admin_notification)
     except Exception as e:
-        print(f"Ошибка при обработке таймаута для {user_id}: {e}")
+        logger.error(f"Ошибка при обработке таймаута для {user_id}: {e}")
 
 # --- Основное меню Заработка ---
 
 @router.message(F.text == 'Заработок', UserState.MAIN_MENU)
 async def earning_handler(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     await message.answer("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
 
 @router.callback_query(F.data == 'earning_write_review')

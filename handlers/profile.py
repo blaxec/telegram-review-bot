@@ -11,7 +11,7 @@ from functools import wraps
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
-from config import FINAL_CHECK_ADMIN # <-- ИМПОРТИРУЕМ ID АДМИНА
+from config import FINAL_CHECK_ADMIN
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -22,21 +22,32 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     """Универсальная функция для отображения меню профиля."""
     await state.set_state(UserState.MAIN_MENU)
     user_id = message_or_callback.from_user.id
-    balance, hold_balance = await db_manager.get_user_balance(user_id)
+    
+    # Получаем все данные одним запросом
+    user = await db_manager.get_user(user_id)
+    if not user:
+        await message_or_callback.answer("Произошла ошибка, не удалось найти ваш профиль. Попробуйте /start")
+        return
+
+    balance, hold_balance = user.balance, user.hold_balance
+    is_anonymous = user.is_anonymous_in_stats
     referrer_info = await db_manager.get_referrer_info(user_id)
     
     profile_text = (
         f"✨ Ваш Профиль ✨\n\n"
         f"Вас пригласил: {referrer_info}\n"
         f"Баланс звезд: {balance} ⭐\n"
-        f"В холде: {hold_balance} ⭐"
+        f"В холде: {hold_balance} ⭐\n\n"
+        f"Статус в топе: {'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}"
     )
     
+    keyboard = inline.get_profile_keyboard(is_anonymous=is_anonymous)
+    
     if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(profile_text, reply_markup=inline.get_profile_keyboard())
+        await message_or_callback.answer(profile_text, reply_markup=keyboard)
     else: 
         try:
-            await message_or_callback.message.edit_text(profile_text, reply_markup=inline.get_profile_keyboard())
+            await message_or_callback.message.edit_text(profile_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
                 await message_or_callback.answer()
@@ -45,16 +56,27 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
                     await message_or_callback.message.delete()
                 except TelegramBadRequest:
                     pass
-                await message_or_callback.message.answer(profile_text, reply_markup=inline.get_profile_keyboard())
+                await message_or_callback.message.answer(profile_text, reply_markup=keyboard)
 
 
 @router.message(Command("stars"))
 @router.message(F.text == 'Профиль', UserState.MAIN_MENU)
 async def profile_handler(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     await show_profile_menu(message, state)
 
 @router.callback_query(F.data == 'go_profile')
 async def go_profile_handler(callback: CallbackQuery, state: FSMContext):
+    await show_profile_menu(callback, state)
+
+@router.callback_query(F.data == 'profile_toggle_anonymity')
+async def toggle_anonymity_handler(callback: CallbackQuery, state: FSMContext):
+    new_status = await db_manager.toggle_anonymity(callback.from_user.id)
+    status_text = "анонимным" if new_status else "публичным"
+    await callback.answer(f"Ваш профиль в топе теперь {status_text}.", show_alert=True)
     await show_profile_menu(callback, state)
 
 
@@ -274,7 +296,6 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     except Exception as e:
         logger.error(f"Failed to send withdrawal request to admin: {e}")
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Пожалуйста, обратитесь в поддержку.")
-        # Возвращаем средства, если админу не ушло уведомление
         await db_manager.update_balance(user.id, amount)
     
     await state.clear()
@@ -332,7 +353,7 @@ async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str 
     recipient_id = data.get('withdraw_recipient_id')
     
     recipient_user = await db_manager.get_user(recipient_id)
-    recipient_info = f"@{recipient_user.username} (ID: `{recipient_id}`)" if recipient_user else f"ID: {recipient_id}"
+    recipient_info = f"@{recipient_user.username}" if recipient_user else f"ID: {recipient_id}"
 
     await _create_and_notify_withdrawal(user, amount, recipient_info, comment, bot, state)
 

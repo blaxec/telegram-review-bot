@@ -10,7 +10,8 @@ import logging
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS, FINAL_CHECK_ADMIN
+# ИЗМЕНЕНО: Убираем лишние импорты, оставляем только нужные
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
 from handlers.earning import send_confirmation_button, handle_task_timeout
@@ -18,12 +19,13 @@ import datetime
 
 router = Router()
 logger = logging.getLogger(__name__)
-ADMINS = set(ADMIN_IDS)
-LINK_ADMIN = {ADMIN_ID_1}
-TEXT_ADMIN = ADMIN_ID_1
 
-router.message.filter(F.from_user.id.in_(ADMINS))
-router.callback_query.filter(F.from_user.id.in_(ADMINS))
+# ИЗМЕНЕНО: Все права теперь только у ADMIN_ID_1.
+# Глобальный фильтр для всего модуля, чтобы только главный админ мог использовать эти команды.
+router.message.filter(F.from_user.id == ADMIN_ID_1)
+router.callback_query.filter(F.from_user.id == ADMIN_ID_1)
+
+TEXT_ADMIN = ADMIN_ID_1
 
 
 @router.message(Command("addstars"))
@@ -34,7 +36,7 @@ async def admin_add_stars(message: Message):
 
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
-@router.message(Command("admin_refs"), F.from_user.id.in_(LINK_ADMIN))
+@router.message(Command("admin_refs"))
 async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
@@ -78,17 +80,19 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
         link = link.strip()
         if not link or not link.startswith("http"):
             continue
-
+        
+        # Теперь success всегда будет True, так как дубликаты разрешены
         success = await reference_manager.add_reference(link, platform)
         if success:
             added_count += 1
         else:
+            # Этот блок теперь вряд ли выполнится, но оставим для надежности
             skipped_count += 1
 
     await message.answer(
         f"Готово!\n"
         f"✅ Успешно добавлено: {added_count}\n"
-        f"⏭️ Пропущено (дубликаты): {skipped_count}"
+        f"⏭️ Пропущено (ошибки): {skipped_count}"
     )
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     await state.clear()
@@ -213,6 +217,7 @@ async def admin_view_user_hold(message: Message, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_verify:'))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot, dp: Dispatcher):
+    # ... (код без изменений)
     await callback.answer()
     _, action, context, user_id_str = callback.data.split(':')
     user_id = int(user_id_str)
@@ -298,8 +303,9 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await bot.send_message(admin_id, "Ошибка: неизвестный контекст для действия.")
 
 
-@router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
+@router.callback_query(F.data.startswith('admin_provide_text:'))
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
+    # ... (код без изменений)
     is_photo = bool(callback.message.photo)
     message_text = callback.message.caption if is_photo else callback.message.text
 
@@ -319,8 +325,9 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
 
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
+    # ... (код без изменений)
     data = await state.get_data()
     user_id = data.get("target_user_id")
     link_id = data.get("target_link_id")
@@ -373,7 +380,6 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
 
     await state.clear()
 
-
 @router.message(
     F.state.in_({
         AdminState.REJECT_REASON_GOOGLE_PROFILE,
@@ -386,6 +392,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     })
 )
 async def process_admin_reason(message: Message, state: FSMContext, bot: Bot):
+    # ... (код без изменений)
     reason = message.text
     admin_id = message.from_user.id
     current_state = await state.get_state()
@@ -419,6 +426,7 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_final_approve:'))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot):
+    # ... (код без изменений)
     review_id = int(callback.data.split(':')[1])
     review = await db_manager.get_review_by_id(review_id)
     if not review or review.status != 'pending':
@@ -446,6 +454,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_final_reject:'))
 async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext):
+    # ... (код без изменений)
     review_id = int(callback.data.split(':')[1])
     review = await db_manager.get_review_by_id(review_id)
     if not review:
@@ -466,10 +475,10 @@ async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext)
     else:
         await callback.answer("Не удалось отклонить отзыв.", show_alert=True)
 
-
 # --- БЛОК: РУЧНОЕ УПРАВЛЕНИЕ ХОЛДОМ ---
-@router.message(Command("reviewhold"), F.from_user.id == TEXT_ADMIN)
+@router.message(Command("reviewhold"))
 async def admin_review_hold(message: Message, bot: Bot):
+    # ... (код без изменений)
     await message.answer("⏳ Загружаю список отзывов в холде...")
     hold_reviews = await db_manager.get_all_hold_reviews()
 
@@ -506,8 +515,9 @@ async def admin_review_hold(message: Message, bot: Bot):
                                  reply_markup=inline.get_admin_hold_review_keyboard(review.id))
 
 
-@router.callback_query(F.data.startswith('admin_hold_approve:'), F.from_user.id == TEXT_ADMIN)
+@router.callback_query(F.data.startswith('admin_hold_approve:'))
 async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
+    # ... (код без изменений)
     review_id = int(callback.data.split(':')[1])
     
     approved_review = await db_manager.admin_approve_review(review_id)
@@ -527,9 +537,9 @@ async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         print(f"Не удалось уведомить пользователя {approved_review.user_id} об одобрении: {e}")
 
-
-@router.callback_query(F.data.startswith('admin_hold_reject:'), F.from_user.id == TEXT_ADMIN)
+@router.callback_query(F.data.startswith('admin_hold_reject:'))
 async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
+    # ... (код без изменений)
     review_id = int(callback.data.split(':')[1])
 
     review_before_rejection = await db_manager.get_review_by_id(review_id)
@@ -551,11 +561,10 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
     else:
         await callback.answer("❌ Не удалось отклонить отзыв.", show_alert=True)
 
-
 # --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ВЫВОДА СРЕДСТВ ---
-
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
+    # ... (код без изменений)
     request_id = int(callback.data.split(":")[1])
     
     request = await db_manager.approve_withdrawal_request(request_id)
@@ -580,6 +589,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("admin_withdraw_reject:"))
 async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
+    # ... (код без изменений)
     request_id = int(callback.data.split(":")[1])
     
     request = await db_manager.reject_withdrawal_request(request_id)
@@ -623,6 +633,10 @@ async def reset_cooldown_handler(message: Message):
     if success:
         user = await db_manager.get_user(user_id)
         username = f"@{user.username}" if user.username else f"ID: {user_id}"
-        await message.answer(f"✅ Все кулдауны и предупреждения для пользователя **{username}** были успешно сброшены.")
+        # ИЗМЕНЕНО: Добавлена кнопка для возврата в главное меню
+        await message.answer(
+            f"✅ Все кулдауны и предупреждения для пользователя **{username}** были успешно сброшены.",
+            reply_markup=inline.get_back_to_main_menu_keyboard()
+        )
     else:
         await message.answer(f"❌ Произошла неизвестная ошибка при сбросе кулдаунов для пользователя `{identifier}`.")

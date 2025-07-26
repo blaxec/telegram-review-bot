@@ -19,16 +19,22 @@ def get_cancel_inline_keyboard() -> InlineKeyboardMarkup:
 
 # --- Раздел "Профиль" ---
 
-def get_profile_keyboard() -> InlineKeyboardMarkup:
+# ИЗМЕНЕНО: Добавлена кнопка для анонимности
+def get_profile_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
+    # Текст кнопки меняется в зависимости от текущего статуса
+    anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
+    
     buttons = [
         [InlineKeyboardButton(text='Вывод звезд', callback_data='profile_withdraw')],
         [InlineKeyboardButton(text='Передача звезд', callback_data='profile_transfer')],
         [InlineKeyboardButton(text='Реф. ссылка', callback_data='profile_referral')],
         [InlineKeyboardButton(text='Холд', callback_data='profile_hold')],
+        [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
         [InlineKeyboardButton(text='Назад', callback_data='go_main_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# ... (остальной код файла без изменений)
 # --- Передача звезд ---
 def get_transfer_amount_keyboard() -> InlineKeyboardMarkup:
     buttons = [
@@ -143,7 +149,6 @@ def get_google_continue_writing_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_liking_confirmation_keyboard() -> InlineKeyboardMarkup:
-    # ИСПРАВЛЕНО: Убеждаемся, что callback_data здесь верный
     buttons = [[InlineKeyboardButton(text='Выполнено', callback_data='google_confirm_liking_task')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

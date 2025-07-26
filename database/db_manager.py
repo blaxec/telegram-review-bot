@@ -3,9 +3,9 @@
 import datetime
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy import select, update, and_, delete
+from sqlalchemy import select, update, and_, delete, func, desc, case
 from sqlalchemy.orm import selectinload
-from typing import Union
+from typing import Union, List, Tuple
 
 from database.models import Base, User, Review, Link, WithdrawalRequest
 from config import DATABASE_URL
@@ -35,17 +35,30 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
 
 async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
-        return await session.get(User, user_id)
+        # ИЗМЕНЕНО: Добавляем загрузку отзывов для подсчета
+        return await session.get(User, user_id, options=[selectinload(User.reviews)])
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
     user = await get_user(user_id)
     if user:
-        logger.info(f"DB get_user_balance for user {user_id}: Found user. Raw balance: '{user.balance}' (type: {type(user.balance)})")
         return (user.balance, user.hold_balance)
     else:
         logger.warning(f"DB get_user_balance for user {user_id}: User not found. Returning (0.0, 0.0)")
         return (0.0, 0.0)
 
+# ДОБАВЛЕНО: Новая функция для переключения анонимности
+async def toggle_anonymity(user_id: int) -> bool:
+    """Переключает статус анонимности пользователя и возвращает новое значение."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if not user:
+                return False
+            user.is_anonymous_in_stats = not user.is_anonymous_in_stats
+            new_status = user.is_anonymous_in_stats
+            return new_status
+            
+# ... (остальные функции без изменений до get_top_10_users)
 async def update_balance(user_id: int, amount: float):
     async with async_session() as session:
         async with session.begin():
@@ -53,7 +66,6 @@ async def update_balance(user_id: int, amount: float):
             if user:
                 user.balance += amount
 
-# ДОБАВЛЕНА НОВАЯ ФУНКЦИЯ
 async def update_username(user_id: int, new_username: str):
     """Обновляет юзернейм пользователя в базе данных."""
     async with async_session() as session:
@@ -235,10 +247,6 @@ async def get_all_hold_reviews() -> list[Review]:
 async def db_add_reference(url: str, platform: str) -> bool:
     async with async_session() as session:
         async with session.begin():
-            exists_query = select(Link.id).where(Link.url == url)
-            result = await session.execute(exists_query)
-            if result.scalar_one_or_none():
-                return False
             new_link = Link(url=url, platform=platform)
             session.add(new_link)
         return True
@@ -284,7 +292,6 @@ async def db_get_link_by_id(link_id: int) -> Union[Link, None]:
         return await session.get(Link, link_id)
 
 async def create_withdrawal_request(user_id: int, amount: float, recipient_info: str, comment: str = None) -> Union[int, None]:
-    """Создает запрос на вывод и списывает деньги с баланса."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -304,12 +311,10 @@ async def create_withdrawal_request(user_id: int, amount: float, recipient_info:
             return new_request.id
 
 async def get_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
-    """Получает запрос на вывод по его ID."""
     async with async_session() as session:
         return await session.get(WithdrawalRequest, request_id, options=[selectinload(WithdrawalRequest.user)])
 
 async def approve_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
-    """Подтверждает запрос на вывод."""
     async with async_session() as session:
         async with session.begin():
             request = await session.get(WithdrawalRequest, request_id)
@@ -319,7 +324,6 @@ async def approve_withdrawal_request(request_id: int) -> Union[WithdrawalRequest
             return request
 
 async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest, None]:
-    """Отклоняет запрос на вывод и возвращает средства на баланс пользователя."""
     async with async_session() as session:
         async with session.begin():
             request = await session.get(WithdrawalRequest, request_id)
@@ -334,7 +338,6 @@ async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest,
             return request
 
 async def reset_user_cooldowns(user_id: int) -> bool:
-    """Сбрасывает все кулдауны для указанного пользователя."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -347,3 +350,33 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             user.warnings = 0
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
             return True
+
+
+# ИЗМЕНЕНО: Запрос для статистики теперь учитывает флаг анонимности
+async def get_top_10_users() -> List[Tuple[str, float, int]]:
+    """Возвращает топ-10 пользователей по балансу с количеством их отзывов."""
+    async with async_session() as session:
+        subquery = (
+            select(Review.user_id, func.count(Review.id).label("review_count"))
+            .where(Review.status == 'approved')
+            .group_by(Review.user_id)
+            .subquery()
+        )
+        
+        query = (
+            select(
+                # Используем CASE для выбора имени пользователя или плейсхолдера
+                case(
+                    (User.is_anonymous_in_stats, "Анонимный пользователь"),
+                    else_=User.username
+                ).label("display_name"),
+                User.balance,
+                func.coalesce(subquery.c.review_count, 0).label("approved_reviews")
+            )
+            .outerjoin(subquery, User.id == subquery.c.user_id)
+            .order_by(desc(User.balance))
+            .limit(10)
+        )
+        
+        result = await session.execute(query)
+        return result.all()
