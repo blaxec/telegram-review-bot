@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: ${DB_PASS:-password}
       POSTGRES_DB: ${DB_NAME:-telegram_bot_db}
     ports:
-      - "5432:5432"
+      # ИЗМЕНЕНО: Мы меняем внешний порт с 5432 на 5433.
+      # Теперь база данных будет доступна на localhost:5433
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
