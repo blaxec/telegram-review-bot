@@ -14,6 +14,7 @@ from handlers import routers_list
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.blocking import BlockingMiddleware
+from utils.username_updater import UsernameUpdaterMiddleware # <-- ДОБАВЛЕН ИМПОРТ
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ async def main():
     redis_client = None
     scheduler = None
     dp = None
-    
+
     try:
         if not BOT_TOKEN:
             logger.critical("Bot token is not found! Please check your .env file.")
@@ -59,6 +60,8 @@ async def main():
 
         dp = Dispatcher(storage=storage)
 
+        # ИЗМЕНЕНО: Регистрируем middleware для обновления юзернеймов
+        dp.update.outer_middleware(UsernameUpdaterMiddleware())
         dp.message.middleware(AntiFloodMiddleware())
         dp.message.middleware(BlockingMiddleware())
         

@@ -53,6 +53,15 @@ async def update_balance(user_id: int, amount: float):
             if user:
                 user.balance += amount
 
+# ДОБАВЛЕНА НОВАЯ ФУНКЦИЯ
+async def update_username(user_id: int, new_username: str):
+    """Обновляет юзернейм пользователя в базе данных."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if user:
+                user.username = new_username
+
 async def add_referral_earning(user_id: int, amount: float):
     """Начисляет вознаграждение рефереру пользователя."""
     async with async_session() as session:

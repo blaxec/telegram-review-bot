@@ -15,8 +15,6 @@ from config import FINAL_CHECK_ADMIN
 router = Router()
 logger = logging.getLogger(__name__)
 
-# --- ХЭНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ДЛЯ СОЗДАНИЯ GMAIL ---
-
 @router.callback_query(F.data == 'earning_create_gmail')
 async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
     user = await db_manager.get_user(callback.from_user.id)
