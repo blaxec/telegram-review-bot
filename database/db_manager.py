@@ -35,7 +35,6 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
 
 async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
-        # ИЗМЕНЕНО: Добавляем загрузку отзывов для подсчета
         return await session.get(User, user_id, options=[selectinload(User.reviews)])
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
@@ -46,7 +45,6 @@ async def get_user_balance(user_id: int) -> tuple[float, float]:
         logger.warning(f"DB get_user_balance for user {user_id}: User not found. Returning (0.0, 0.0)")
         return (0.0, 0.0)
 
-# ДОБАВЛЕНО: Новая функция для переключения анонимности
 async def toggle_anonymity(user_id: int) -> bool:
     """Переключает статус анонимности пользователя и возвращает новое значение."""
     async with async_session() as session:
@@ -57,8 +55,7 @@ async def toggle_anonymity(user_id: int) -> bool:
             user.is_anonymous_in_stats = not user.is_anonymous_in_stats
             new_status = user.is_anonymous_in_stats
             return new_status
-            
-# ... (остальные функции без изменений до get_top_10_users)
+
 async def update_balance(user_id: int, amount: float):
     async with async_session() as session:
         async with session.begin():
@@ -182,7 +179,8 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
             review_id = new_review.id
     return review_id
 
-async def move_review_to_hold(review_id: int, amount: float, hold_days: int) -> bool:
+# ИЗМЕНЕНО: Функция теперь принимает `hold_minutes` вместо `hold_days`
+async def move_review_to_hold(review_id: int, amount: float, hold_minutes: int) -> bool:
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -195,7 +193,7 @@ async def move_review_to_hold(review_id: int, amount: float, hold_days: int) -> 
 
             review.status = 'on_hold'
             review.amount = amount
-            review.hold_until = datetime.datetime.utcnow() + datetime.timedelta(days=hold_days)
+            review.hold_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=hold_minutes)
             user.hold_balance += amount
         return True
 
@@ -351,8 +349,6 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
             return True
 
-
-# ИЗМЕНЕНО: Запрос для статистики теперь учитывает флаг анонимности
 async def get_top_10_users() -> List[Tuple[str, float, int]]:
     """Возвращает топ-10 пользователей по балансу с количеством их отзывов."""
     async with async_session() as session:
@@ -365,7 +361,6 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
         
         query = (
             select(
-                # Используем CASE для выбора имени пользователя или плейсхолдера
                 case(
                     (User.is_anonymous_in_stats, "Анонимный пользователь"),
                     else_=User.username
