@@ -16,12 +16,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASS = os.getenv("DB_PASS", "password")
-    
-    # ИЗМЕНЕНО: Значение по умолчанию для хоста БД теперь 'postgres_db',
-    # так как именно так называется наш сервис в docker-compose.yml
     DB_HOST = os.getenv("DB_HOST", "postgres_db")
-    
-    # ИЗМЕНЕНО: Внутренний порт PostgreSQL в сети Docker всегда 5432
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "telegram_bot_db")
     
@@ -33,7 +28,6 @@ if DATABASE_URL:
     elif DATABASE_URL.startswith("postgresql://"):
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-
 REDIS_URL = os.getenv("REDIS_URL")
 
 if REDIS_URL:
@@ -41,6 +35,5 @@ if REDIS_URL:
     REDIS_HOST = redis_parsed_url.hostname
     REDIS_PORT = redis_parsed_url.port
 else:
-    # ИЗМЕНЕНО: Значение по умолчанию для хоста Redis теперь 'redis_db'
     REDIS_HOST = os.getenv("REDIS_HOST", "redis_db")
     REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
