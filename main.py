@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
+from aiogram.exceptions import TelegramNetworkError
 from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -14,7 +16,7 @@ from handlers import routers_list
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.blocking import BlockingMiddleware
-from utils.username_updater import UsernameUpdaterMiddleware # <-- ДОБАВЛЕН ИМПОРТ
+from utils.username_updater import UsernameUpdaterMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,7 +41,6 @@ async def set_bot_commands(bot: Bot):
         except Exception as e:
             logger.error(f"Failed to set admin commands for {admin_id}: {e}")
 
-
 async def main():
     bot = None
     redis_client = None
@@ -60,21 +61,36 @@ async def main():
 
         dp = Dispatcher(storage=storage)
 
-        # ИЗМЕНЕНО: Регистрируем middleware для обновления юзернеймов
         dp.update.outer_middleware(UsernameUpdaterMiddleware())
         dp.message.middleware(AntiFloodMiddleware())
         dp.message.middleware(BlockingMiddleware())
         
         dp.include_routers(*routers_list)
 
+        # --- ИЗМЕНЕННЫЙ БЛОК: Добавлена логика повторных попыток ---
+        max_retries = 5
+        retry_delay = 5  # секунд
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to connect to Telegram API... (Attempt {attempt + 1}/{max_retries})")
+                await bot.delete_webhook(drop_pending_updates=True)
+                await set_bot_commands(bot)
+                logger.info("Successfully connected and set up bot commands.")
+                break  # Выход из цикла при успешном подключении
+            except TelegramNetworkError as e:
+                logger.error(f"Network error on startup: {e}. Retrying in {retry_delay} seconds...")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Экспоненциальная задержка
+                else:
+                    logger.critical("Failed to connect to Telegram API after multiple retries. Exiting.")
+                    return # Завершаем работу, если все попытки провалились
+
         logger.info("Starting bot...")
-        await bot.delete_webhook(drop_pending_updates=True)
-        
-        await set_bot_commands(bot)
-        
         scheduler.start()
 
         await dp.start_polling(bot, scheduler=scheduler, dp=dp)
+
     except Exception as e:
         logger.exception("Unhandled exception in main(): %s", e)
     finally:
