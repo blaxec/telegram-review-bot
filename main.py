@@ -1,5 +1,3 @@
-# file: main.py
-
 import asyncio
 import logging
 import time
@@ -11,7 +9,6 @@ from aiogram.exceptions import TelegramNetworkError
 from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ИЗМЕНЕНО: Теперь нам нужен только ADMIN_ID_1 для установки команд
 from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_ID_1
 from handlers import routers_list
 from database import db_manager
@@ -24,17 +21,12 @@ logger = logging.getLogger(__name__)
 
 async def set_bot_commands(bot: Bot):
     """Устанавливает команды, которые будут видны в меню Telegram."""
-    # --- ИЗМЕНЕННЫЙ БЛОК: Логика установки команд ---
-    
-    # 1. Определяем стандартные команды для всех пользователей
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="stars", description="✨ Мой профиль и баланс")
     ]
-    # Устанавливаем их по умолчанию для всех
     await bot.set_my_commands(user_commands)
 
-    # 2. Определяем расширенные команды для главного администратора
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд юзера"),
@@ -42,7 +34,6 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны юзеру")
     ]
     
-    # 3. Устанавливаем админские команды ТОЛЬКО для чата с ADMIN_ID_1
     try:
         await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID_1))
     except Exception as e:
@@ -60,7 +51,23 @@ async def main():
             logger.critical("Bot token is not found! Please check your .env file.")
             return
 
-        await db_manager.init_db()
+        # --- ИЗМЕНЕННЫЙ БЛОК: Добавлена логика повторного подключения к БД ---
+        max_db_retries = 5
+        db_retry_delay = 3  # секунд
+        for attempt in range(max_db_retries):
+            try:
+                logger.info(f"Attempting to connect to the database... (Attempt {attempt + 1}/{max_db_retries})")
+                await db_manager.init_db()
+                logger.info("Successfully connected to the database.")
+                break # Выход из цикла при успешном подключении
+            except ConnectionRefusedError as e:
+                logger.error(f"Database connection refused: {e}. PostgreSQL might still be starting. Retrying in {db_retry_delay} seconds...")
+                if attempt < max_db_retries - 1:
+                    time.sleep(db_retry_delay)
+                else:
+                    logger.critical("Failed to connect to the database after multiple retries. Exiting.")
+                    return # Завершаем работу, если все попытки провалились
+        
         redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT)
         storage = RedisStorage(redis=redis_client)
 
@@ -75,20 +82,20 @@ async def main():
         
         dp.include_routers(*routers_list)
 
-        max_retries = 5
-        retry_delay = 5
-        for attempt in range(max_retries):
+        max_tg_retries = 5
+        tg_retry_delay = 5
+        for attempt in range(max_tg_retries):
             try:
-                logger.info(f"Attempting to connect to Telegram API... (Attempt {attempt + 1}/{max_retries})")
+                logger.info(f"Attempting to connect to Telegram API... (Attempt {attempt + 1}/{max_tg_retries})")
                 await bot.delete_webhook(drop_pending_updates=True)
                 await set_bot_commands(bot)
                 logger.info("Successfully connected and set up bot commands.")
                 break
             except TelegramNetworkError as e:
-                logger.error(f"Network error on startup: {e}. Retrying in {retry_delay} seconds...")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
+                logger.error(f"Network error on startup: {e}. Retrying in {tg_retry_delay} seconds...")
+                if attempt < max_tg_retries - 1:
+                    time.sleep(tg_retry_delay)
+                    tg_retry_delay *= 2
                 else:
                     logger.critical("Failed to connect to Telegram API after multiple retries. Exiting.")
                     return
