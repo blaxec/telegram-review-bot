@@ -10,7 +10,7 @@ import logging
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN
+from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
 from handlers.earning import send_confirmation_button, handle_task_timeout
@@ -19,12 +19,17 @@ import datetime
 router = Router()
 logger = logging.getLogger(__name__)
 
-router.message.filter(F.from_user.id == ADMIN_ID_1)
-router.callback_query.filter(F.from_user.id == ADMIN_ID_1)
-
+# ВОЗВРАЩЕНО: Создаем множество из всех ID администраторов
+ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
+# ИЗМЕНЕНО: Глобальный фильтр теперь пропускает сообщения и колбэки от ЛЮБОГО администратора из списка ADMINS.
+# Это исправляет ошибку, из-за которой второй админ не мог отправлять причины отклонения.
+router.message.filter(F.from_user.id.in_(ADMINS))
+router.callback_query.filter(F.from_user.id.in_(ADMINS))
 
+
+# Эта команда доступна обоим админам
 @router.message(Command("addstars"))
 async def admin_add_stars(message: Message):
     admin_id = message.from_user.id
@@ -32,19 +37,19 @@ async def admin_add_stars(message: Message):
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
 
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
-@router.message(Command("admin_refs"))
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (Только для ADMIN_ID_1) ---
+@router.message(Command("admin_refs"), F.from_user.id == ADMIN_ID_1)
 async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 
-@router.callback_query(F.data == "back_to_refs_menu")
+@router.callback_query(F.data == "back_to_refs_menu", F.from_user.id == ADMIN_ID_1)
 async def back_to_refs_menu(callback: CallbackQuery):
     await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 
-@router.callback_query(F.data.startswith("admin_refs:add:"))
+@router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id == ADMIN_ID_1)
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     platform = callback.data.split(':')[2]
@@ -64,8 +69,8 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         )
 
 
-@router.message(AdminState.ADD_GOOGLE_REFERENCE)
-@router.message(AdminState.ADD_YANDEX_REFERENCE)
+@router.message(AdminState.ADD_GOOGLE_REFERENCE, F.from_user.id == ADMIN_ID_1)
+@router.message(AdminState.ADD_YANDEX_REFERENCE, F.from_user.id == ADMIN_ID_1)
 async def admin_add_ref_process(message: Message, state: FSMContext):
     links = message.text.split('\n')
     added_count = 0
@@ -93,7 +98,7 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data.startswith("admin_refs:stats:"))
+@router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_stats(callback: CallbackQuery):
     await callback.answer("Загружаю статистику...", show_alert=False)
     platform = callback.data.split(':')[2]
@@ -115,7 +120,7 @@ async def admin_view_refs_stats(callback: CallbackQuery):
     await callback.message.edit_text(stats_text, reply_markup=inline.get_back_to_admin_refs_keyboard())
 
 
-@router.callback_query(F.data.startswith("admin_refs:list:"))
+@router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_list(callback: CallbackQuery):
     await callback.answer("Загружаю список...")
     platform = callback.data.split(':')[2]
@@ -142,7 +147,7 @@ async def admin_view_refs_list(callback: CallbackQuery):
         )
 
 
-@router.callback_query(F.data.startswith("admin_refs:delete:"))
+@router.callback_query(F.data.startswith("admin_refs:delete:"), F.from_user.id == ADMIN_ID_1)
 async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
     link_id = int(callback.data.split(':')[2])
 
@@ -172,6 +177,8 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
         except Exception as e:
             print(f"Не удалось уведомить пользователя {assigned_user_id} об удалении ссылки: {e}")
 
+
+# --- БЛОК: МОДЕРАЦИЯ И ДРУГИЕ КОМАНДЫ (Доступны обоим админам) ---
 
 @router.message(Command("viewhold"))
 async def admin_view_user_hold(message: Message, bot: Bot):
@@ -297,7 +304,8 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await bot.send_message(admin_id, "Ошибка: неизвестный контекст для действия.")
 
 
-@router.callback_query(F.data.startswith('admin_provide_text:'))
+# Этот колбэк доступен только админу, который пишет текст (TEXT_ADMIN = ADMIN_ID_1)
+@router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
     is_photo = bool(callback.message.photo)
     message_text = callback.message.caption if is_photo else callback.message.text
@@ -318,7 +326,8 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
 
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
+# Этот обработчик доступен только админу, который пишет текст (TEXT_ADMIN = ADMIN_ID_1)
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     data = await state.get_data()
     user_id = data.get("target_user_id")
@@ -373,6 +382,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     await state.clear()
 
 
+# Этот обработчик доступен ЛЮБОМУ админу, который находится в состоянии ввода причины
 @router.message(
     F.state.in_({
         AdminState.REJECT_REASON_GOOGLE_PROFILE,
@@ -427,12 +437,11 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot):
     amount_map = {'google': 15.0, 'yandex': 50.0}
     amount = amount_map.get(review.platform, 0.0)
 
-    # ИЗМЕНЕНО: Задаем время холда в зависимости от платформы
     hold_minutes_map = {
-        'google': 5,          # 5 минут для Google
-        'yandex': 24 * 60     # 24 часа (1440 минут) для Yandex
+        'google': 5,
+        'yandex': 24 * 60
     }
-    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60) # По умолчанию 24 часа
+    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
 
     success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
     
@@ -474,7 +483,6 @@ async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext)
         await callback.answer("Не удалось отклонить отзыв.", show_alert=True)
 
 
-# --- БЛОК: РУЧНОЕ УПРАВЛЕНИЕ ХОЛДОМ ---
 @router.message(Command("reviewhold"))
 async def admin_review_hold(message: Message, bot: Bot):
     await message.answer("⏳ Загружаю список отзывов в холде...")
@@ -523,8 +531,6 @@ async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_reply_markup(reply_markup=None)
         return
 
-    # Логика начисления реферального вознаграждения.
-    # Происходит только за Google-отзывы и только в момент окончательного одобрения из холда.
     if approved_review.platform == 'google':
         await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
     
@@ -560,8 +566,6 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
     else:
         await callback.answer("❌ Не удалось отклонить отзыв.", show_alert=True)
 
-
-# --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ВЫВОДА СРЕДСТВ ---
 
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
@@ -612,8 +616,8 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
 
-# БЛОК ДЛЯ СБРОСА КУЛДАУНОВ
-@router.message(Command("reset_cooldown"))
+# Команда доступна только ADMIN_ID_1
+@router.message(Command("reset_cooldown"), F.from_user.id == ADMIN_ID_1)
 async def reset_cooldown_handler(message: Message):
     args = message.text.split()
     if len(args) < 2:

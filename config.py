@@ -9,9 +9,13 @@ ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 6127982184))
 ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 7205028708))
 ADMIN_IDS = [ADMIN_ID_1, ADMIN_ID_2]
 
-FINAL_CHECK_ADMIN = ADMIN_ID_1
+
+# ВОЗВРАЩЕНО: Все финальные проверки снова идут ко второму администратору, как и было задумано
+FINAL_CHECK_ADMIN = ADMIN_ID_2
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 if not DATABASE_URL:
     DB_USER = os.getenv("DB_USER", "postgres")
@@ -19,8 +23,8 @@ if not DATABASE_URL:
     DB_HOST = os.getenv("DB_HOST", "postgres_db")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "telegram_bot_db")
-    
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
 
 if DATABASE_URL:
     if DATABASE_URL.startswith("postgres://"):
@@ -28,8 +32,9 @@ if DATABASE_URL:
     elif DATABASE_URL.startswith("postgresql://"):
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-REDIS_URL = os.getenv("REDIS_URL")
 
+
+REDIS_URL = os.getenv("REDIS_URL")
 if REDIS_URL:
     redis_parsed_url = urlparse(REDIS_URL)
     REDIS_HOST = redis_parsed_url.hostname

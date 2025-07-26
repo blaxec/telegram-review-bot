@@ -10,12 +10,12 @@ router = Router()
 @router.message(F.text == 'Поддержка', UserState.MAIN_MENU)
 async def support_handler(message: Message):
     """Обработчик для раздела 'Поддержка'."""
-    # ИЗМЕНЕНО: Удаляем сообщение пользователя для чистоты
     try:
         await message.delete()
     except TelegramBadRequest:
         pass
 
+    # ВОЗВРАЩЕНО: Упоминание обоих администраторов
     support_text = (
         "❓ Нужна помощь?\n\n"
         "Если у вас возникли вопросы или проблемы, свяжитесь с нашей службой поддержки:\n\n"
