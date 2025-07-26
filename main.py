@@ -11,7 +11,8 @@ from aiogram.exceptions import TelegramNetworkError
 from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
+# ИЗМЕНЕНО: Теперь нам нужен только ADMIN_ID_1 для установки команд
+from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_ID_1
 from handlers import routers_list
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -23,23 +24,30 @@ logger = logging.getLogger(__name__)
 
 async def set_bot_commands(bot: Bot):
     """Устанавливает команды, которые будут видны в меню Telegram."""
+    # --- ИЗМЕНЕННЫЙ БЛОК: Логика установки команд ---
+    
+    # 1. Определяем стандартные команды для всех пользователей
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="stars", description="✨ Мой профиль и баланс")
     ]
+    # Устанавливаем их по умолчанию для всех
     await bot.set_my_commands(user_commands)
 
+    # 2. Определяем расширенные команды для главного администратора
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд юзера"),
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны юзеру")
     ]
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
-        except Exception as e:
-            logger.error(f"Failed to set admin commands for {admin_id}: {e}")
+    
+    # 3. Устанавливаем админские команды ТОЛЬКО для чата с ADMIN_ID_1
+    try:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID_1))
+    except Exception as e:
+        logger.error(f"Failed to set admin commands for {ADMIN_ID_1}: {e}")
+
 
 async def main():
     bot = None
@@ -67,30 +75,31 @@ async def main():
         
         dp.include_routers(*routers_list)
 
-        # --- ИЗМЕНЕННЫЙ БЛОК: Добавлена логика повторных попыток ---
         max_retries = 5
-        retry_delay = 5  # секунд
+        retry_delay = 5
         for attempt in range(max_retries):
             try:
                 logger.info(f"Attempting to connect to Telegram API... (Attempt {attempt + 1}/{max_retries})")
                 await bot.delete_webhook(drop_pending_updates=True)
                 await set_bot_commands(bot)
                 logger.info("Successfully connected and set up bot commands.")
-                break  # Выход из цикла при успешном подключении
+                break
             except TelegramNetworkError as e:
                 logger.error(f"Network error on startup: {e}. Retrying in {retry_delay} seconds...")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                    retry_delay *= 2  # Экспоненциальная задержка
+                    retry_delay *= 2
                 else:
                     logger.critical("Failed to connect to Telegram API after multiple retries. Exiting.")
-                    return # Завершаем работу, если все попытки провалились
+                    return
 
         logger.info("Starting bot...")
         scheduler.start()
 
         await dp.start_polling(bot, scheduler=scheduler, dp=dp)
 
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        logger.info("Bot polling cancelled.")
     except Exception as e:
         logger.exception("Unhandled exception in main(): %s", e)
     finally:
@@ -98,7 +107,7 @@ async def main():
             scheduler.shutdown()
         if dp and bot:
              await dp.storage.close()
-        if bot and bot.session and not bot.session.closed:
+        if bot and bot.session:
             await bot.session.close()
         if redis_client:
             await redis_client.aclose()
