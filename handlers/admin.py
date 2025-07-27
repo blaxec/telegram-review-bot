@@ -557,7 +557,7 @@ async def admin_review_hold(message: Message, bot: Bot):
             f"Пользователь ID: `{review.user_id}`\n"
             f"Платформа: `{review.platform}`\n"
             f"Сумма: `{review.amount}` ⭐\n"
-            f"Ссылка: `{link_url}`\n\n"
+            f"Ссылка: `{link_url} `\n\n"
             f"Текст: «_{review.review_text}_»"
         )
         
