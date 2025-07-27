@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message
+from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 
@@ -19,17 +20,13 @@ import datetime
 router = Router()
 logger = logging.getLogger(__name__)
 
-# ВОЗВРАЩЕНО: Создаем множество из всех ID администраторов
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
-# ИЗМЕНЕНО: Глобальный фильтр теперь пропускает сообщения и колбэки от ЛЮБОГО администратора из списка ADMINS.
-# Это исправляет ошибку, из-за которой второй админ не мог отправлять причины отклонения.
 router.message.filter(F.from_user.id.in_(ADMINS))
 router.callback_query.filter(F.from_user.id.in_(ADMINS))
 
 
-# Эта команда доступна обоим админам
 @router.message(Command("addstars"))
 async def admin_add_stars(message: Message):
     admin_id = message.from_user.id
@@ -46,12 +43,18 @@ async def admin_refs_menu(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id == ADMIN_ID_1)
 async def back_to_refs_menu(callback: CallbackQuery):
-    await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+    try:
+        await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+    except TelegramBadRequest as e:
+        logger.warning(f"Error editing message on back_to_refs_menu: {e}")
 
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id == ADMIN_ID_1)
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
     platform = callback.data.split(':')[2]
 
     current_state = None
@@ -100,7 +103,10 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_stats(callback: CallbackQuery):
-    await callback.answer("Загружаю статистику...", show_alert=False)
+    try:
+        await callback.answer("Загружаю статистику...", show_alert=False)
+    except TelegramBadRequest:
+        pass
     platform = callback.data.split(':')[2]
 
     all_links = await reference_manager.get_all_references(platform)
@@ -122,7 +128,10 @@ async def admin_view_refs_stats(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_list(callback: CallbackQuery):
-    await callback.answer("Загружаю список...")
+    try:
+        await callback.answer("Загружаю список...")
+    except TelegramBadRequest:
+        pass
     platform = callback.data.split(':')[2]
 
     all_links = await reference_manager.get_all_references(platform)
@@ -154,11 +163,17 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
     success, assigned_user_id = await reference_manager.delete_reference(link_id)
 
     if not success:
-        await callback.answer("Не удалось удалить ссылку. Возможно, она уже удалена.", show_alert=True)
+        try:
+            await callback.answer("Не удалось удалить ссылку. Возможно, она уже удалена.", show_alert=True)
+        except TelegramBadRequest:
+            pass
         return
 
     await callback.message.delete()
-    await callback.answer(f"Ссылка с ID {link_id} успешно удалена.", show_alert=True)
+    try:
+        await callback.answer(f"Ссылка с ID {link_id} успешно удалена.", show_alert=True)
+    except TelegramBadRequest:
+        pass
 
     if assigned_user_id:
         try:
@@ -219,7 +234,11 @@ async def admin_view_user_hold(message: Message, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_verify:'))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot, dp: Dispatcher):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     _, action, context, user_id_str = callback.data.split(':')
     user_id = int(user_id_str)
     admin_id = callback.from_user.id
@@ -242,19 +261,26 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await bot.send_message(user_id, "Ваш профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
 
         new_text = f"{original_text}\n\n{action_text}"
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=new_text, reply_markup=None)
-        else:
-            await callback.message.edit_text(new_text, reply_markup=None)
+        try:
+            if callback.message.photo:
+                await callback.message.edit_caption(caption=new_text, reply_markup=None)
+            else:
+                await callback.message.edit_text(new_text, reply_markup=None)
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось отредактировать сообщение при подтверждении: {e}")
+
 
     elif action == "warn":
         action_text = f"⚠️ ПРЕДУПРЕЖДЕНИЕ ВЫДАНО (админ @{admin_username})"
         new_text = f"{original_text}\n\n{action_text}"
 
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=new_text, reply_markup=None)
-        else:
-            await callback.message.edit_text(new_text, reply_markup=None)
+        try:
+            if callback.message.photo:
+                await callback.message.edit_caption(caption=new_text, reply_markup=None)
+            else:
+                await callback.message.edit_text(new_text, reply_markup=None)
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось отредактировать сообщение при выдаче предупреждения: {e}")
         
         platform = context.split('_')[0]
         warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
@@ -284,10 +310,13 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         action_text = "❌ ОТКЛОНЕН"
         new_text = f"{original_text}\n\n{action_text} (админ @{admin_username})"
 
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=new_text, reply_markup=None)
-        else:
-            await callback.message.edit_text(new_text, reply_markup=None)
+        try:
+            if callback.message.photo:
+                await callback.message.edit_caption(caption=new_text, reply_markup=None)
+            else:
+                await callback.message.edit_text(new_text, reply_markup=None)
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось отредактировать сообщение при отклонении: {e}")
 
         await bot.send_message(admin_id, f"Пожалуйста, отправьте следующим сообщением причину, по которой вы выбрали '{action_text}' для пользователя {user_id_str}.")
 
@@ -304,7 +333,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await bot.send_message(admin_id, "Ошибка: неизвестный контекст для действия.")
 
 
-# Этот колбэк доступен только админу, который пишет текст (TEXT_ADMIN = ADMIN_ID_1)
 @router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
     is_photo = bool(callback.message.photo)
@@ -317,16 +345,18 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
     await state.set_state(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
     await state.update_data(target_user_id=user_id, target_link_id=link_id)
     
-    if is_photo:
-        await callback.message.edit_caption(
-            caption=f"{message_text}\n\n✍️ Введите текст отзыва для пользователя ID: {user_id}",
-            reply_markup=None
-        )
-    else:
-        await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
+    try:
+        if is_photo:
+            await callback.message.edit_caption(
+                caption=f"{message_text}\n\n✍️ Введите текст отзыва для пользователя ID: {user_id}",
+                reply_markup=None
+            )
+        else:
+            await callback.message.edit_text(f"Введите текст отзыва для пользователя ID: {user_id}", reply_markup=None)
+    except TelegramBadRequest as e:
+        logger.warning(f"Error editing message on admin_start_providing_text: {e}")
 
 
-# Этот обработчик доступен только админу, который пишет текст (TEXT_ADMIN = ADMIN_ID_1)
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     data = await state.get_data()
@@ -382,7 +412,6 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     await state.clear()
 
 
-# Этот обработчик доступен ЛЮБОМУ админу, который находится в состоянии ввода причины
 @router.message(
     F.state.in_({
         AdminState.REJECT_REASON_GOOGLE_PROFILE,
@@ -428,59 +457,86 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_final_approve:'))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot):
-    review_id = int(callback.data.split(':')[1])
-    review = await db_manager.get_review_by_id(review_id)
-    if not review or review.status != 'pending':
-        await callback.answer("Ошибка: отзыв не найден или уже обработан.", show_alert=True)
-        return
+    try:
+        review_id = int(callback.data.split(':')[1])
+        review = await db_manager.get_review_by_id(review_id)
+        if not review or review.status != 'pending':
+            try:
+                await callback.answer("Ошибка: отзыв не найден или уже обработан.", show_alert=True)
+            except TelegramBadRequest:
+                pass
+            return
 
-    amount_map = {'google': 15.0, 'yandex': 50.0}
-    amount = amount_map.get(review.platform, 0.0)
+        amount_map = {'google': 15.0, 'yandex': 50.0}
+        amount = amount_map.get(review.platform, 0.0)
 
-    hold_minutes_map = {
-        'google': 5,
-        'yandex': 24 * 60
-    }
-    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
+        hold_minutes_map = {
+            'google': 5,
+            'yandex': 24 * 60
+        }
+        hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
 
-    success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
-    
-    if success:
-        hold_hours = hold_duration_minutes / 60
-        await callback.answer(f"Одобрено. Отзыв отправлен в холд на {hold_hours:.2f} ч.", show_alert=True)
-        await db_manager.set_platform_cooldown(review.user_id, review.platform, 72)
-        await reference_manager.release_reference_from_user(review.user_id, 'used')
-        try:
-            await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) успешно прошел первичную проверку и отправлен в холд. +{amount} ⭐ добавлены в холд.")
-        except Exception as e:
-            print(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
+        success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
         
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ ОТЗЫВ ОТПРАВЛЕН В ХОЛД (админом @{callback.from_user.username})", reply_markup=None)
-    else:
-        await callback.answer("Не удалось одобрить отзыв.", show_alert=True)
+        if success:
+            hold_hours = hold_duration_minutes / 60
+            try:
+                await callback.answer(f"Одобрено. Отзыв отправлен в холд на {hold_hours:.2f} ч.", show_alert=True)
+            except TelegramBadRequest:
+                pass
+            
+            await db_manager.set_platform_cooldown(review.user_id, review.platform, 72)
+            await reference_manager.release_reference_from_user(review.user_id, 'used')
+            try:
+                await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) успешно прошел первичную проверку и отправлен в холд. +{amount} ⭐ добавлены в холд.")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
+            
+            try:
+                await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ ОТЗЫВ ОТПРАВЛЕН В ХОЛД (админом @{callback.from_user.username})", reply_markup=None)
+            except TelegramBadRequest as e:
+                logger.warning(f"Не удалось отредактировать сообщение после одобрения: {e}")
+        else:
+            try:
+                await callback.answer("Не удалось одобрить отзыв.", show_alert=True)
+            except TelegramBadRequest:
+                pass
+    except Exception as e:
+        logger.error(f"Критическая ошибка в admin_final_approve: {e}")
+        try:
+            await callback.answer("Произошла внутренняя ошибка.", show_alert=True)
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith('admin_final_reject:'))
 async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext):
-    review_id = int(callback.data.split(':')[1])
-    review = await db_manager.get_review_by_id(review_id)
-    if not review:
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\nОшибка: отзыв не найден.", reply_markup=None)
-        return
+    try:
+        review_id = int(callback.data.split(':')[1])
+        review = await db_manager.get_review_by_id(review_id)
+        if not review:
+            await callback.message.edit_caption(caption=f"{callback.message.caption}\n\nОшибка: отзыв не найден.", reply_markup=None)
+            return
 
-    rejected_review = await db_manager.admin_reject_review(review_id)
-    if rejected_review:
-        await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, 72)
-        await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
+        rejected_review = await db_manager.admin_reject_review(review_id)
+        if rejected_review:
+            await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, 72)
+            await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
+            try:
+                user_message = f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней."
+                await callback.bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
+
+            await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ ОТЗЫВ ОТКЛОНЕН (админом @{callback.from_user.username}). Пользователю выдан кулдаун.", reply_markup=None)
+        else:
+            await callback.answer("Не удалось отклонить отзыв.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Критическая ошибка в admin_final_reject_request: {e}")
         try:
-            user_message = f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней."
-            await callback.bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
-        except Exception as e:
-            print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
-
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ ОТЗЫВ ОТКЛОНЕН (админом @{callback.from_user.username}). Пользователю выдан кулдаун.", reply_markup=None)
-    else:
-        await callback.answer("Не удалось отклонить отзыв.", show_alert=True)
+            await callback.answer("Произошла внутренняя ошибка.", show_alert=True)
+        except TelegramBadRequest:
+            pass
 
 
 @router.message(Command("reviewhold"))
@@ -523,100 +579,121 @@ async def admin_review_hold(message: Message, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_hold_approve:'))
 async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
-    review_id = int(callback.data.split(':')[1])
-    
-    approved_review = await db_manager.admin_approve_review(review_id)
-    if not approved_review:
-        await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-
-    if approved_review.platform == 'google':
-        await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
-    
-    await callback.answer("✅ Отзыв одобрен!", show_alert=True)
-    new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН @{callback.from_user.username}"
-    await callback.message.edit_caption(caption=new_caption, reply_markup=None)
     try:
-        await bot.send_message(approved_review.user_id, f"✅ Ваш отзыв (ID: {review_id}) был одобрен администратором! +{approved_review.amount} ⭐ зачислены на ваш основной баланс.")
-    except Exception as e:
-        print(f"Не удалось уведомить пользователя {approved_review.user_id} об одобрении: {e}")
+        review_id = int(callback.data.split(':')[1])
+        
+        approved_review = await db_manager.admin_approve_review(review_id)
+        if not approved_review:
+            await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=None)
+            return
+
+        if approved_review.platform == 'google':
+            await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
+        
+        await callback.answer("✅ Отзыв одобрен!", show_alert=True)
+        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН @{callback.from_user.username}"
+        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        try:
+            await bot.send_message(approved_review.user_id, f"✅ Ваш отзыв (ID: {review_id}) был одобрен администратором! +{approved_review.amount} ⭐ зачислены на ваш основной баланс.")
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {approved_review.user_id} об одобрении: {e}")
+    except (TelegramBadRequest, Exception) as e:
+        logger.error(f"Ошибка в admin_hold_approve_handler: {e}")
+        try:
+            await callback.answer("Произошла ошибка при одобрении.", show_alert=True)
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith('admin_hold_reject:'))
 async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
-    review_id = int(callback.data.split(':')[1])
+    try:
+        review_id = int(callback.data.split(':')[1])
 
-    review_before_rejection = await db_manager.get_review_by_id(review_id)
-    if not review_before_rejection or review_before_rejection.status != 'on_hold':
-        await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
+        review_before_rejection = await db_manager.get_review_by_id(review_id)
+        if not review_before_rejection or review_before_rejection.status != 'on_hold':
+            await callback.answer("❌ Ошибка: отзыв не найден или уже обработан.", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=None)
+            return
 
-    rejected_review = await db_manager.admin_reject_review(review_id)
-    if rejected_review:
-        await callback.answer("❌ Отзыв отклонен!", show_alert=True)
-        new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН @{callback.from_user.username}"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        rejected_review = await db_manager.admin_reject_review(review_id)
+        if rejected_review:
+            await callback.answer("❌ Отзыв отклонен!", show_alert=True)
+            new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН @{callback.from_user.username}"
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+            try:
+                user_message = f"❌ Ваш отзыв (ID: {review_id}) был отклонен администратором после проверки. Звезды списаны из холда."
+                await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
+        else:
+            await callback.answer("❌ Не удалось отклонить отзыв.", show_alert=True)
+    except (TelegramBadRequest, Exception) as e:
+        logger.error(f"Ошибка в admin_hold_reject_handler: {e}")
         try:
-            user_message = f"❌ Ваш отзыв (ID: {review_id}) был отклонен администратором после проверки. Звезды списаны из холда."
-            await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
-        except Exception as e:
-            print(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
-    else:
-        await callback.answer("❌ Не удалось отклонить отзыв.", show_alert=True)
+            await callback.answer("Произошла ошибка при отклонении.", show_alert=True)
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    
-    request = await db_manager.approve_withdrawal_request(request_id)
-    
-    if request is None:
-        await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-
-    await callback.answer("✅ Вывод подтвержден.", show_alert=True)
-    
-    new_text = callback.message.text + f"\n\n**[ ✅ ПОДТВЕРЖДЕНО администратором @{callback.from_user.username} ]**"
-    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
-    
     try:
-        await bot.send_message(
-            request.user_id,
-            f"✅ Ваш запрос на вывод {request.amount} ⭐ был **подтвержден** администратором."
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify user {request.user_id} about withdrawal approval: {e}")
+        request_id = int(callback.data.split(":")[1])
+        
+        request = await db_manager.approve_withdrawal_request(request_id)
+        
+        if request is None:
+            await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=None)
+            return
+
+        await callback.answer("✅ Вывод подтвержден.", show_alert=True)
+        
+        new_text = callback.message.text + f"\n\n**[ ✅ ПОДТВЕРЖДЕНО администратором @{callback.from_user.username} ]**"
+        await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        
+        try:
+            await bot.send_message(
+                request.user_id,
+                f"✅ Ваш запрос на вывод {request.amount} ⭐ был **подтвержден** администратором."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {request.user_id} about withdrawal approval: {e}")
+    except (TelegramBadRequest, Exception) as e:
+        logger.error(f"Ошибка в admin_approve_withdrawal: {e}")
+
 
 @router.callback_query(F.data.startswith("admin_withdraw_reject:"))
 async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    
-    request = await db_manager.reject_withdrawal_request(request_id)
-    
-    if request is None:
-        await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-
-    await callback.answer("❌ Вывод отклонен. Средства возвращены пользователю.", show_alert=True)
-    
-    new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО администратором @{callback.from_user.username} ]**"
-    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
-    
     try:
-        await bot.send_message(
-            request.user_id,
-            f"❌ Ваш запрос на вывод {request.amount} ⭐ был **отклонен** администратором. "
-            "Средства возвращены на ваш основной баланс."
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
+        request_id = int(callback.data.split(":")[1])
+        
+        request = await db_manager.reject_withdrawal_request(request_id)
+        
+        if request is None:
+            await callback.answer("❌ Запрос уже обработан или не найден.", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=None)
+            return
 
-# Команда доступна только ADMIN_ID_1
+        await callback.answer("❌ Вывод отклонен. Средства возвращены пользователю.", show_alert=True)
+        
+        new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО администратором @{callback.from_user.username} ]**"
+        await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        
+        try:
+            await bot.send_message(
+                request.user_id,
+                f"❌ Ваш запрос на вывод {request.amount} ⭐ был **отклонен** администратором. "
+                "Средства возвращены на ваш основной баланс."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
+    except (TelegramBadRequest, Exception) as e:
+        logger.error(f"Ошибка в admin_reject_withdrawal: {e}")
+
+
 @router.message(Command("reset_cooldown"), F.from_user.id == ADMIN_ID_1)
 async def reset_cooldown_handler(message: Message):
     args = message.text.split()

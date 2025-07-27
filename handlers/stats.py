@@ -1,3 +1,4 @@
+# file: handlers/stats.py
 import asyncio
 import logging
 from aiogram import Router, F, Bot
@@ -11,9 +12,10 @@ from database import db_manager
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Словарь для хранения активных сообщений со статистикой {chat_id: message_id}
+# ИЗМЕНЕНО: Словарь теперь хранит не только message_id, но и последний отправленный текст
 active_stats_messages = {}
-# ID запущенной задачи в шедулере
+# {chat_id: {"message_id": int, "last_text": str}}
+
 scheduler_job_id = "live_stats_update"
 
 def format_stats_text(top_users: list) -> str:
@@ -29,7 +31,6 @@ def format_stats_text(top_users: list) -> str:
     }
 
     for i, (display_name, balance, review_count) in enumerate(top_users, 1):
-        # Если юзернейм None (например, в старых записях), используем плейсхолдер
         user_display = display_name if display_name else "Скрытый пользователь"
         stats_text += (
             f"{place_emojis.get(i, '🔹')} **{user_display}**\n"
@@ -41,32 +42,38 @@ def format_stats_text(top_users: list) -> str:
 async def update_stats_messages(bot: Bot):
     """Задача, которая обновляет все активные сообщения со статистикой."""
     if not active_stats_messages:
-        return # Нечего обновлять
+        return
 
     logger.info(f"Running stats update for {len(active_stats_messages)} users.")
     
-    # Получаем свежие данные один раз для всех
     top_users = await db_manager.get_top_10_users()
     new_text = format_stats_text(top_users)
     
-    # Копируем словарь, так как он может измениться во время итерации
     current_viewers = list(active_stats_messages.items())
     
-    for chat_id, message_id in current_viewers:
+    for chat_id, data in current_viewers:
+        message_id = data["message_id"]
+        last_text = data["last_text"]
+
+        # ИЗМЕНЕНО: Отправляем запрос на редактирование ТОЛЬКО если текст изменился
+        if new_text == last_text:
+            continue # Пропускаем, если нет изменений
+
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=new_text
             )
+            # Если успешно, обновляем сохраненный текст
+            active_stats_messages[chat_id]["last_text"] = new_text
         except TelegramBadRequest as e:
-            # Если сообщение не изменено или удалено, просто удаляем его из списка
-            if "message is not modified" in str(e) or "message to edit not found" in str(e):
-                logger.warning(f"Message {message_id} in chat {chat_id} not found or not modified. Removing from live updates.")
+            if "message to edit not found" in str(e):
+                logger.warning(f"Message {message_id} in chat {chat_id} not found. Removing from live updates.")
                 active_stats_messages.pop(chat_id, None)
             else:
                 logger.error(f"Failed to edit stats message for chat {chat_id}: {e}")
-                active_stats_messages.pop(chat_id, None)
+                # Не удаляем из списка, чтобы попробовать еще раз
         except Exception as e:
             logger.error(f"Unexpected error updating stats for chat {chat_id}: {e}")
             active_stats_messages.pop(chat_id, None)
@@ -80,16 +87,17 @@ async def stats_handler(message: Message, bot: Bot, scheduler: AsyncIOScheduler)
     except TelegramBadRequest:
         pass
 
-    # Получаем начальные данные
     top_users = await db_manager.get_top_10_users()
     initial_text = format_stats_text(top_users)
     
     sent_message = await message.answer(initial_text)
 
-    # Сохраняем сообщение для будущих обновлений
-    active_stats_messages[message.chat.id] = sent_message.message_id
+    # ИЗМЕНЕНО: Сохраняем и ID, и текст сообщения
+    active_stats_messages[message.chat.id] = {
+        "message_id": sent_message.message_id,
+        "last_text": initial_text
+    }
     
-    # Запускаем задачу обновления, если она еще не запущена
     if not scheduler.get_job(scheduler_job_id):
         try:
             scheduler.add_job(
