@@ -48,15 +48,21 @@ async def start_handler(message: Message, state: FSMContext):
 @router.callback_query(F.data == 'agree_agreement')
 async def process_agreement(callback: CallbackQuery, state: FSMContext):
     """Обработчик нажатия на кнопку 'Согласен'."""
-    await callback.answer("Добро пожаловать!")
-    await callback.message.edit_text("Вы приняли соглашение.")
+    try:
+        await callback.answer("Добро пожаловать!")
+    except TelegramBadRequest:
+        pass # Игнорируем ошибку, если запрос устарел
+        
+    try:
+        await callback.message.edit_text("Вы приняли соглашение.")
+    except TelegramBadRequest:
+        pass # Игнорируем, если сообщение не может быть изменено
 
     await state.set_state(UserState.MAIN_MENU)
     await callback.message.answer(
         "Добро пожаловать в главное меню!",
         reply_markup=reply.get_main_menu_keyboard()
     )
-    # ИЗМЕНЕНО: Блок с отправкой стикера/сердечка полностью удален.
 
 
 # --- Универсальные обработчики отмены и возврата ---
@@ -80,11 +86,13 @@ async def cancel_handler_reply(message: Message, state: FSMContext):
 @router.callback_query(F.data == 'cancel_action')
 async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
     """Обработчик инлайн-кнопки отмены."""
-    await callback.answer("Действие отменено")
+    try:
+        await callback.answer("Действие отменено")
+    except TelegramBadRequest:
+        pass
     
     try:
-        if isinstance(callback.message, Message):
-            await callback.message.delete()
+        await callback.message.delete()
     except TelegramBadRequest as e:
         print(f"Error deleting message: {e}")
 
@@ -103,10 +111,13 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == 'go_main_menu')
 async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик для кнопки 'Назад', ведущей в главное меню."""
-    await callback.answer()
     try:
-        if isinstance(callback.message, Message):
-            await callback.message.delete()
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
+    try:
+        await callback.message.delete()
     except TelegramBadRequest as e:
         print(f"Error deleting message on go_main_menu: {e}")
         
