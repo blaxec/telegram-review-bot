@@ -341,7 +341,7 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
         "💡 Чтобы мы точно приняли отзыв, нам нужно проверить ваш профиль. Пожалуйста, скиньте ссылку на профиль.\n"
         "💡 Также выключите **\"Определение местоположения\"** для приложения в настройках телефона.\n"
         "💡 Аккаунты принимаются не ниже **\"Знатока города\"**.\n\n"
-        "Отправьте ссылку на профиль следующим сообщением.",
+        "Отправьте ссылку на профиль или, если не получается, скриншот профиля.",
         reply_markup=inline.get_yandex_init_keyboard()
     )
 
@@ -361,7 +361,8 @@ async def show_yandex_instructions(callback: CallbackQuery):
 @router.message(F.text, UserState.YANDEX_REVIEW_INIT)
 async def process_yandex_profile_link(message: Message, state: FSMContext, bot: Bot):
     if not message.text or not message.text.strip().startswith("https://yandex.ru/maps/user/"):
-        await message.answer("Неверный формат. Пожалуйста, отправьте корректную ссылку на ваш профиль в Яндекс.Картах. Она должна начинаться с `https://yandex.ru/maps/user/`")
+        await message.answer("Неверный формат. Пожалуйста, отправьте корректную ссылку на ваш профиль в Яндекс.Картах или используйте кнопку для отправки скриншота.",
+                               reply_markup=inline.get_yandex_init_keyboard())
         return
     await message.answer("Ваша ссылка отправлена на проверку. Ожидайте...")
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_CHECK_PENDING)
@@ -381,7 +382,44 @@ async def process_yandex_profile_link(message: Message, state: FSMContext, bot: 
         print(f"Ошибка отправки профиля Yandex админу: {e}")
         await message.answer("Не удалось отправить ссылку на проверку. Попробуйте позже.")
         await state.clear()
-        
+
+@router.callback_query(F.data == 'yandex_use_screenshot', UserState.YANDEX_REVIEW_INIT)
+async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
+    await callback.message.edit_text(
+        "Хорошо. Пожалуйста, сделайте и пришлите **скриншот вашего профиля** в Яндекс.Картах.\n\n"
+        "❗️**Требования к скриншоту:**\n"
+        "1. Скриншот должен быть **полным**, без обрезаний и замазывания.\n"
+        "2. На нем должен быть хорошо виден ваш уровень **\"Знатока города\"**.\n"
+        "3. Должна быть видна **дата вашего последнего отзыва**.\n\n"
+        "Отправьте фото следующим сообщением.",
+        reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
+    )
+
+@router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
+async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    photo_file_id = message.photo[-1].file_id
+    await state.update_data(profile_screenshot_id=photo_file_id)
+    
+    await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
+    
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: `{message.from_user.id}`)"
+    caption = (f"[Админ: @SHAD0W_F4]\n"
+               f"Проверьте скриншот профиля Yandex. Убедитесь, что виден уровень знатока и дата последнего отзыва.\n"
+               f"{user_info_text}")
+    try:
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=photo_file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "yandex_profile_screenshot")
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
+        await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        await state.clear()
+
 @router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
 async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     await callback.message.delete()

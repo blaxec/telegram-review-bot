@@ -33,6 +33,8 @@ class UserState(StatesGroup):
     # Состояния для отзыва в Yandex
     YANDEX_REVIEW_INIT = State()
     YANDEX_REVIEW_PROFILE_CHECK_PENDING = State()
+    YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()      # <-- НОВОЕ
+    YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()  # <-- НОВОЕ
     YANDEX_REVIEW_READY_TO_TASK = State()
     YANDEX_REVIEW_TASK_ACTIVE = State()
     YANDEX_REVIEW_AWAITING_TEXT_PHOTO = State()

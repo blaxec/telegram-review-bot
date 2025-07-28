@@ -1,29 +1,23 @@
 # file: handlers/stats.py
-import asyncio
 import logging
 from aiogram import Router, F, Bot
-from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState
 from database import db_manager
+from keyboards import inline
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-# ИЗМЕНЕНО: Словарь теперь хранит не только message_id, но и последний отправленный текст
-active_stats_messages = {}
-# {chat_id: {"message_id": int, "last_text": str}}
-
-scheduler_job_id = "live_stats_update"
 
 def format_stats_text(top_users: list) -> str:
     """Форматирует текст для сообщения со статистикой."""
     if not top_users:
         return "📊 **Топ пользователей**\n\nПока в рейтинге никого нет."
 
-    stats_text = "📊 **Топ-10 пользователей по балансу** 🏆 (обновляется раз в минуту)\n\n"
+    stats_text = "📊 **Топ-10 пользователей по балансу** 🏆\n\n"
     place_emojis = {
         1: "🥇", 2: "🥈", 3: "🥉",
         4: "4️⃣", 5: "5️⃣", 6: "6️⃣",
@@ -39,74 +33,44 @@ def format_stats_text(top_users: list) -> str:
         )
     return stats_text
 
-async def update_stats_messages(bot: Bot):
-    """Задача, которая обновляет все активные сообщения со статистикой."""
-    if not active_stats_messages:
-        return
-
-    logger.info(f"Running stats update for {len(active_stats_messages)} users.")
+async def show_stats_menu(message_or_callback: Message | CallbackQuery):
+    """Отображает меню статистики."""
+    user_id = message_or_callback.from_user.id
     
+    # Получаем все данные
     top_users = await db_manager.get_top_10_users()
-    new_text = format_stats_text(top_users)
-    
-    current_viewers = list(active_stats_messages.items())
-    
-    for chat_id, data in current_viewers:
-        message_id = data["message_id"]
-        last_text = data["last_text"]
+    user = await db_manager.get_user(user_id)
+    is_anonymous = user.is_anonymous_in_stats if user else False
 
-        # ИЗМЕНЕНО: Отправляем запрос на редактирование ТОЛЬКО если текст изменился
-        if new_text == last_text:
-            continue # Пропускаем, если нет изменений
+    # Форматируем текст и клавиатуру
+    stats_text = format_stats_text(top_users)
+    stats_text += f"\nВаш текущий статус в топе: **{'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}**"
+    keyboard = inline.get_stats_keyboard(is_anonymous=is_anonymous)
 
+    if isinstance(message_or_callback, Message):
         try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=new_text
-            )
-            # Если успешно, обновляем сохраненный текст
-            active_stats_messages[chat_id]["last_text"] = new_text
+            await message_or_callback.delete()
+        except TelegramBadRequest:
+            pass
+        await message_or_callback.answer(stats_text, reply_markup=keyboard)
+    else: # CallbackQuery
+        try:
+            await message_or_callback.message.edit_text(stats_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
-            if "message to edit not found" in str(e):
-                logger.warning(f"Message {message_id} in chat {chat_id} not found. Removing from live updates.")
-                active_stats_messages.pop(chat_id, None)
-            else:
-                logger.error(f"Failed to edit stats message for chat {chat_id}: {e}")
-                # Не удаляем из списка, чтобы попробовать еще раз
-        except Exception as e:
-            logger.error(f"Unexpected error updating stats for chat {chat_id}: {e}")
-            active_stats_messages.pop(chat_id, None)
+            if "message is not modified" not in str(e):
+                logger.warning(f"Error editing stats message: {e}")
+            await message_or_callback.answer()
 
 
 @router.message(F.text == 'Статистика', UserState.MAIN_MENU)
-async def stats_handler(message: Message, bot: Bot, scheduler: AsyncIOScheduler):
-    """Обработчик для раздела 'Статистика', запускающий живое обновление."""
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
+async def stats_handler(message: Message):
+    """Обработчик для раздела 'Статистика'."""
+    await show_stats_menu(message)
 
-    top_users = await db_manager.get_top_10_users()
-    initial_text = format_stats_text(top_users)
-    
-    sent_message = await message.answer(initial_text)
-
-    # ИЗМЕНЕНО: Сохраняем и ID, и текст сообщения
-    active_stats_messages[message.chat.id] = {
-        "message_id": sent_message.message_id,
-        "last_text": initial_text
-    }
-    
-    if not scheduler.get_job(scheduler_job_id):
-        try:
-            scheduler.add_job(
-                update_stats_messages,
-                'interval',
-                minutes=1,
-                id=scheduler_job_id,
-                args=[bot]
-            )
-            logger.info("Live stats update job scheduled.")
-        except Exception as e:
-            logger.error(f"Could not schedule live stats job: {e}")
+@router.callback_query(F.data == 'profile_toggle_anonymity')
+async def toggle_anonymity_handler(callback: CallbackQuery):
+    """Обрабатывает переключение анонимности из меню статистики."""
+    new_status = await db_manager.toggle_anonymity(callback.from_user.id)
+    status_text = "анонимным" if new_status else "публичным"
+    await callback.answer(f"Ваш профиль в топе теперь {status_text}.", show_alert=True)
+    await show_stats_menu(callback)

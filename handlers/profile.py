@@ -30,18 +30,16 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
         return
 
     balance, hold_balance = user.balance, user.hold_balance
-    is_anonymous = user.is_anonymous_in_stats
     referrer_info = await db_manager.get_referrer_info(user_id)
     
     profile_text = (
         f"✨ Ваш Профиль ✨\n\n"
         f"Вас пригласил: {referrer_info}\n"
         f"Баланс звезд: {balance} ⭐\n"
-        f"В холде: {hold_balance} ⭐\n\n"
-        f"Статус в топе: {'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}"
+        f"В холде: {hold_balance} ⭐"
     )
     
-    keyboard = inline.get_profile_keyboard(is_anonymous=is_anonymous)
+    keyboard = inline.get_profile_keyboard()
     
     if isinstance(message_or_callback, Message):
         await message_or_callback.answer(profile_text, reply_markup=keyboard)
@@ -70,13 +68,6 @@ async def profile_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == 'go_profile')
 async def go_profile_handler(callback: CallbackQuery, state: FSMContext):
-    await show_profile_menu(callback, state)
-
-@router.callback_query(F.data == 'profile_toggle_anonymity')
-async def toggle_anonymity_handler(callback: CallbackQuery, state: FSMContext):
-    new_status = await db_manager.toggle_anonymity(callback.from_user.id)
-    status_text = "анонимным" if new_status else "публичным"
-    await callback.answer(f"Ваш профиль в топе теперь {status_text}.", show_alert=True)
     await show_profile_menu(callback, state)
 
 
@@ -364,7 +355,7 @@ async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str 
 async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bot, **kwargs):
     user_id = callback.from_user.id
     bot_info = await bot.get_me()
-    referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
+    referral_link = f"https.t.me/{bot_info.username}?start={user_id}"
     referral_earnings = await db_manager.get_referral_earnings(user_id)
     ref_text = (
         f"🚀 Ваша реферальная ссылка:\n`{referral_link}`\n\n"

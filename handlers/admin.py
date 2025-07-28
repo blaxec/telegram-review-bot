@@ -256,7 +256,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         elif context == "google_last_reviews":
             await user_state.set_state(UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
             await bot.send_message(user_id, "Ваши отзывы прошли проверку. Можете продолжить.", reply_markup=inline.get_google_continue_writing_keyboard())
-        elif context == "yandex_profile":
+        elif context == "yandex_profile" or context == "yandex_profile_screenshot":
             await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
             await bot.send_message(user_id, "Ваш профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
 
@@ -294,6 +294,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 "google_profile": UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT,
                 "google_last_reviews": UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK,
                 "yandex_profile": UserState.YANDEX_REVIEW_INIT,
+                "yandex_profile_screenshot": UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT
             }
             state_to_return = state_to_return_map.get(context)
             if state_to_return:
@@ -324,6 +325,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             "google_profile": AdminState.REJECT_REASON_GOOGLE_PROFILE,
             "google_last_reviews": AdminState.REJECT_REASON_GOOGLE_LAST_REVIEWS,
             "yandex_profile": AdminState.REJECT_REASON_YANDEX_PROFILE,
+            "yandex_profile_screenshot": AdminState.REJECT_REASON_YANDEX_PROFILE
         }
         if context in reason_state_map:
             reason_state = reason_state_map[context]

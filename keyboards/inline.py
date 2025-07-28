@@ -19,22 +19,28 @@ def get_cancel_inline_keyboard() -> InlineKeyboardMarkup:
 
 # --- Раздел "Профиль" ---
 
-# ИЗМЕНЕНО: Добавлена кнопка для анонимности
-def get_profile_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
-    # Текст кнопки меняется в зависимости от текущего статуса
-    anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
-    
+def get_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Вывод звезд', callback_data='profile_withdraw')],
         [InlineKeyboardButton(text='Передача звезд', callback_data='profile_transfer')],
         [InlineKeyboardButton(text='Реф. ссылка', callback_data='profile_referral')],
         [InlineKeyboardButton(text='Холд', callback_data='profile_hold')],
-        [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
         [InlineKeyboardButton(text='Назад', callback_data='go_main_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ... (остальной код файла без изменений)
+# --- Раздел "Статистика" ---
+
+def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
+    # Текст кнопки меняется в зависимости от текущего статуса
+    anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
+    buttons = [
+        [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
+        [InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 # --- Передача звезд ---
 def get_transfer_amount_keyboard() -> InlineKeyboardMarkup:
     buttons = [
@@ -160,7 +166,14 @@ def get_task_confirmation_keyboard(platform: str) -> InlineKeyboardMarkup:
 def get_yandex_init_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Где найти ссылку?', callback_data='yandex_get_profile_link')],
+        [InlineKeyboardButton(text='Отправить скриншот профиля', callback_data='yandex_use_screenshot')],
         [InlineKeyboardButton(text='Как повысить уровень знатока', callback_data='yandex_how_to_be_expert')],
+        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+def get_yandex_ask_profile_screenshot_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
         [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
