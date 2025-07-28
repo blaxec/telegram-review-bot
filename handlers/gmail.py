@@ -11,6 +11,7 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from config import FINAL_CHECK_ADMIN
+from handlers.earning import format_timedelta
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -18,45 +19,85 @@ logger = logging.getLogger(__name__)
 @router.callback_query(F.data == 'earning_create_gmail')
 async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
     user = await db_manager.get_user(callback.from_user.id)
-    if user and user.blocked_until and user.blocked_until > datetime.datetime.utcnow():
+    if not user:
+        return
+
+    # Проверка основного бана
+    if user.blocked_until and user.blocked_until > datetime.datetime.utcnow():
         await callback.answer("Создание аккаунтов для вас временно заблокировано.", show_alert=True)
         return
-    await state.set_state(UserState.GMAIL_ACCOUNT_INIT)
+
+    # Проверка кулдауна на создание Gmail
+    cooldown = await db_manager.check_platform_cooldown(user.id, "gmail")
+    if cooldown:
+        await callback.message.edit_text(
+            f"Вы сможете создать следующий аккаунт через: **{format_timedelta(cooldown)}**\n\n"
+            "Если у вас есть другое устройство, вы можете запросить создание дополнительного аккаунта.",
+            reply_markup=inline.get_gmail_cooldown_keyboard()
+        )
+        return
+
+    # Если кулдауна нет, начинаем стандартный процесс
+    await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     await callback.message.edit_text(
-        "За создание аккаунта выдается 5 звезд.",
-        reply_markup=inline.get_gmail_init_keyboard()
+        "За создание аккаунта выдается **5 звезд**.\n\n"
+        "Пожалуйста, укажите **модель вашего устройства** (например, iPhone 13 Pro или Samsung Galaxy S22), "
+        "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.",
+        reply_markup=inline.get_cancel_inline_keyboard()
     )
 
-@router.callback_query(
-    F.data == 'gmail_how_to_create',
-    F.state.in_({UserState.GMAIL_ACCOUNT_INIT, UserState.GMAIL_AWAITING_VERIFICATION})
-)
-async def show_gmail_creation_instructions(callback: CallbackQuery, state: FSMContext):
-    text = (
-        "Чтобы начать создание, перейдите по [ссылке](https://myaccount.google.com/?tab=kk) или создайте аккаунт через Gmail, Google, Chrome и другие браузеры.\n\n"
-        "**Общие шаги:**\n"
-        "1. Найдите аватарку в правом верхнем углу.\n"
-        "2. Нажмите на стрелку (если есть список аккаунтов) и выберите \"Добавить аккаунт\".\n"
-        "3. Если у вас только один аккаунт, также найдите опцию \"Добавить аккаунт\".\n\n"
-        "Прекрасно, теперь вы можете начать создавать аккаунты!"
+
+@router.callback_query(F.data == 'gmail_another_phone', F.state.in_('*'))
+async def request_another_phone(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
+    await callback.message.edit_text(
+        "Введите модель **второго устройства**, с которого вы хотите создать аккаунт. "
+        "Этот запрос будет отправлен на ручное подтверждение администратору.",
+        reply_markup=inline.get_cancel_inline_keyboard()
     )
+
+
+@router.message(F.state == UserState.GMAIL_ENTER_DEVICE_MODEL)
+async def process_device_model(message: Message, state: FSMContext, bot: Bot):
+    device_model = message.text
+    await state.update_data(device_model=device_model)
+    await request_gmail_data_from_admin(message, state, bot)
+
+
+@router.message(F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
+async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
+    device_model = message.text
+    user_id = message.from_user.id
     
-    current_state = await state.get_state()
-    reply_markup = None
-    if current_state == UserState.GMAIL_ACCOUNT_INIT:
-        reply_markup = inline.get_gmail_init_keyboard()
-    elif current_state == UserState.GMAIL_AWAITING_VERIFICATION:
-        reply_markup = inline.get_gmail_verification_keyboard()
-
-    await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown", disable_web_page_preview=True)
-
-@router.callback_query(F.data == 'gmail_request_data', UserState.GMAIL_ACCOUNT_INIT)
-async def request_gmail_data_from_admin(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    user_id = callback.from_user.id
-    await callback.message.edit_text("Запрашиваю данные у администратора... Ожидайте.")
+    await state.update_data(device_model=device_model)
+    await message.answer("Ваш запрос на создание аккаунта с другого устройства отправлен администратору на проверку. Ожидайте...")
     await state.set_state(UserState.GMAIL_AWAITING_DATA)
+
     admin_notification = (
-        f"❗️ Пользователь @{callback.from_user.username} (ID: `{user_id}`) "
+        f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
+        f"запрашивает создание дополнительного аккаунта Gmail с устройства:\n\n"
+        f"**Модель: {device_model}**\n\n"
+        f"Подтвердите модель, чтобы продолжить."
+    )
+    try:
+        await bot.send_message(
+            FINAL_CHECK_ADMIN,
+            admin_notification,
+            reply_markup=inline.get_admin_verification_keyboard(user_id, "gmail_device_model")
+        )
+    except Exception as e:
+        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
+        await state.clear()
+        logger.error(f"Ошибка отправки запроса на доп. Gmail админу {FINAL_CHECK_ADMIN}: {e}")
+
+
+async def request_gmail_data_from_admin(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    await message.answer("Запрашиваю данные у администратора... Ожидайте.")
+    await state.set_state(UserState.GMAIL_AWAITING_DATA)
+
+    admin_notification = (
+        f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
         "запрашивает данные для регистрации аккаунта Gmail."
     )
     try:
@@ -66,23 +107,22 @@ async def request_gmail_data_from_admin(callback: CallbackQuery, state: FSMConte
             reply_markup=inline.get_admin_gmail_data_request_keyboard(user_id)
         )
     except Exception as e:
-        await callback.message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
+        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
         await state.clear()
-        print(f"Ошибка отправки запроса на Gmail данные админу {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Ошибка отправки запроса на Gmail данные админу {FINAL_CHECK_ADMIN}: {e}")
+
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
-    current_state = await state.get_state()
-    logger.info(f"Handler 'send_gmail_for_verification' triggered for user {user_id}. Current state: {current_state}")
-
     await callback.answer()
     await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
+    device_model = user_data.get('device_model', 'Не указана')
     
     if not gmail_details:
-        logger.error(f"Critical error for user {user_id}: gmail_details not found in state data.")
+        logger.error(f"Критическая ошибка для user {user_id}: gmail_details не найдены в state data.")
         await callback.message.answer("Произошла ошибка, не найдены данные вашего аккаунта. Начните заново.", reply_markup=reply.get_main_menu_keyboard())
         await state.clear()
         await state.set_state(UserState.MAIN_MENU)
@@ -90,12 +130,17 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
 
     admin_notification = (
         f"🚨 Проверка созданного Gmail аккаунта 🚨\n\n"
-        f"Пользователь: @{callback.from_user.username} (ID: `{user_id}`)\n\n"
+        f"**Пользователь:** @{callback.from_user.username} (ID: `{user_id}`)\n"
+        f"**Устройство:** `{device_model}`\n\n"
         f"**Данные:**\n"
         f"Имя: {gmail_details['name']}\n"
         f"Фамилия: {gmail_details['surname']}\n"
         f"Почта: {gmail_details['email']}\n"
-        f"Пароль: `{gmail_details['password']}`"
+        f"Пароль: `{gmail_details['password']}`\n\n"
+        f"**Инструкция для проверки:**\n"
+        f"1. Убедитесь, что данные заполнены верно.\n"
+        f"2. Проверьте, совпадает ли модель устройства с указанной.\n"
+        f"3. **Обязательно отключите устройство пользователя от аккаунта после проверки.**"
     )
     try:
         await bot.send_message(
@@ -154,8 +199,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     name, surname, password, email = data_lines
     full_email = f"{email}@gmail.com"
     user_message = (
-        "Ваши данные для создания аккаунта:\n"
-        'Не знаете как создать аккаунт? Прочитайте информацию, нажав на "Как создать аккаунт".\n\n'
+        "✅ Администратор одобрил ваш запрос и прислал данные для создания аккаунта:\n\n"
         "<b>Данные для создания:</b>\n"
         f"Имя: <code>{name}</code>\n"
         f"Фамилия: <code>{surname}</code>\n"
@@ -172,7 +216,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
         await message.answer(f"Данные успешно отправлены пользователю {user_id}.")
     except Exception as e:
         await message.answer(f"Не удалось отправить данные пользователю {user_id}. Возможно, он заблокировал бота.")
-        print(e)
+        logger.error(e)
     await state.clear()
 
 
@@ -181,10 +225,11 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
     await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды.", show_alert=True)
     user_id = int(callback.data.split(':')[1])
     await db_manager.update_balance(user_id, 5.0)
+    await db_manager.set_platform_cooldown(user_id, "gmail", 24) # Установка кулдауна
     try:
         await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
     except Exception as e:
-        print(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
+        logger.error(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
     await callback.message.edit_text(f"{callback.message.text}\n\n✅ АККАУНТ ПОДТВЕРЖДЕН (админ @{callback.from_user.username})", reply_markup=None)
 
 

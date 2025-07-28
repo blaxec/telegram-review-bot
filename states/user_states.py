@@ -33,8 +33,8 @@ class UserState(StatesGroup):
     # Состояния для отзыва в Yandex
     YANDEX_REVIEW_INIT = State()
     YANDEX_REVIEW_PROFILE_CHECK_PENDING = State()
-    YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()      # <-- НОВОЕ
-    YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()  # <-- НОВОЕ
+    YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()
+    YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()
     YANDEX_REVIEW_READY_TO_TASK = State()
     YANDEX_REVIEW_TASK_ACTIVE = State()
     YANDEX_REVIEW_AWAITING_TEXT_PHOTO = State()
@@ -43,6 +43,8 @@ class UserState(StatesGroup):
     GMAIL_ACCOUNT_INIT = State()
     GMAIL_AWAITING_DATA = State()
     GMAIL_AWAITING_VERIFICATION = State()
+    GMAIL_ENTER_DEVICE_MODEL = State()
+    GMAIL_ENTER_ANOTHER_DEVICE_MODEL = State()
 
 
 class AdminState(StatesGroup):
@@ -57,7 +59,6 @@ class AdminState(StatesGroup):
     REJECT_REASON_GOOGLE_REVIEW = State()
     REJECT_REASON_YANDEX_REVIEW = State()
     REJECT_REASON_GMAIL_ACCOUNT = State()
-    # ИЗМЕНЕНО: Добавлено новое состояние для отказа в выдаче данных
     REJECT_REASON_GMAIL_DATA_REQUEST = State()
 
     # Состояния для предоставления текста отзыва

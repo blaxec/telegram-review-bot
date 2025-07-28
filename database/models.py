@@ -23,6 +23,7 @@ class User(Base):
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
     yandex_cooldown_until = Column(DateTime, nullable=True)
+    gmail_cooldown_until = Column(DateTime, nullable=True) # <-- ДОБАВЛЕНО
     blocked_until = Column(DateTime, nullable=True)
 
     # ДОБАВЛЕНО: Новое поле для анонимности в статистике

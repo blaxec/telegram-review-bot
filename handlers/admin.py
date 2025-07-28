@@ -14,7 +14,7 @@ from keyboards import inline, reply
 from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
-from handlers.earning import send_confirmation_button, handle_task_timeout
+from handlers.earning import send_confirmation_button, handle_task_timeout, notify_cooldown_expired
 import datetime
 
 router = Router()
@@ -259,6 +259,15 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         elif context == "yandex_profile" or context == "yandex_profile_screenshot":
             await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
             await bot.send_message(user_id, "Ваш профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
+        elif context == "gmail_device_model":
+            # После подтверждения модели устройства, запрашиваем у админа данные
+            await state.set_state(AdminState.ENTER_GMAIL_DATA)
+            await state.update_data(gmail_user_id=user_id)
+            await callback.message.answer(
+                "✅ Модель устройства подтверждена.\n"
+                "Теперь введите данные для создания аккаунта в формате:\n"
+                "Имя\nФамилия\nПароль\nПочта (без @gmail.com)"
+            )
 
         new_text = f"{original_text}\n\n{action_text}"
         try:
@@ -325,7 +334,8 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             "google_profile": AdminState.REJECT_REASON_GOOGLE_PROFILE,
             "google_last_reviews": AdminState.REJECT_REASON_GOOGLE_LAST_REVIEWS,
             "yandex_profile": AdminState.REJECT_REASON_YANDEX_PROFILE,
-            "yandex_profile_screenshot": AdminState.REJECT_REASON_YANDEX_PROFILE
+            "yandex_profile_screenshot": AdminState.REJECT_REASON_YANDEX_PROFILE,
+            "gmail_device_model": AdminState.REJECT_REASON_GMAIL_DATA_REQUEST,
         }
         if context in reason_state_map:
             reason_state = reason_state_map[context]
@@ -458,7 +468,7 @@ async def process_admin_reason(message: Message, state: FSMContext, bot: Bot):
 
 
 @router.callback_query(F.data.startswith('admin_final_approve:'))
-async def admin_final_approve(callback: CallbackQuery, bot: Bot):
+async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     try:
         review_id = int(callback.data.split(':')[1])
         review = await db_manager.get_review_by_id(review_id)
@@ -477,6 +487,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot):
             'yandex': 24 * 60
         }
         hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
+        cooldown_hours = 72
 
         success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
         
@@ -487,7 +498,13 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot):
             except TelegramBadRequest:
                 pass
             
-            await db_manager.set_platform_cooldown(review.user_id, review.platform, 72)
+            await db_manager.set_platform_cooldown(review.user_id, review.platform, cooldown_hours)
+            
+            # Планируем уведомление об окончании кулдауна
+            cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
+            scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time,
+                              args=[bot, review.user_id, review.platform])
+            
             await reference_manager.release_reference_from_user(review.user_id, 'used')
             try:
                 await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) успешно прошел первичную проверку и отправлен в холд. +{amount} ⭐ добавлены в холд.")
@@ -512,7 +529,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith('admin_final_reject:'))
-async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext):
+async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     try:
         review_id = int(callback.data.split(':')[1])
         review = await db_manager.get_review_by_id(review_id)
@@ -522,7 +539,14 @@ async def admin_final_reject_request(callback: CallbackQuery, state: FSMContext)
 
         rejected_review = await db_manager.admin_reject_review(review_id)
         if rejected_review:
-            await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, 72)
+            cooldown_hours = 72
+            await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, cooldown_hours)
+
+            # Планируем уведомление об окончании кулдауна
+            cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
+            scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time,
+                              args=[bot, rejected_review.user_id, rejected_review.platform])
+                              
             await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
             try:
                 user_message = f"❌ Ваш отзыв (платформа: {rejected_review.platform}) был отклонен администратором. Вы не сможете писать отзывы на этой платформе в течение 3 дней."
@@ -590,8 +614,20 @@ async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
             await callback.message.edit_reply_markup(reply_markup=None)
             return
 
+        # Логика начисления реферального бонуса
         if approved_review.platform == 'google':
-            await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=0.45)
+            user = await db_manager.get_user(approved_review.user_id)
+            if user and user.referrer_id:
+                amount = 0.45
+                await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=amount)
+                try:
+                    # Уведомляем реферера
+                    await bot.send_message(
+                        user.referrer_id,
+                        f"🎉 Ваш реферал @{user.username} успешно написал отзыв! Вам начислено {amount} ⭐."
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить реферера {user.referrer_id}: {e}")
         
         await callback.answer("✅ Отзыв одобрен!", show_alert=True)
         new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН @{callback.from_user.username}"

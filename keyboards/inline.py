@@ -190,6 +190,13 @@ def get_gmail_init_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+def get_gmail_cooldown_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text='У меня есть другой телефон', callback_data='gmail_another_phone')],
+        [InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_gmail_verification_keyboard() -> InlineKeyboardMarkup:
     buttons = [
@@ -204,8 +211,12 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"admin_verify:reject:{context}:{user_id}")
-    builder.button(text="⚠️ Дать пред.", callback_data=f"admin_verify:warn:{context}:{user_id}")
-    builder.adjust(2, 1)
+    # Для контекста gmail_device_model кнопка предупреждения не нужна
+    if context != "gmail_device_model":
+        builder.button(text="⚠️ Дать пред.", callback_data=f"admin_verify:warn:{context}:{user_id}")
+        builder.adjust(2, 1)
+    else:
+        builder.adjust(2)
     return builder.as_markup()
 
 def get_admin_provide_text_keyboard(user_id: int, link_id: int) -> InlineKeyboardMarkup:
