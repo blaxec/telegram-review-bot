@@ -84,8 +84,12 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
     except (ValueError, TypeError):
         balance = 0.0
 
+    if balance < 0:
+        await callback.answer("Ваш баланс отрицательный. Передача звезд невозможна, пока вы не погасите долг.", show_alert=True)
+        return
+        
     if balance < 1.0:
-        await callback.answer("Недостаточно звезд на балансе для выполнения этой операции.", show_alert=True)
+        await callback.answer("Недостаточно звезд на балансе для выполнения этой операции (минимум 1 ⭐).", show_alert=True)
         return
 
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
@@ -107,18 +111,20 @@ async def process_transfer_amount(amount: float, message: Message, state: FSMCon
         reply_markup=inline.get_cancel_inline_keyboard()
     )
 
-@router.message(F.text, UserState.TRANSFER_AMOUNT_OTHER)
+@router.message(UserState.TRANSFER_AMOUNT_OTHER)
 async def transfer_other_amount_input(message: Message, state: FSMContext):
+    if not message.text: return
     try:
         amount = float(message.text)
-        if amount <= 0: raise ValueError
+        if amount < 1.0: raise ValueError
     except (ValueError, TypeError):
-        await message.answer("Неверный формат. Пожалуйста, введите положительное число.")
+        await message.answer("Неверный формат. Пожалуйста, введите положительное число (минимум 1).")
         return
     await process_transfer_amount(amount, message, state)
 
-@router.message(F.text, UserState.TRANSFER_RECIPIENT)
+@router.message(UserState.TRANSFER_RECIPIENT)
 async def process_transfer_recipient(message: Message, state: FSMContext):
+    if not message.text: return
     recipient_id = await db_manager.find_user_by_identifier(message.text)
     if not recipient_id or recipient_id == message.from_user.id:
         await message.answer("Пользователь не найден или вы пытаетесь отправить звезды себе. Попробуйте еще раз.")
@@ -151,8 +157,9 @@ async def process_transfer_yes_comment(callback: CallbackQuery, state: FSMContex
     await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
     await callback.message.edit_text("Введите ваш комментарий:")
 
-@router.message(F.text, UserState.TRANSFER_COMMENT_INPUT)
+@router.message(UserState.TRANSFER_COMMENT_INPUT)
 async def process_transfer_comment_input(message: Message, state: FSMContext, bot: Bot):
+    if not message.text: return
     await finish_transfer(message.from_user, state, bot, comment=message.text)
 
 async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None):
@@ -200,6 +207,10 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
     except (ValueError, TypeError):
         balance = 0.0
     
+    if balance < 0:
+        await callback.answer("Ваш баланс отрицательный. Вывод невозможен, пока вы не погасите долг.", show_alert=True)
+        return
+
     if balance < 15.0:
         await callback.answer(f"Минимальная сумма для вывода 15 звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
@@ -234,8 +245,9 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
         reply_markup=inline.get_withdraw_recipient_keyboard()
     )
 
-@router.message(F.text, UserState.WITHDRAW_AMOUNT_OTHER)
+@router.message(UserState.WITHDRAW_AMOUNT_OTHER)
 async def withdraw_other_amount_input(message: Message, state: FSMContext):
+    if not message.text: return
     try:
         amount = float(message.text)
         if amount < 15.0:
@@ -312,8 +324,9 @@ async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext,
             reply_markup=inline.get_cancel_inline_keyboard()
         )
 
-@router.message(F.text, UserState.WITHDRAW_USER_ID)
+@router.message(UserState.WITHDRAW_USER_ID)
 async def process_withdraw_user_id(message: Message, state: FSMContext):
+    if not message.text: return
     recipient_id = await db_manager.find_user_by_identifier(message.text)
     if not recipient_id or recipient_id == message.from_user.id:
         await message.answer("Пользователь не найден или вы пытаетесь отправить подарок себе. Попробуйте еще раз.")
@@ -336,8 +349,9 @@ async def process_withdraw_yes_comment(callback: CallbackQuery, state: FSMContex
     await state.set_state(UserState.WITHDRAW_COMMENT_INPUT)
     await callback.message.edit_text("Введите ваш комментарий к подарку:")
 
-@router.message(F.text, UserState.WITHDRAW_COMMENT_INPUT)
+@router.message(UserState.WITHDRAW_COMMENT_INPUT)
 async def process_withdraw_comment_input(message: Message, state: FSMContext, bot: Bot):
+    if not message.text: return
     await finish_withdraw(message.from_user, state, bot, comment=message.text)
 
 async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str | None):
@@ -358,12 +372,9 @@ async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bo
     user_id = callback.from_user.id
     bot_info = await bot.get_me()
 
-    # ИСПРАВЛЕНИЕ: Выбираем надежный формат ссылки
     if bot_info.username:
-        # Если у бота есть username, используем его (более красиво)
         referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
     else:
-        # Если username нет, используем 100% рабочий вариант через ID бота
         referral_link = f"https://t.me/start?bot={bot.id}&start={user_id}"
         
     referral_earnings = await db_manager.get_referral_earnings(user_id)
@@ -407,7 +418,6 @@ async def claim_referral_stars(callback: CallbackQuery, state: FSMContext, bot: 
     if earnings > 0:
         await db_manager.claim_referral_earnings(callback.from_user.id)
         await callback.answer(f"{earnings} ⭐ зачислены на ваш основной баланс!", show_alert=True)
-        # Обновляем сообщение с реф. инфой после сбора
         await show_referral_info(callback, state, bot)
     else:
         await callback.answer("У вас нет начислений для сбора.", show_alert=True)

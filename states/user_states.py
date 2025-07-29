@@ -1,3 +1,4 @@
+
 from aiogram.fsm.state import State, StatesGroup
 
 class UserState(StatesGroup):
@@ -36,9 +37,9 @@ class UserState(StatesGroup):
     YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()
     YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()
     YANDEX_REVIEW_READY_TO_TASK = State()
-    YANDEX_REVIEW_AWAITING_ADMIN_TEXT = State() # <-- НОВОЕ
+    YANDEX_REVIEW_AWAITING_ADMIN_TEXT = State()
     YANDEX_REVIEW_TASK_ACTIVE = State()
-    YANDEX_REVIEW_AWAITING_SCREENSHOT = State() # <-- ИЗМЕНЕНО
+    YANDEX_REVIEW_AWAITING_SCREENSHOT = State()
     
     # Состояния для создания Gmail
     GMAIL_ACCOUNT_INIT = State()
@@ -53,18 +54,18 @@ class AdminState(StatesGroup):
     ADD_GOOGLE_REFERENCE = State()
     ADD_YANDEX_REFERENCE = State()
 
-    # Состояния для указания причин отклонения
-    REJECT_REASON_GOOGLE_PROFILE = State()
-    REJECT_REASON_GOOGLE_LAST_REVIEWS = State()
-    REJECT_REASON_YANDEX_PROFILE = State()
-    REJECT_REASON_GOOGLE_REVIEW = State()
-    REJECT_REASON_YANDEX_REVIEW = State()
-    REJECT_REASON_GMAIL_ACCOUNT = State()
-    REJECT_REASON_GMAIL_DATA_REQUEST = State()
-
+    # Состояния для указания причин
+    PROVIDE_REJECTION_REASON = State()
+    PROVIDE_WARN_REASON = State()
+    
     # Состояния для предоставления текста отзыва
     PROVIDE_GOOGLE_REVIEW_TEXT = State()
-    PROVIDE_YANDEX_REVIEW_TEXT = State() # <-- НОВОЕ
+    PROVIDE_YANDEX_REVIEW_TEXT = State()
     
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
+
+    # Состояния для штрафа
+    FINE_USER_ID = State()
+    FINE_AMOUNT = State()
+    FINE_REASON = State()

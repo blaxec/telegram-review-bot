@@ -32,7 +32,6 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 # --- Раздел "Статистика" ---
 
 def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
-    # Текст кнопки меняется в зависимости от текущего статуса
     anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
     buttons = [
         [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
@@ -211,16 +210,12 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"admin_verify:reject:{context}:{user_id}")
-    # Для контекста gmail_device_model кнопка предупреждения не нужна
-    if context != "gmail_device_model":
-        builder.button(text="⚠️ Дать пред.", callback_data=f"admin_verify:warn:{context}:{user_id}")
-        builder.adjust(2, 1)
-    else:
-        builder.adjust(2)
+    builder.button(text="⚠️ Дать пред.", callback_data=f"admin_verify:warn:{context}:{user_id}")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
-def get_admin_provide_text_keyboard(user_id: int, link_id: int) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='✍️ Написать текст отзыва', callback_data=f'admin_provide_text:{user_id}:{link_id}')]]
+def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='✍️ Написать текст отзыва', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_refs_keyboard() -> InlineKeyboardMarkup:

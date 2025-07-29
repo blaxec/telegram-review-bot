@@ -36,6 +36,7 @@ async def start_handler(message: Message, state: FSMContext):
         "Привет! Я помогу тебе зарабатывать звезды за твои отзывы.\n\n"
         "Прежде чем начать, ознакомься с нашим соглашением:\n\n"
         "✅ Мы запрашиваем разрешение на просмотр твоего личного профиля в Яндекс.Картах и Google.Картах для верификации твоих отзывов.\n"
+        "✅ При создании Gmail-аккаунта мы просим указать модель твоего устройства. Эта информация нужна исключительно для избежания создания дубликатов и не будет использована в других целях.\n"
         "✅ Твоя информация никогда не будет передана третьим лицам без твоего явного согласия. Все данные будут использоваться исключительно для функционирования нашего сервиса."
     )
     
@@ -51,12 +52,12 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.answer("Добро пожаловать!")
     except TelegramBadRequest:
-        pass # Игнорируем ошибку, если запрос устарел
+        pass
         
     try:
         await callback.message.edit_text("Вы приняли соглашение.")
     except TelegramBadRequest:
-        pass # Игнорируем, если сообщение не может быть изменено
+        pass
 
     await state.set_state(UserState.MAIN_MENU)
     await callback.message.answer(

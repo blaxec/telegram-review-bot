@@ -255,19 +255,20 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     )
     
     try:
+        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
         if profile_screenshot_id:
             await bot.send_photo(
                 chat_id=TEXT_ADMIN,
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
-                reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id)
+                reply_markup=keyboard
             )
         else:
-            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id))
+            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
-        # Попытка отправить без фото, если с фото не вышло
-        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id))
+        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
@@ -375,7 +376,7 @@ async def show_yandex_instructions(callback: CallbackQuery):
                 "Где их взять? В вашем профиле, нажав на **\"Знатока города\"**.")
     await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
-@router.message(F.text, UserState.YANDEX_REVIEW_INIT)
+@router.message(UserState.YANDEX_REVIEW_INIT)
 async def process_yandex_profile_link(message: Message, state: FSMContext, bot: Bot):
     if not message.text or not message.text.strip().startswith("https://yandex.ru/maps/user/"):
         await message.answer("Неверный формат. Пожалуйста, отправьте корректную ссылку на ваш профиль в Яндекс.Картах или используйте кнопку для отправки скриншота.",
@@ -466,23 +467,25 @@ async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, b
         admin_notification_text += f"\n\n🔗 Профиль пользователя: {profile_link} "
 
     try:
+        keyboard = inline.get_admin_provide_text_keyboard('yandex', user_id, link.id)
         if profile_screenshot_id:
             await bot.send_photo(
                 chat_id=TEXT_ADMIN,
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
-                reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id)
+                reply_markup=keyboard
             )
         else:
             await bot.send_message(
                 TEXT_ADMIN, 
                 admin_notification_text, 
-                reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id),
+                reply_markup=keyboard,
                 disable_web_page_preview=True
             )
     except Exception as e:
         logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN} for Yandex: {e}")
-        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id))
+        keyboard = inline.get_admin_provide_text_keyboard('yandex', user_id, link.id)
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == 'yandex_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)

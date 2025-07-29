@@ -37,12 +37,10 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
     """Отображает меню статистики."""
     user_id = message_or_callback.from_user.id
     
-    # Получаем все данные
     top_users = await db_manager.get_top_10_users()
     user = await db_manager.get_user(user_id)
     is_anonymous = user.is_anonymous_in_stats if user else False
 
-    # Форматируем текст и клавиатуру
     stats_text = format_stats_text(top_users)
     stats_text += f"\nВаш текущий статус в топе: **{'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}**"
     keyboard = inline.get_stats_keyboard(is_anonymous=is_anonymous)
@@ -53,7 +51,7 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
         except TelegramBadRequest:
             pass
         await message_or_callback.answer(stats_text, reply_markup=keyboard)
-    else: # CallbackQuery
+    else:
         try:
             await message_or_callback.message.edit_text(stats_text, reply_markup=keyboard)
         except TelegramBadRequest as e:

@@ -33,7 +33,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд юзера"),
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
-        BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны юзеру")
+        BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны юзеру"),
+        BotCommand(command="fine", description=" штраф"),
     ]
     
     try:
@@ -41,18 +42,15 @@ async def set_bot_commands(bot: Bot):
     except Exception as e:
         logger.error(f"Failed to set admin commands for {ADMIN_ID_1}: {e}")
 
-# --- НОВОЕ: Глобальный обработчик ошибок ---
 async def handle_telegram_bad_request(event: ErrorEvent):
     """
     Перехватывает ошибки TelegramBadRequest, чтобы бот не падал из-за устаревших callback_query.
     """
     if isinstance(event.exception, TelegramBadRequest):
-        # Проверяем текст ошибки
         if "query is too old" in event.exception.message or "query ID is invalid" in event.exception.message:
             logger.warning(f"Caught a 'query is too old' error. Ignoring update. Update: {event.update}")
-            return True # Сообщаем диспетчеру, что ошибка обработана
+            return True 
     
-    # Для всех остальных ошибок, позволяем им обрабатываться дальше (например, выводиться в лог как ERROR)
     logger.error(f"Unhandled exception caught in error handler: {event.exception}")
     return False
 
@@ -92,12 +90,11 @@ async def main():
 
         dp = Dispatcher(storage=storage)
         
-        # --- НОВОЕ: Регистрация глобального обработчика ошибок ---
         dp.errors.register(handle_telegram_bad_request)
 
         dp.update.outer_middleware(UsernameUpdaterMiddleware())
         dp.message.middleware(AntiFloodMiddleware())
-        dp.update.middleware(BlockingMiddleware()) # ИЗМЕНЕНО: Применяем ко всем update, а не только к message
+        dp.update.middleware(BlockingMiddleware())
         
         dp.include_routers(*routers_list)
 

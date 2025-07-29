@@ -65,15 +65,21 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(F.text, F.state == UserState.GMAIL_ENTER_DEVICE_MODEL)
+@router.message(UserState.GMAIL_ENTER_DEVICE_MODEL)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
+        return
     device_model = message.text
     await state.update_data(device_model=device_model)
     await request_gmail_data_from_admin(message, state, bot)
 
 
-@router.message(F.text, F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
+@router.message(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
 async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
+        return
     device_model = message.text
     user_id = message.from_user.id
     
@@ -180,9 +186,11 @@ async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMCon
     user_id = int(callback.data.split(':')[1])
     original_text = callback.message.text
     
-    logger.info(f"Admin {callback.from_user.id} is rejecting Gmail data request for user {user_id}. Setting state to REJECT_REASON_GMAIL_DATA_REQUEST.")
-    await state.set_state(AdminState.REJECT_REASON_GMAIL_DATA_REQUEST)
-    await state.update_data(target_user_id=user_id)
+    await state.set_state(AdminState.PROVIDE_REJECTION_REASON)
+    await state.update_data(
+        target_user_id=user_id,
+        rejection_context="gmail_data_request" # Контекст для обработчика причин
+    )
 
     await callback.message.edit_text(
         f"{original_text}\n\n❌ ЗАПРОС ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
@@ -208,8 +216,9 @@ async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMConte
     )
 
 
-@router.message(F.text, F.state == AdminState.ENTER_GMAIL_DATA)
+@router.message(AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot):
+    if not message.text: return
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     data_lines = message.text.strip().split('\n')
@@ -265,8 +274,11 @@ async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext)
         pass
         
     user_id = int(callback.data.split(':')[1])
-    await state.update_data(target_user_id=user_id)
-    await state.set_state(AdminState.REJECT_REASON_GMAIL_ACCOUNT)
+    await state.update_data(
+        target_user_id=user_id,
+        rejection_context="gmail_account"
+    )
+    await state.set_state(AdminState.PROVIDE_REJECTION_REASON)
     await callback.message.edit_text(
         f"{callback.message.text}\n\n❌ АККАУНТ ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
         f"✍️ **Теперь, пожалуйста, введите причину отказа следующим сообщением.**",
