@@ -36,8 +36,9 @@ class UserState(StatesGroup):
     YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()
     YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()
     YANDEX_REVIEW_READY_TO_TASK = State()
+    YANDEX_REVIEW_AWAITING_ADMIN_TEXT = State() # <-- НОВОЕ
     YANDEX_REVIEW_TASK_ACTIVE = State()
-    YANDEX_REVIEW_AWAITING_TEXT_PHOTO = State()
+    YANDEX_REVIEW_AWAITING_SCREENSHOT = State() # <-- ИЗМЕНЕНО
     
     # Состояния для создания Gmail
     GMAIL_ACCOUNT_INIT = State()
@@ -63,6 +64,7 @@ class AdminState(StatesGroup):
 
     # Состояния для предоставления текста отзыва
     PROVIDE_GOOGLE_REVIEW_TEXT = State()
+    PROVIDE_YANDEX_REVIEW_TEXT = State() # <-- НОВОЕ
     
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()

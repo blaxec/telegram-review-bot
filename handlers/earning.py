@@ -1,4 +1,3 @@
-
 # file: handlers/earning.py
 
 import datetime
@@ -11,7 +10,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from states.user_states import UserState
+from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
@@ -213,7 +212,7 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
 
     task_text = (
         "Отлично! Следующий шаг:\n\n"
-        f"🔗 [Перейти по ссылке]({link.url})\n"
+        f"🔗 [Перейти по ссылке]({link.url}) \n"
         "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.\n\n"
         "⏳ Для выполнения этого задания у вас есть **10 минут**. Кнопка для подтверждения появится через 5 минут."
     )
@@ -252,7 +251,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
 
     admin_notification_text = (
         f"Пользователь @{user_info.username} (ID: `{callback.from_user.id}`) прошел этап 'лайков' и ожидает текст для отзыва Google.\n\n"
-        f"🔗 Ссылка для отзыва: `{link.url}`"
+        f"🔗 Ссылка для отзыва: `{link.url} `"
     )
     
     try:
@@ -261,13 +260,14 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
                 chat_id=TEXT_ADMIN,
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
-                reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id)
+                reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id)
             )
         else:
-            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
+            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id))
     except Exception as e:
         logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
-        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, link.id))
+        # Попытка отправить без фото, если с фото не вышло
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(callback.from_user.id, 'google', link.id))
 
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
@@ -304,7 +304,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     caption = (
         f"🚨 Финальная проверка отзыва Google 🚨\n\n"
         f"Пользователь: @{user_data.get('username')} (ID: `{user_id}`)\n"
-        f"Ссылка: `{link_url}`\n\n"
+        f"Ссылка: `{link_url} `\n\n"
         f"Текст отзыва: «_{review_text}_»\n\n"
         "Скриншот прикреплен. Проверьте отзыв и примите решение."
     )
@@ -383,10 +383,11 @@ async def process_yandex_profile_link(message: Message, state: FSMContext, bot: 
         return
     await message.answer("Ваша ссылка отправлена на проверку. Ожидайте...")
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_CHECK_PENDING)
+    await state.update_data(yandex_profile_link=message.text)
     caption = (
         f"[Админ: @SHAD0W_F4]\n"
         f"Проверьте профиль Yandex пользователя @{message.from_user.username} (ID: `{message.from_user.id}`)\n"
-        f"Ссылка: {message.text}"
+        f"Ссылка: {message.text} "
     )
     try:
         await bot.send_message(
@@ -446,21 +447,43 @@ async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, b
         await callback.message.answer("К сожалению, в данный момент доступных ссылок для Yandex.Карт не осталось. Попробуйте позже.")
         await state.clear()
         return
-    task_text = (
-        "Отлично! Выполните следующие действия:\n\n"
-        "⏳ На данные действия дается **20 минут**.\n"
-        f"🔗 [Перейти по ссылке]({link.url}) **Переходить по ней через Telegram нельзя!**\n"
-        "👀 Просмотрите всю страницу.\n"
-        "👍 Поставьте на положительные отзывы лайки.\n\n"
-        "Через 7 минут появится кнопка \"Выполнено\"."
+
+    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
+    await state.update_data(username=callback.from_user.username, active_link_id=link.id)
+    
+    await callback.message.answer("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            
+    user_info = await bot.get_chat(user_id)
+    user_data = await state.get_data()
+    profile_screenshot_id = user_data.get("profile_screenshot_id")
+    profile_link = user_data.get("yandex_profile_link")
+
+    admin_notification_text = (
+        f"Пользователь @{user_info.username} (ID: `{user_id}`) прошел проверку и ожидает текст для отзыва Yandex.\n\n"
+        f"🔗 Ссылка для отзыва: `{link.url} `"
     )
-    await callback.message.answer(task_text, parse_mode='Markdown', disable_web_page_preview=True)
-    await state.set_state(UserState.YANDEX_REVIEW_TASK_ACTIVE)
-    await state.update_data(username=callback.from_user.username)
-    now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=7), args=[bot, user_id, 'yandex'])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=20), args=[bot, dp, user_id, 'yandex', 'основное задание'])
-    await state.update_data(timeout_job_id=timeout_job.id)
+    if profile_link:
+        admin_notification_text += f"\n\n🔗 Профиль пользователя: {profile_link} "
+
+    try:
+        if profile_screenshot_id:
+            await bot.send_photo(
+                chat_id=TEXT_ADMIN,
+                photo=profile_screenshot_id,
+                caption=admin_notification_text,
+                reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id)
+            )
+        else:
+            await bot.send_message(
+                TEXT_ADMIN, 
+                admin_notification_text, 
+                reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id),
+                disable_web_page_preview=True
+            )
+    except Exception as e:
+        logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN} for Yandex: {e}")
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=inline.get_admin_provide_text_keyboard(user_id, 'yandex', link.id))
+
 
 @router.callback_query(F.data == 'yandex_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
 async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
@@ -468,21 +491,16 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
-        try: scheduler.remove_job(timeout_job_id)
-        except: pass
-    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_TEXT_PHOTO)
+        try: 
+            scheduler.remove_job(timeout_job_id)
+        except Exception: 
+            pass
+    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
     await callback.message.answer(
-        "Отлично! Теперь **отправьте текст вашего отзыва** (обязательно 5 звезд).\n\n"
-        "💡 **Совет:** Системы Яндекса могут отфильтровывать отзывы, которые были скопированы и вставлены. "
-        "Чтобы ваш отзыв с большей вероятностью прошел модерацию, рекомендуем набирать текст вручную."
+        "Отлично! Теперь отправьте **скриншот опубликованного отзыва**."
     )
     
-@router.message(F.text, UserState.YANDEX_REVIEW_AWAITING_TEXT_PHOTO)
-async def process_yandex_review_text(message: Message, state: FSMContext):
-    await state.update_data(review_text=message.text)
-    await message.answer("Текст получен. Теперь отправьте **скриншот опубликованного отзыва**.")
-
-@router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_TEXT_PHOTO)
+@router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
     user_data = await state.get_data()
     user_id = message.from_user.id
@@ -500,7 +518,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     caption = (
         f"🚨 Финальная проверка отзыва Yandex 🚨\n\n"
         f"Пользователь: @{user_data.get('username')} (ID: `{user_id}`)\n"
-        f"Ссылка: `{link_url}`\n\n"
+        f"Ссылка: `{link_url} `\n\n"
         f"Текст отзыва: «_{review_text}_»\n\n"
         "Скриншот прикреплен. Проверьте отзыв и примите решение."
     )

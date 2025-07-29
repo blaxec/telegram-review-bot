@@ -349,12 +349,20 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         is_photo = bool(callback.message.photo)
         message_text = callback.message.caption if is_photo else callback.message.text
 
-        _, user_id_str, link_id_str = callback.data.split(':')
+        _, platform, user_id_str, link_id_str = callback.data.split(':')
         user_id = int(user_id_str)
         link_id = int(link_id_str)
-
-        await state.set_state(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
-        await state.update_data(target_user_id=user_id, target_link_id=link_id)
+        
+        current_state = AdminState.PROVIDE_GOOGLE_REVIEW_TEXT
+        if platform == 'yandex':
+            current_state = AdminState.PROVIDE_YANDEX_REVIEW_TEXT
+        
+        await state.set_state(current_state)
+        await state.update_data(
+            target_user_id=user_id,
+            target_link_id=link_id,
+            platform=platform
+        )
         
         if is_photo:
             await callback.message.edit_caption(
@@ -367,15 +375,16 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         logger.warning(f"Error editing message on admin_start_providing_text: {e}")
 
 
-@router.message(F.text, F.state == AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+@router.message(F.text, F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}), F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     data = await state.get_data()
     user_id = data.get("target_user_id")
     link_id = data.get("target_link_id")
+    platform = data.get("platform")
     review_text_from_admin = message.text
 
-    if not user_id or not link_id:
-        await message.answer("Критическая ошибка: не найден ID пользователя или ссылки. Процесс прерван.")
+    if not all([user_id, link_id, platform]):
+        await message.answer("Критическая ошибка: не найдены все необходимые данные (ID пользователя, ссылки или платформа). Процесс прерван.")
         await state.clear()
         return
 
@@ -390,16 +399,38 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
         await state.clear()
         return
 
-    task_message = (
-        "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-        "1. Перепишите текст ниже. Вы должны опубликовать отзыв, который *В ТОЧНОСТИ* совпадает с этим текстом.\n"
-        "2. Перейдите по ссылке и оставьте отзыв на 5 звезд, переписав текст.\n\n"
-        "❗️❗️❗️ <b>ВНИМАНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы или эмодзи. Отзыв должен быть идентичным. КОПИРОВАТЬ И ВСТАВЛЯТЬ ТЕКСТ НЕЛЬЗЯ \n\n"
-        "<b>Текст для отзыва:</b>\n"
-        f"{review_text_from_admin}\n\n"
-        f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b>\n\n"
-        "⏳ На выполнение задания у вас есть <b>15 минут</b>. Кнопка для подтверждения появится через <b>7 минут</b>."
-    )
+    if platform == "google":
+        task_state = UserState.GOOGLE_REVIEW_TASK_ACTIVE
+        task_message = (
+            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+            "1. Перепишите текст ниже. Вы должны опубликовать отзыв, который *В ТОЧНОСТИ* совпадает с этим текстом.\n"
+            "2. Перейдите по ссылке и оставьте отзыв на 5 звезд, переписав текст.\n\n"
+            "❗️❗️❗️ <b>ВНИМАНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы или эмодзи. Отзыв должен быть идентичным. КОПИРОВАТЬ И ВСТАВЛЯТЬ ТЕКСТ НЕЛЬЗЯ\n\n"
+            "<b>Текст для отзыва:</b>\n"
+            f"{review_text_from_admin}\n\n"
+            f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
+            "⏳ На выполнение задания у вас есть <b>15 минут</b>. Кнопка для подтверждения появится через <b>7 минут</b>."
+        )
+        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=7)
+        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=15)
+
+    elif platform == "yandex":
+        task_state = UserState.YANDEX_REVIEW_TASK_ACTIVE
+        task_message = (
+            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+            "1. Перепишите текст ниже. Вы должны опубликовать отзыв на <b>5 звезд</b>, который *В ТОЧНОСТИ* совпадает с этим текстом.\n\n"
+            "❗️❗️❗️ <b>ВНИМАНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы или эмодзи. Отзыв должен быть идентичным. КОПИРОВАТЬ И ВСТАВЛЯТЬ ТЕКСТ НЕЛЬЗЯ\n\n"
+            "<b>Текст для отзыва:</b>\n"
+            f"{review_text_from_admin}\n\n"
+            f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
+            "⏳ На выполнение задания у вас есть <b>25 минут</b>. Кнопка для подтверждения появится через <b>10 минут</b>."
+        )
+        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
+        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=25)
+    else:
+        await message.answer(f"Неизвестная платформа: {platform}")
+        await state.clear()
+        return
 
     try:
         await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
@@ -411,12 +442,11 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
         await state.clear()
         return
 
-    await user_state.set_state(UserState.GOOGLE_REVIEW_TASK_ACTIVE)
+    await user_state.set_state(task_state)
     await user_state.update_data(username=user_info.username, review_text=review_text_from_admin)
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=7), args=[bot, user_id, 'google'])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=15), args=[bot, dp, user_id, 'google', 'основное задание'])
+    scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp, user_id, platform, 'основное задание'])
     await user_state.update_data(timeout_job_id=timeout_job.id)
 
     await state.clear()
@@ -495,7 +525,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
             
             await db_manager.set_platform_cooldown(review.user_id, review.platform, cooldown_hours)
             
-            cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
+            cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
             scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time,
                               args=[bot, review.user_id, review.platform],
                               id=f"cooldown_notify_{review.user_id}_{review.platform}")
