@@ -6,6 +6,7 @@ from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
@@ -18,16 +19,19 @@ logger = logging.getLogger(__name__)
 
 @router.callback_query(F.data == 'earning_create_gmail')
 async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     user = await db_manager.get_user(callback.from_user.id)
     if not user:
         return
 
-    # Проверка основного бана
     if user.blocked_until and user.blocked_until > datetime.datetime.utcnow():
         await callback.answer("Создание аккаунтов для вас временно заблокировано.", show_alert=True)
         return
 
-    # Проверка кулдауна на создание Gmail
     cooldown = await db_manager.check_platform_cooldown(user.id, "gmail")
     if cooldown:
         await callback.message.edit_text(
@@ -37,7 +41,6 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Если кулдауна нет, начинаем стандартный процесс
     await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     await callback.message.edit_text(
         "За создание аккаунта выдается **5 звезд**.\n\n"
@@ -49,6 +52,11 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'gmail_another_phone', F.state.in_('*'))
 async def request_another_phone(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     await state.set_state(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
     await callback.message.edit_text(
         "Введите модель **второго устройства**, с которого вы хотите создать аккаунт. "
@@ -57,14 +65,14 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(F.state == UserState.GMAIL_ENTER_DEVICE_MODEL)
+@router.message(F.text, F.state == UserState.GMAIL_ENTER_DEVICE_MODEL)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
     device_model = message.text
     await state.update_data(device_model=device_model)
     await request_gmail_data_from_admin(message, state, bot)
 
 
-@router.message(F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
+@router.message(F.text, F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
 async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
     device_model = message.text
     user_id = message.from_user.id
@@ -115,7 +123,11 @@ async def request_gmail_data_from_admin(message: Message, state: FSMContext, bot
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+    
     await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
@@ -160,7 +172,11 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith('admin_gmail_reject_request:'))
 async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     user_id = int(callback.data.split(':')[1])
     original_text = callback.message.text
     
@@ -177,7 +193,11 @@ async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMCon
 
 @router.callback_query(F.data.startswith('admin_gmail_send_data:'))
 async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     user_id = int(callback.data.split(':')[1])
     await state.update_data(gmail_user_id=user_id)
     await state.set_state(AdminState.ENTER_GMAIL_DATA)
@@ -188,7 +208,7 @@ async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMConte
     )
 
 
-@router.message(AdminState.ENTER_GMAIL_DATA)
+@router.message(F.text, F.state == AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot):
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
@@ -222,10 +242,14 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data.startswith('admin_gmail_confirm_account:'))
 async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды.", show_alert=True)
+    try:
+        await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды.", show_alert=True)
+    except TelegramBadRequest:
+        pass
+        
     user_id = int(callback.data.split(':')[1])
     await db_manager.update_balance(user_id, 5.0)
-    await db_manager.set_platform_cooldown(user_id, "gmail", 24) # Установка кулдауна
+    await db_manager.set_platform_cooldown(user_id, "gmail", 24)
     try:
         await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
     except Exception as e:
@@ -235,7 +259,11 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
 async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+        
     user_id = int(callback.data.split(':')[1])
     await state.update_data(target_user_id=user_id)
     await state.set_state(AdminState.REJECT_REASON_GMAIL_ACCOUNT)

@@ -367,7 +367,7 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         logger.warning(f"Error editing message on admin_start_providing_text: {e}")
 
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+@router.message(F.text, F.state == AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     data = await state.get_data()
     user_id = data.get("target_user_id")
@@ -423,7 +423,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
 
 
 @router.message(
-    F.text, # <-- ИЗМЕНЕНО: Добавлен фильтр на текст
+    F.text,
     F.state.in_({
         AdminState.REJECT_REASON_GOOGLE_PROFILE,
         AdminState.REJECT_REASON_GOOGLE_LAST_REVIEWS,
