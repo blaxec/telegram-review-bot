@@ -28,10 +28,29 @@ async def init_db():
 async def ensure_user_exists(user_id: int, username: str, referrer_id: int = None):
     async with async_session() as session:
         async with session.begin():
+            # Сначала проверяем, существует ли текущий пользователь
             user = await session.get(User, user_id)
             if not user:
-                new_user = User(id=user_id, username=username, referrer_id=referrer_id)
+                # Пользователь не существует, поэтому мы его создаем.
+                # Теперь, перед использованием, проверим referrer_id.
+                valid_referrer_id = None
+                if referrer_id:
+                    # Проверяем, существует ли реферер в базе данных
+                    referrer_user = await session.get(User, referrer_id)
+                    if referrer_user:
+                        # Реферер существует, мы можем безопасно использовать его ID
+                        valid_referrer_id = referrer_id
+                    else:
+                        # Реферер НЕ существует в БД. Логируем это и продолжаем без реферала.
+                        logger.warning(
+                            f"User {user_id} tried to register with non-existent referrer_id {referrer_id}. "
+                            f"Proceeding without referral."
+                        )
+                
+                # Создаем нового пользователя с проверенным ID реферера (или None)
+                new_user = User(id=user_id, username=username, referrer_id=valid_referrer_id)
                 session.add(new_user)
+
 
 async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
@@ -179,7 +198,6 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
             review_id = new_review.id
     return review_id
 
-# ИЗМЕНЕНО: Функция теперь принимает `hold_minutes` вместо `hold_days`
 async def move_review_to_hold(review_id: int, amount: float, hold_minutes: int) -> bool:
     async with async_session() as session:
         async with session.begin():
@@ -344,6 +362,7 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             
             user.google_cooldown_until = None
             user.yandex_cooldown_until = None
+            user.gmail_cooldown_until = None
             user.blocked_until = None
             user.warnings = 0
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
