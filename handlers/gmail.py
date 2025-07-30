@@ -64,15 +64,47 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
         reply_markup=inline.get_cancel_inline_keyboard()
     )
 
+async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
+    """Отправляет модель устройства на проверку админу с полным набором кнопок."""
+    device_model = message.text
+    user_id = message.from_user.id
+
+    # Уведомление для пользователя
+    await message.answer(
+        f"Ваша модель устройства: **{device_model}**.\n"
+        "Запомните ее, администратор может ее уточнить.\n\n"
+        "Ваш запрос отправлен администратору на проверку. Ожидайте..."
+    )
+    await state.set_state(UserState.GMAIL_AWAITING_DATA)
+
+    # Уведомление для админа
+    context = "gmail_device_model"
+    admin_notification = (
+        f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
+        f"отправил модель устройства для создания аккаунта Gmail:\n\n"
+        f"**Модель: {device_model}**"
+    )
+    if is_another:
+        admin_notification += "\n\n*Это запрос на создание со второго устройства.*"
+
+    try:
+        await bot.send_message(
+            FINAL_CHECK_ADMIN,
+            admin_notification,
+            reply_markup=inline.get_admin_verification_keyboard(user_id, context)
+        )
+    except Exception as e:
+        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
+        await state.clear()
+        logger.error(f"Ошибка отправки модели устройства админу {FINAL_CHECK_ADMIN}: {e}")
 
 @router.message(UserState.GMAIL_ENTER_DEVICE_MODEL)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
         return
-    device_model = message.text
-    await state.update_data(device_model=device_model)
-    await request_gmail_data_from_admin(message, state, bot)
+    await state.update_data(device_model=message.text)
+    await send_device_model_to_admin(message, state, bot, is_another=False)
 
 
 @router.message(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
@@ -80,50 +112,8 @@ async def process_another_device_model(message: Message, state: FSMContext, bot:
     if not message.text:
         await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
         return
-    device_model = message.text
-    user_id = message.from_user.id
-    
-    await state.update_data(device_model=device_model)
-    await message.answer("Ваш запрос на создание аккаунта с другого устройства отправлен администратору на проверку. Ожидайте...")
-    await state.set_state(UserState.GMAIL_AWAITING_DATA)
-
-    admin_notification = (
-        f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
-        f"запрашивает создание дополнительного аккаунта Gmail с устройства:\n\n"
-        f"**Модель: {device_model}**\n\n"
-        f"Подтвердите модель, чтобы продолжить."
-    )
-    try:
-        await bot.send_message(
-            FINAL_CHECK_ADMIN,
-            admin_notification,
-            reply_markup=inline.get_admin_verification_keyboard(user_id, "gmail_device_model")
-        )
-    except Exception as e:
-        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
-        await state.clear()
-        logger.error(f"Ошибка отправки запроса на доп. Gmail админу {FINAL_CHECK_ADMIN}: {e}")
-
-
-async def request_gmail_data_from_admin(message: Message, state: FSMContext, bot: Bot):
-    user_id = message.from_user.id
-    await message.answer("Запрашиваю данные у администратора... Ожидайте.")
-    await state.set_state(UserState.GMAIL_AWAITING_DATA)
-
-    admin_notification = (
-        f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
-        "запрашивает данные для регистрации аккаунта Gmail."
-    )
-    try:
-        await bot.send_message(
-            FINAL_CHECK_ADMIN,
-            admin_notification,
-            reply_markup=inline.get_admin_gmail_data_request_keyboard(user_id)
-        )
-    except Exception as e:
-        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
-        await state.clear()
-        logger.error(f"Ошибка отправки запроса на Gmail данные админу {FINAL_CHECK_ADMIN}: {e}")
+    await state.update_data(device_model=message.text)
+    await send_device_model_to_admin(message, state, bot, is_another=True)
 
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
@@ -175,29 +165,6 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
 
 
 # --- ХЭНДЛЕРЫ АДМИНА ДЛЯ УПРАВЛЕНИЯ GMAIL ---
-
-@router.callback_query(F.data.startswith('admin_gmail_reject_request:'))
-async def admin_reject_gmail_data_request(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except TelegramBadRequest:
-        pass
-        
-    user_id = int(callback.data.split(':')[1])
-    original_text = callback.message.text
-    
-    await state.set_state(AdminState.PROVIDE_REJECTION_REASON)
-    await state.update_data(
-        target_user_id=user_id,
-        rejection_context="gmail_data_request" # Контекст для обработчика причин
-    )
-
-    await callback.message.edit_text(
-        f"{original_text}\n\n❌ ЗАПРОС ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
-        f"✍️ **Теперь, пожалуйста, отправьте причину отказа следующим сообщением.**",
-        reply_markup=None
-    )
-
 
 @router.callback_query(F.data.startswith('admin_gmail_send_data:'))
 async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMContext):

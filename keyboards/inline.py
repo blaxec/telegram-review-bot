@@ -32,6 +32,7 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 # --- Раздел "Статистика" ---
 
 def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
+    # Текст кнопки меняется в зависимости от текущего статуса
     anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
     buttons = [
         [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
@@ -164,8 +165,7 @@ def get_task_confirmation_keyboard(platform: str) -> InlineKeyboardMarkup:
 # --- Yandex Отзывы ---
 def get_yandex_init_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text='Где найти ссылку?', callback_data='yandex_get_profile_link')],
-        [InlineKeyboardButton(text='Отправить скриншот профиля', callback_data='yandex_use_screenshot')],
+        [InlineKeyboardButton(text='Я готов(а) отправить скриншот', callback_data='yandex_ready_to_screenshot')],
         [InlineKeyboardButton(text='Как повысить уровень знатока', callback_data='yandex_how_to_be_expert')],
         [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
     ]
@@ -233,7 +233,6 @@ def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
 def get_back_to_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
-    builder.button(text='❌ Закрыть', callback_data='cancel_action')
     return builder.as_markup()
 
 def get_admin_hold_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
@@ -246,13 +245,12 @@ def get_admin_hold_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_gmail_data_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    buttons = [
-        [
-            InlineKeyboardButton(text='✅ Отправить данные', callback_data=f'admin_gmail_send_data:{user_id}'),
-            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'admin_gmail_reject_request:{user_id}')
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    builder = InlineKeyboardBuilder()
+    builder.button(text='✅ Отправить данные', callback_data=f'admin_gmail_send_data:{user_id}')
+    builder.button(text='❌ Отклонить', callback_data=f'admin_verify:reject:gmail_data_request:{user_id}')
+    builder.button(text='⚠️ Дать пред.', callback_data=f'admin_verify:warn:gmail_data_request:{user_id}')
+    builder.adjust(2,1)
+    return builder.as_markup()
 
 def get_admin_gmail_final_check_keyboard(user_id: int) -> InlineKeyboardMarkup:
     buttons = [

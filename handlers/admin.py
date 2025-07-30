@@ -1,5 +1,5 @@
+# file: handlers/admin.py
 
-import asyncio
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -14,18 +14,7 @@ from keyboards import inline, reply
 from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
-from logic.admin_logic import (
-    process_rejection_reason_logic, 
-    process_warning_reason_logic,
-    send_review_text_to_user_logic,
-    apply_fine_to_user,
-    approve_review_to_hold_logic,
-    reject_initial_review_logic,
-    approve_hold_review_logic,
-    reject_hold_review_logic,
-    approve_withdrawal_logic,
-    reject_withdrawal_logic
-)
+from logic.admin_logic import *
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -36,6 +25,7 @@ TEXT_ADMIN = ADMIN_ID_1
 # Фильтры для всех обработчиков в этом роутере
 router.message.filter(F.from_user.id.in_(ADMINS))
 router.callback_query.filter(F.from_user.id.in_(ADMINS))
+
 
 @router.message(Command("addstars"))
 async def admin_add_stars(message: Message):
@@ -141,7 +131,7 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
         except Exception as e: logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
 
 
-# --- БЛОК: МОДЕРАЦИЯ (ВЕРИФИКАЦИЯ, ПРЕДУПРЕЖДЕНИЯ, ОТКЛОНЕНИЯ) ---
+# --- БЛОК: МОДЕРАЦИЯ ---
 
 @router.callback_query(F.data.startswith('admin_verify:'))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot, dp: Dispatcher):
@@ -172,13 +162,14 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
     
     elif action == "warn":
         action_text = f"⚠️ ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ (@{callback.from_user.username})"
+        platform = "gmail" if "gmail" in context else context.split('_')[0]
         await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
-        await admin_state.update_data(target_user_id=user_id, platform=context.split('_')[0])
+        await admin_state.update_data(target_user_id=user_id, platform=platform, context=context)
         await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
 
     elif action == "reject":
         action_text = f"❌ ОТКЛОНЕН (@{callback.from_user.username})"
-        context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_data_request"}
+        context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_device_model"}
         rejection_context = context_map.get(context)
         if rejection_context:
             await admin_state.set_state(AdminState.PROVIDE_REJECTION_REASON)
@@ -199,11 +190,11 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     if not message.text: return
     admin_data = await state.get_data()
-    user_id, platform = admin_data.get("target_user_id"), admin_data.get("platform")
-    if not user_id or not platform:
+    user_id, platform, context = admin_data.get("target_user_id"), admin_data.get("platform"), admin_data.get("context")
+    if not all([user_id, platform, context]):
         await message.answer("Ошибка: не найдены данные. Состояние сброшено."); await state.clear(); return
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state)
+    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
     await message.answer(response)
     await state.clear()
 
@@ -234,7 +225,8 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.message(F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}))
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
+@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     if not message.text: return
     data = await state.get_data()
@@ -247,8 +239,6 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
 
 @router.callback_query(F.data.startswith('admin_final_approve:'))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
-    try: await callback.answer()
-    except: pass
     review_id = int(callback.data.split(':')[1])
     success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
@@ -257,8 +247,6 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
 
 @router.callback_query(F.data.startswith('admin_final_reject:'))
 async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
-    try: await callback.answer()
-    except: pass
     review_id = int(callback.data.split(':')[1])
     success, message_text = await reject_initial_review_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
@@ -324,7 +312,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
 
 
-# --- БЛОК: ПРОЧИЕ КОМАНДЫ (/reset_cooldown, /fine) ---
+# --- БЛОК: ПРОЧИЕ КОМАНДЫ (/reset_cooldown, /fine, /viewhold) ---
 
 @router.message(Command("reset_cooldown"), F.from_user.id == ADMIN_ID_1)
 async def reset_cooldown_handler(message: Message):
@@ -339,6 +327,16 @@ async def reset_cooldown_handler(message: Message):
         username = f"@{user.username}" if user.username else f"ID: {user_id}"
         await message.answer(f"✅ Кулдауны для **{username}** сброшены.")
     else: await message.answer(f"❌ Ошибка при сбросе кулдаунов для `{args[1]}`.")
+
+@router.message(Command("viewhold"))
+async def viewhold_handler(message: Message, bot: Bot):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Использование: /viewhold ID_пользователя_или_@username")
+        return
+    identifier = args[1]
+    response_text = await get_user_hold_info_logic(identifier)
+    await message.answer(response_text)
 
 @router.message(Command("fine"))
 async def fine_user_start(message: Message, state: FSMContext):

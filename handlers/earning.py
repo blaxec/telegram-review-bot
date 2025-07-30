@@ -353,56 +353,23 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     if not await reference_manager.has_available_references('yandex_maps'):
         await callback.answer("К сожалению, в данный момент задания для Yandex.Карт закончились. Попробуйте позже.", show_alert=True)
         return
+        
     await state.set_state(UserState.YANDEX_REVIEW_INIT)
     await callback.message.edit_text(
         "⭐ За отзыв в Yandex.Картах начисляется 50 звезд.\n\n"
-        "💡 Чтобы мы точно приняли отзыв, нам нужно проверить ваш профиль. Пожалуйста, скиньте ссылку на профиль.\n"
+        "💡 Для проверки нам понадобится скриншот вашего профиля.\n"
         "💡 Также выключите **\"Определение местоположения\"** для приложения в настройках телефона.\n"
-        "💡 Аккаунты принимаются не ниже **\"Знатока города\"**.\n\n"
-        "Отправьте ссылку на профиль или, если не получается, скриншот профиля.",
+        "💡 Аккаунты принимаются не ниже **\"Знатока города\"**.",
         reply_markup=inline.get_yandex_init_keyboard()
     )
 
-@router.callback_query(F.data.in_({'yandex_get_profile_link', 'yandex_how_to_be_expert'}), UserState.YANDEX_REVIEW_INIT)
+@router.callback_query(F.data == 'yandex_how_to_be_expert', UserState.YANDEX_REVIEW_INIT)
 async def show_yandex_instructions(callback: CallbackQuery):
-    if callback.data == 'yandex_get_profile_link':
-        text = ("🤔 Как получить ссылку на ваш профиль Yandex.Карты:\n\n"
-                "1. Зайдите в приложение Yandex.Карты.\n"
-                "2. В левом верхнем углу нажмите на аватарку.\n"
-                "3. Найдите кнопку **\"Поделиться\"**.\n"
-                "4. Нажмите \"Скопировать\" (скопируйте только ссылку, текст не нужен).")
-    else:
-        text = ("💡 Чтобы повысить уровень \"Знатока города\", достаточно выполнять достижения.\n"
-                "Где их взять? В вашем профиле, нажав на **\"Знатока города\"**.")
+    text = ("💡 Чтобы повысить уровень \"Знатока города\", достаточно выполнять достижения.\n"
+            "Где их взять? В вашем профиле, нажав на **\"Знатока города\"**.")
     await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
-@router.message(UserState.YANDEX_REVIEW_INIT)
-async def process_yandex_profile_link(message: Message, state: FSMContext, bot: Bot):
-    if not message.text or not message.text.strip().startswith("https://yandex.ru/maps/user/"):
-        await message.answer("Неверный формат. Пожалуйста, отправьте корректную ссылку на ваш профиль в Яндекс.Картах или используйте кнопку для отправки скриншота.",
-                               reply_markup=inline.get_yandex_init_keyboard())
-        return
-    await message.answer("Ваша ссылка отправлена на проверку. Ожидайте...")
-    await state.set_state(UserState.YANDEX_REVIEW_PROFILE_CHECK_PENDING)
-    await state.update_data(yandex_profile_link=message.text)
-    caption = (
-        f"[Админ: @SHAD0W_F4]\n"
-        f"Проверьте профиль Yandex пользователя @{message.from_user.username} (ID: `{message.from_user.id}`)\n"
-        f"Ссылка: {message.text} "
-    )
-    try:
-        await bot.send_message(
-            chat_id=FINAL_CHECK_ADMIN,
-            text=caption,
-            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "yandex_profile"),
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        print(f"Ошибка отправки профиля Yandex админу: {e}")
-        await message.answer("Не удалось отправить ссылку на проверку. Попробуйте позже.")
-        await state.clear()
-
-@router.callback_query(F.data == 'yandex_use_screenshot', UserState.YANDEX_REVIEW_INIT)
+@router.callback_query(F.data == 'yandex_ready_to_screenshot', UserState.YANDEX_REVIEW_INIT)
 async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
     await callback.message.edit_text(

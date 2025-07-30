@@ -1,3 +1,5 @@
+# file: logic/admin_logic.py
+
 import logging
 import datetime
 from aiogram import Bot, Dispatcher
@@ -18,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, context: str, user_state: FSMContext):
     """Логика обработки причины отклонения и уведомления пользователя."""
-    if context == "gmail_data_request":
-        user_message_text = f"❌ Ваш запрос на создание аккаунта с другого устройства был отклонен.\n\n**Причина:** {reason}"
-        await user_state.set_state(UserState.GMAIL_ACCOUNT_INIT)
+    if context == "gmail_data_request" or context == "gmail_device_model":
+        user_message_text = f"❌ Ваш запрос на создание аккаунта был отклонен.\n\n**Причина:** {reason}"
+        await user_state.set_state(UserState.MAIN_MENU)
     elif context == "gmail_account":
         user_message_text = f"❌ Ваш созданный аккаунт Gmail был отклонен администратором.\n\n**Причина:** {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
@@ -36,7 +38,7 @@ async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, co
         return f"Не удалось отправить сообщение пользователю {user_id}. Ошибка: {e}"
 
 
-async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, reason: str, user_state: FSMContext):
+async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, reason: str, user_state: FSMContext, context: str):
     """Логика обработки причины предупреждения и уведомления пользователя."""
     warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
     user_message_text = f"⚠️ **Администратор выдал вам предупреждение.**\n\n**Причина:** {reason}\n"
@@ -47,13 +49,19 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
         await user_state.set_state(UserState.MAIN_MENU)
     else:
         state_to_return_map = {
-            "google": UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT,
-            "yandex": UserState.YANDEX_REVIEW_INIT,
+            "google_profile": UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT,
+            "google_last_reviews": UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK,
+            "yandex_profile": UserState.YANDEX_REVIEW_INIT,
+            "yandex_profile_screenshot": UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT,
+            "gmail_device_model": UserState.MAIN_MENU,
+            "gmail_data_request": UserState.MAIN_MENU,
         }
-        state_to_return = state_to_return_map.get(platform)
+        state_to_return = state_to_return_map.get(context)
         if state_to_return:
              await user_state.set_state(state_to_return)
-        user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку."
+        else: # На случай если контекст не найден
+             await user_state.set_state(UserState.MAIN_MENU)
+        user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
 
     try:
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
@@ -282,3 +290,32 @@ async def reject_withdrawal_logic(request_id: int, bot: Bot) -> tuple[bool, str,
         logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
 
     return True, "❌ Вывод отклонен. Средства возвращены.", request
+
+
+# --- ЛОГИКА ДЛЯ ПРОСМОТРА ХОЛДА ПОЛЬЗОВАТЕЛЯ ---
+
+async def get_user_hold_info_logic(identifier: str) -> str:
+    """Возвращает отформатированную строку с информацией о холде пользователя."""
+    user_id = await db_manager.find_user_by_identifier(identifier)
+    if not user_id:
+        return f"Пользователь `{identifier}` не найден в базе данных."
+
+    user = await db_manager.get_user(user_id)
+    reviews_in_hold = await db_manager.get_user_hold_reviews(user_id)
+
+    if not reviews_in_hold:
+        return f"У пользователя @{user.username} (ID: `{user_id}`) нет отзывов в холде."
+
+    total_hold_amount = sum(review.amount for review in reviews_in_hold)
+
+    response_text = f"⏳ Отзывы в холде для @{user.username} (ID: `{user_id}`)\n"
+    response_text += f"Общая сумма в холде: **{total_hold_amount}** ⭐\n\n"
+
+    for review in reviews_in_hold:
+        hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
+        response_text += (
+            f"🔹 **{review.amount} ⭐** ({review.platform})\n"
+            f"   - До: {hold_until_str} UTC\n"
+            f"   - ID отзыва: `{review.id}`\n\n"
+        )
+    return response_text
