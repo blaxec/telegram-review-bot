@@ -11,7 +11,7 @@ import logging
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
+from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, WITHDRAWAL_CHANNEL_ID
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import *
@@ -65,18 +65,15 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
+# --- ИЗМЕНЕНО: Обработчик вызывает новую функцию из admin_logic ---
 @router.message(F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}))
 async def admin_add_ref_process(message: Message, state: FSMContext):
-    if not message.text: return
-    links = message.text.split('\n')
-    added_count, skipped_count = 0, 0
-    platform = (await state.get_data()).get("platform")
-    for link in links:
-        link = link.strip()
-        if link and link.startswith("http"):
-            if await reference_manager.add_reference(link, platform): added_count += 1
-            else: skipped_count += 1
-    await message.answer(f"Готово!\n✅ Добавлено: {added_count}\n⏭️ Пропущено: {skipped_count}")
+    data = await state.get_data()
+    platform = data.get("platform")
+    
+    result_text = await process_add_links_logic(message.text, platform)
+    
+    await message.answer(result_text)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     await state.clear()
 
@@ -225,14 +222,11 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-# --- ИЗМЕНЕНО: Исправлена ошибка с передачей аргументов ---
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
 @router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     if not message.text: return
     data = await state.get_data()
-    
-    # Явно передаем только необходимые аргументы, чтобы избежать TypeError
     success, response_text = await send_review_text_to_user_logic(
         bot=bot,
         dp=dp,
@@ -242,7 +236,6 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
         platform=data['platform'],
         review_text=message.text
     )
-    
     await message.answer(response_text)
     if success: await state.clear()
 
@@ -303,7 +296,7 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
 
 
-# --- БЛОК: УПРАВЛЕНИЕ ВЫВОДОМ СРЕДСТВ ---
+# --- ИЗМЕНЕНО: БЛОК УПРАВЛЕНИЯ ВЫВОДОМ СРЕДСТВ (теперь работает с каналом) ---
 
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
@@ -311,8 +304,11 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     success, message_text, _ = await approve_withdrawal_logic(request_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success:
-        new_text = callback.message.text + f"\n\n**[ ✅ ПОДТВЕРЖДЕНО @{callback.from_user.username} ]**"
-        await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        try:
+            new_text = callback.message.text + f"\n\n**[ ✅ ВЫПЛАЧЕНО @{callback.from_user.username} ]**"
+            await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        except TelegramBadRequest as e:
+            logger.warning(f"Could not edit withdrawal message in channel: {e}")
 
 @router.callback_query(F.data.startswith("admin_withdraw_reject:"))
 async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
@@ -320,8 +316,11 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     success, message_text, _ = await reject_withdrawal_logic(request_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success:
-        new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО @{callback.from_user.username} ]**"
-        await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        try:
+            new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО @{callback.from_user.username} ]**"
+            await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
+        except TelegramBadRequest as e:
+            logger.warning(f"Could not edit withdrawal message in channel: {e}")
 
 
 # --- БЛОК: ПРОЧИЕ КОМАНДЫ (/reset_cooldown, /fine, /viewhold) ---

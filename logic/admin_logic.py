@@ -16,6 +16,33 @@ from handlers.earning import notify_cooldown_expired, send_confirmation_button, 
 
 logger = logging.getLogger(__name__)
 
+
+# --- НОВАЯ ЛОГИКА: Добавление ссылок ---
+async def process_add_links_logic(links_text: str, platform: str) -> str:
+    """
+    Обрабатывает текст со ссылками, добавляет их в базу данных
+    и возвращает отформатированную строку с результатом.
+    """
+    if not links_text:
+        return "Текст со ссылками не может быть пустым."
+
+    links = links_text.split('\n')
+    added_count, skipped_count = 0, 0
+
+    for link in links:
+        link = link.strip()
+        if link and link.startswith("http"):
+            # Используем reference_manager для добавления, он внутри вызывает db_manager
+            if await reference_manager.add_reference(link, platform):
+                added_count += 1
+            else:
+                skipped_count += 1
+        elif link: # Если строка не пустая, но не ссылка
+            skipped_count += 1
+
+    return f"Готово!\n✅ Добавлено: {added_count}\n⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
+
+
 # --- ЛОГИКА ДЛЯ ПРЕДУПРЕЖДЕНИЙ И ОТКЛОНЕНИЙ ---
 
 async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, context: str, user_state: FSMContext):
