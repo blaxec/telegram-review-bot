@@ -225,12 +225,24 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
+# --- ИЗМЕНЕНО: Исправлена ошибка с передачей аргументов ---
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
 @router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     if not message.text: return
     data = await state.get_data()
-    success, response_text = await send_review_text_to_user_logic(bot, dp, scheduler, **data, review_text=message.text)
+    
+    # Явно передаем только необходимые аргументы, чтобы избежать TypeError
+    success, response_text = await send_review_text_to_user_logic(
+        bot=bot,
+        dp=dp,
+        scheduler=scheduler,
+        user_id=data['target_user_id'],
+        link_id=data['target_link_id'],
+        platform=data['platform'],
+        review_text=message.text
+    )
+    
     await message.answer(response_text)
     if success: await state.clear()
 

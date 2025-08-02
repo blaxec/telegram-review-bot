@@ -43,6 +43,20 @@ async def send_liking_confirmation_button(bot: Bot, user_id: int):
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки 'лайков' пользователю {user_id}: {e}")
 
+# --- ИЗМЕНЕНО: Новая функция для Yandex ---
+async def send_yandex_liking_confirmation_button(bot: Bot, user_id: int):
+    """Отправляет пользователю кнопку подтверждения после этапа 'прогрева' Yandex."""
+    try:
+        await bot.send_message(
+            user_id,
+            "Кнопка для подтверждения выполнения задания теперь доступна.",
+            reply_markup=inline.get_yandex_liking_confirmation_keyboard()
+        )
+    except (TelegramNetworkError, TelegramBadRequest) as e:
+        logger.error(f"Не удалось отправить кнопку подтверждения 'прогрева' Yandex пользователю {user_id} (возможно, бот заблокирован): {e}")
+    except Exception as e:
+        logger.error(f"Неизвестная ошибка при отправке кнопки 'прогрева' Yandex пользователю {user_id}: {e}")
+
 async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
     """Отправляет пользователю кнопку подтверждения основного задания."""
     try:
@@ -406,8 +420,9 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
+# --- ИЗМЕНЕНО: Этап "прогрева" для Yandex ---
 @router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
-async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
+async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     await callback.message.delete()
     user_id = callback.from_user.id
     link = await reference_manager.assign_reference_to_user(user_id, 'yandex_maps')
@@ -416,22 +431,52 @@ async def start_yandex_review_task(callback: CallbackQuery, state: FSMContext, b
         await state.clear()
         return
 
-    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
+    await state.set_state(UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
     await state.update_data(username=callback.from_user.username, active_link_id=link.id)
     
+    task_text = (
+        "Отлично! Ваш профиль одобрен. Теперь следующий шаг:\n\n"
+        f"🔗 [Перейти по ссылке]({link.url})\n"
+        "👀 **Действия**: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
+        "Это нужно для имитации активности перед написанием отзыва.\n\n"
+        "⏳ На это задание у вас есть **10 минут**. Кнопка для подтверждения появится через 5 минут."
+    )
+    await callback.message.answer(task_text, parse_mode='Markdown', disable_web_page_preview=True)
+    
+    now = datetime.datetime.now(datetime.timezone.utc)
+    scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=5), args=[bot, user_id])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, dp, user_id, 'yandex', 'этап прогрева'])
+    await state.update_data(timeout_job_id=timeout_job.id)
+
+
+# --- ИЗМЕНЕНО: Новый хэндлер подтверждения "прогрева" ---
+@router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
+async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    await callback.message.delete()
+    user_data = await state.get_data()
+    timeout_job_id = user_data.get('timeout_job_id')
+    if timeout_job_id:
+        try: scheduler.remove_job(timeout_job_id)
+        except Exception as e: logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+
+    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
     await callback.message.answer("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
             
+    user_id = callback.from_user.id
     user_info = await bot.get_chat(user_id)
-    user_data = await state.get_data()
+    link_id = user_data.get('active_link_id')
+    link = await db_manager.db_get_link_by_id(link_id)
     profile_screenshot_id = user_data.get("profile_screenshot_id")
-    profile_link = user_data.get("yandex_profile_link")
+
+    if not link:
+        await callback.message.answer("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.")
+        await state.clear()
+        return
 
     admin_notification_text = (
-        f"Пользователь @{user_info.username} (ID: `{user_id}`) прошел проверку и ожидает текст для отзыва Yandex.\n\n"
-        f"🔗 Ссылка для отзыва: `{link.url} `"
+        f"Пользователь @{user_info.username} (ID: `{user_id}`) прошел этап 'прогрева' и ожидает текст для отзыва Yandex.\n\n"
+        f"🔗 Ссылка для отзыва: `{link.url}`"
     )
-    if profile_link:
-        admin_notification_text += f"\n\n🔗 Профиль пользователя: {profile_link} "
 
     try:
         keyboard = inline.get_admin_provide_text_keyboard('yandex', user_id, link.id)

@@ -1,4 +1,3 @@
-# file: handlers/profile.py
 
 import logging
 from aiogram import Router, F, Bot
@@ -11,7 +10,7 @@ from functools import wraps
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
-from config import FINAL_CHECK_ADMIN
+from config import WITHDRAWAL_CHANNEL_ID # <-- ИЗМЕНЕНО
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -214,6 +213,11 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
     if balance < 15.0:
         await callback.answer(f"Минимальная сумма для вывода 15 звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
+    
+    if not WITHDRAWAL_CHANNEL_ID:
+        await callback.answer("Функция вывода временно недоступна. Администратор не настроил канал для выплат.", show_alert=True)
+        logger.warning("Attempted to withdraw, but WITHDRAWAL_CHANNEL_ID is not set.")
+        return
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
     await callback.message.edit_text(
@@ -269,8 +273,9 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
         reply_markup=inline.get_withdraw_recipient_keyboard()
     )
     
+# --- ИЗМЕНЕНО: Функция отправляет уведомление в канал ---
 async def _create_and_notify_withdrawal(user: User, amount: float, recipient_info: str, comment: str | None, bot: Bot, state: FSMContext):
-    """Вспомогательная функция для создания запроса и отправки уведомления админу."""
+    """Вспомогательная функция для создания запроса и отправки уведомления в канал."""
     request_id = await db_manager.create_withdrawal_request(user.id, amount, recipient_info, comment)
 
     if request_id is None:
@@ -292,15 +297,16 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
 
     try:
         await bot.send_message(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=WITHDRAWAL_CHANNEL_ID,
             text=admin_message,
             parse_mode="Markdown",
             reply_markup=inline.get_admin_withdrawal_keyboard(request_id)
         )
         await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.")
     except Exception as e:
-        logger.error(f"Failed to send withdrawal request to admin: {e}")
+        logger.error(f"Failed to send withdrawal request to channel {WITHDRAWAL_CHANNEL_ID}: {e}")
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Пожалуйста, обратитесь в поддержку.")
+        # Возвращаем деньги пользователю, если не удалось отправить запрос
         await db_manager.update_balance(user.id, amount)
     
     await state.clear()

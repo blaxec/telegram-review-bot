@@ -1,4 +1,3 @@
-
 from aiogram.fsm.state import State, StatesGroup
 
 class UserState(StatesGroup):
@@ -37,6 +36,7 @@ class UserState(StatesGroup):
     YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT = State()
     YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING = State()
     YANDEX_REVIEW_READY_TO_TASK = State()
+    YANDEX_REVIEW_LIKING_TASK_ACTIVE = State() # <-- ДОБАВЛЕНО
     YANDEX_REVIEW_AWAITING_ADMIN_TEXT = State()
     YANDEX_REVIEW_TASK_ACTIVE = State()
     YANDEX_REVIEW_AWAITING_SCREENSHOT = State()
@@ -45,6 +45,7 @@ class UserState(StatesGroup):
     GMAIL_ACCOUNT_INIT = State()
     GMAIL_AWAITING_DATA = State()
     GMAIL_AWAITING_VERIFICATION = State()
+    GMAIL_INSTRUCTIONS = State() # <-- ДОБАВЛЕНО
     GMAIL_ENTER_DEVICE_MODEL = State()
     GMAIL_ENTER_ANOTHER_DEVICE_MODEL = State()
 

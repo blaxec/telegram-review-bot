@@ -68,7 +68,10 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
     device_model = message.text
     user_id = message.from_user.id
-
+    
+    # Сохраняем модель устройства в состояние пользователя
+    await state.update_data(device_model=device_model)
+    
     # Уведомление для пользователя
     await message.answer(
         f"Ваша модель устройства: **{device_model}**.\n"
@@ -103,7 +106,6 @@ async def process_device_model(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
         return
-    await state.update_data(device_model=message.text)
     await send_device_model_to_admin(message, state, bot, is_another=False)
 
 
@@ -112,7 +114,6 @@ async def process_another_device_model(message: Message, state: FSMContext, bot:
     if not message.text:
         await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
         return
-    await state.update_data(device_model=message.text)
     await send_device_model_to_admin(message, state, bot, is_another=True)
 
 
@@ -127,7 +128,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
-    device_model = user_data.get('device_model', 'Не указана')
+    device_model = user_data.get('device_model', 'Не указана') # <-- Теперь модель будет извлечена корректно
     
     if not gmail_details:
         logger.error(f"Критическая ошибка для user {user_id}: gmail_details не найдены в state data.")
@@ -164,6 +165,54 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     await state.set_state(UserState.MAIN_MENU)
 
 
+# --- ИЗМЕНЕНО: Добавлены хэндлеры для кнопки "Как создать аккаунт?" ---
+
+@router.callback_query(F.data == 'gmail_how_to_create', UserState.GMAIL_AWAITING_VERIFICATION)
+async def show_gmail_instructions(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.GMAIL_INSTRUCTIONS)
+    instructions_text = (
+        "**Инструкция по созданию аккаунта Gmail:**\n\n"
+        "1. Откройте приложение Gmail или перейдите на сайт `gmail.com`.\n"
+        "2. Нажмите 'Создать аккаунт'.\n"
+        "3. Введите **Имя** и **Фамилию**, которые вам выдал администратор.\n"
+        "4. Придумайте и введите **имя пользователя** (адрес почты), которое вам выдали.\n"
+        "5. Введите и подтвердите **пароль**, который вам выдали.\n"
+        "6. **ВАЖНО:** Если Google просит указать номер телефона для подтверждения, пропустите этот шаг. Если пропустить нельзя, сообщите об этом в поддержку.\n"
+        "7. Завершите создание аккаунта. Резервную почту указывать не нужно.\n\n"
+        "После успешного создания вернитесь сюда и нажмите 'Отправить на проверку'."
+    )
+    await callback.message.edit_text(
+        instructions_text,
+        reply_markup=inline.get_gmail_back_to_verification_keyboard()
+    )
+
+
+@router.callback_query(F.data == 'gmail_back_to_verification', UserState.GMAIL_INSTRUCTIONS)
+async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    user_data = await state.get_data()
+    gmail_details = user_data.get('gmail_details', {})
+    
+    name = gmail_details.get('name', 'N/A')
+    surname = gmail_details.get('surname', 'N/A')
+    password = gmail_details.get('password', 'N/A')
+    full_email = gmail_details.get('email', 'N/A')
+
+    user_message = (
+        "✅ Администратор одобрил ваш запрос и прислал данные для создания аккаунта:\n\n"
+        "<b>Данные для создания:</b>\n"
+        f"Имя: <code>{name}</code>\n"
+        f"Фамилия: <code>{surname}</code>\n"
+        f"Пароль: <code>{password}</code>\n"
+        f"Почта: <code>{full_email}</code>"
+    )
+
+    await state.set_state(UserState.GMAIL_AWAITING_VERIFICATION)
+    await callback.message.edit_text(
+        user_message,
+        reply_markup=inline.get_gmail_verification_keyboard()
+    )
+
 # --- ХЭНДЛЕРЫ АДМИНА ДЛЯ УПРАВЛЕНИЯ GMAIL ---
 
 @router.callback_query(F.data.startswith('admin_gmail_send_data:'))
@@ -188,10 +237,12 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     if not message.text: return
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
+    
     data_lines = message.text.strip().split('\n')
     if len(data_lines) != 4:
         await message.answer("Неверный формат. Нужно 4 строки: Имя, Фамилия, Пароль, Почта. Попробуйте снова.")
         return
+        
     name, surname, password, email = data_lines
     full_email = f"{email}@gmail.com"
     user_message = (
@@ -204,9 +255,15 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     )
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
+    # --- ИЗМЕНЕНО: Сохраняем данные без перезаписи состояния ---
+    user_current_data = await user_state.get_data()
+    user_current_data['gmail_details'] = {"name": name, "surname": surname, "password": password, "email": full_email}
+
     logger.info(f"Admin {message.from_user.id} is sending data to user {user_id}. Setting user state to GMAIL_AWAITING_VERIFICATION.")
+    
     await user_state.set_state(UserState.GMAIL_AWAITING_VERIFICATION)
-    await user_state.update_data(gmail_details={"name": name, "surname": surname, "password": password, "email": full_email})
+    await user_state.set_data(user_current_data)
+    
     try:
         await bot.send_message(user_id, user_message, parse_mode="HTML", reply_markup=inline.get_gmail_verification_keyboard())
         await message.answer(f"Данные успешно отправлены пользователю {user_id}.")
