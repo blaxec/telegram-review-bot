@@ -1,8 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 6127982184))
@@ -10,10 +12,14 @@ ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 7205028708))
 ADMIN_IDS = [ADMIN_ID_1, ADMIN_ID_2]
 
 # ID канала, куда будут отправляться заявки на вывод.
-# Убедитесь, что бот является администратором в этом канале с правом публикации сообщений.
-# ID канала должен быть числом (например, -1001234567890).
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 
+# --- НОВОЕ ИЗМЕНЕНИЕ: Проверка ID канала при запуске ---
+if WITHDRAWAL_CHANNEL_ID > 0:
+    logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")
+    logger.warning("!!! Для приватных каналов ID должен быть отрицательным и начинаться с -100.")
+    logger.warning("!!! Бот, скорее всего, не сможет отправлять сообщения в канал. Пожалуйста, проверьте ID.")
+# ---------------------------------------------------------
 
 # ВОЗВРАЩЕНО: Все финальные проверки снова идут ко второму администратору, как и было задумано
 FINAL_CHECK_ADMIN = ADMIN_ID_2
