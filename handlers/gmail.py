@@ -1,3 +1,4 @@
+# file: handlers/gmail.py
 
 import datetime
 import logging
@@ -187,7 +188,6 @@ async def show_gmail_instructions(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'gmail_back_to_verification', UserState.GMAIL_INSTRUCTIONS)
 async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details', {})
     
@@ -253,6 +253,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     )
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
+    # ИСПРАВЛЕНО: Теперь мы не перезаписываем состояние пользователя, а обновляем его, сохраняя device_model
     user_current_data = await user_state.get_data()
     user_current_data['gmail_details'] = {"name": name, "surname": surname, "password": password, "email": full_email}
 

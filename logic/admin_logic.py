@@ -18,7 +18,7 @@ from logic.promo_logic import check_and_apply_promo_reward
 logger = logging.getLogger(__name__)
 
 
-# --- НОВАЯ ЛОГИКА: Добавление ссылок ---
+# --- ИСПРАВЛЕННАЯ ЛОГИКА: Добавление ссылок ---
 async def process_add_links_logic(links_text: str, platform: str) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
@@ -31,14 +31,20 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
     added_count, skipped_count = 0, 0
 
     for link in links:
-        link = link.strip()
-        if link and link.startswith("http"):
-            # Используем reference_manager для добавления, он внутри вызывает db_manager
-            if await reference_manager.add_reference(link, platform):
-                added_count += 1
-            else:
+        stripped_link = link.strip()
+        # Проверяем, что строка не пустая и действительно похожа на ссылку
+        if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
+            try:
+                if await reference_manager.add_reference(stripped_link, platform):
+                    added_count += 1
+                else:
+                    # Эта ветка может сработать, если в будущем будет добавлена проверка на уникальность
+                    skipped_count += 1
+            except Exception as e:
+                logger.error(f"Failed to add link '{stripped_link}' to DB: {e}")
                 skipped_count += 1
-        elif link: # Если строка не пустая, но не ссылка
+        elif stripped_link: # Если строка не пустая, но не ссылка
+            logger.warning(f"Skipping invalid link format: {stripped_link}")
             skipped_count += 1
 
     return f"Готово!\n✅ Добавлено: {added_count}\n⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
@@ -183,7 +189,7 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
         await bot.send_message(user_id, user_notification_text, reply_markup=inline.get_back_to_main_menu_keyboard())
         logger.info(f"Admin {admin_id} fined user {user_id} for {amount} stars. Reason: {reason}")
         username = f"@{user.username}" if user.username else f"ID {user_id}"
-        return f"✅ Штраф успешно применен к пользователю *{username}*."
+        return f"✅ Штраф успешно применен к пользователю **{username}**."
     except Exception as e:
         logger.error(f"Failed to notify user {user_id} about the fine: {e}")
         await db_manager.update_balance(user_id, amount)
@@ -346,12 +352,12 @@ async def get_user_hold_info_logic(identifier: str) -> str:
     total_hold_amount = sum(review.amount for review in reviews_in_hold)
 
     response_text = f"⏳ Отзывы в холде для @{user.username} (ID: `{user_id}`)\n"
-    response_text += f"Общая сумма в холде: *{total_hold_amount}* ⭐\n\n"
+    response_text += f"Общая сумма в холде: **{total_hold_amount}** ⭐\n\n"
 
     for review in reviews_in_hold:
         hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
         response_text += (
-            f"🔹 *{review.amount} ⭐* ({review.platform})\n"
+            f"🔹 **{review.amount} ⭐** ({review.platform})\n"
             f"   - До: {hold_until_str} UTC\n"
             f"   - ID отзыва: `{review.id}`\n\n"
         )

@@ -7,6 +7,7 @@ from aiogram.types import Message
 import logging
 
 from states.user_states import UserState
+from keyboards import inline
 from logic.promo_logic import activate_promo_code_logic
 
 router = Router()
@@ -16,7 +17,10 @@ logger = logging.getLogger(__name__)
 async def promo_start(message: Message, state: FSMContext):
     """Начало процесса ввода промокода."""
     await state.set_state(UserState.PROMO_ENTER_CODE)
-    await message.answer("Пожалуйста, введите ваш промокод:")
+    await message.answer(
+        "Пожалуйста, введите ваш промокод:",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
 
 @router.message(UserState.PROMO_ENTER_CODE)
 async def promo_entered(message: Message, state: FSMContext):
@@ -33,4 +37,3 @@ async def promo_entered(message: Message, state: FSMContext):
     
     await message.answer(response_message)
     await state.clear()
-

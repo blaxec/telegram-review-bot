@@ -25,7 +25,8 @@ async def set_bot_commands(bot: Bot):
     """Устанавливает команды, которые будут видны в меню Telegram."""
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
-        BotCommand(command="stars", description="✨ Мой профиль и баланс")
+        BotCommand(command="stars", description="✨ Мой профиль и баланс"),
+        BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
     await bot.set_my_commands(user_commands)
 
@@ -35,6 +36,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны юзеру"),
         BotCommand(command="fine", description=" штраф"),
+        BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
     
     try:
