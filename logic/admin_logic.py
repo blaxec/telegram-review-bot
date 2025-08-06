@@ -13,6 +13,7 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from references import reference_manager
 from handlers.earning import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
+from logic.promo_logic import check_and_apply_promo_reward
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
         await bot.send_message(user_id, user_notification_text, reply_markup=inline.get_back_to_main_menu_keyboard())
         logger.info(f"Admin {admin_id} fined user {user_id} for {amount} stars. Reason: {reason}")
         username = f"@{user.username}" if user.username else f"ID {user_id}"
-        return f"✅ Штраф успешно применен к пользователю **{username}**."
+        return f"✅ Штраф успешно применен к пользователю *{username}*."
     except Exception as e:
         logger.error(f"Failed to notify user {user_id} about the fine: {e}")
         await db_manager.update_balance(user_id, amount)
@@ -252,20 +253,29 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     if not approved_review:
         return False, "❌ Ошибка: отзыв не найден или уже обработан."
     
+    user_id = approved_review.user_id
+    
+    # Начисление реферального вознаграждения
     if approved_review.platform == 'google':
-        user = await db_manager.get_user(approved_review.user_id)
+        user = await db_manager.get_user(user_id)
         if user and user.referrer_id:
             amount = 0.45
-            await db_manager.add_referral_earning(user_id=approved_review.user_id, amount=amount)
+            await db_manager.add_referral_earning(user_id=user_id, amount=amount)
             try:
                 await bot.send_message(user.referrer_id, f"🎉 Ваш реферал @{user.username} успешно написал отзыв! Вам начислено {amount} ⭐.")
             except Exception as e:
                 logger.error(f"Не удалось уведомить реферера {user.referrer_id}: {e}")
     
+    # Проверяем и начисляем награду за промокод
+    if approved_review.platform == 'google':
+        await check_and_apply_promo_reward(user_id, "google_review", bot)
+    elif approved_review.platform == 'yandex':
+        await check_and_apply_promo_reward(user_id, "yandex_review", bot)
+    
     try:
-        await bot.send_message(approved_review.user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
+        await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
     except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {approved_review.user_id} об одобрении: {e}")
+        logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении: {e}")
         
     return True, "✅ Отзыв одобрен!"
 
@@ -336,12 +346,12 @@ async def get_user_hold_info_logic(identifier: str) -> str:
     total_hold_amount = sum(review.amount for review in reviews_in_hold)
 
     response_text = f"⏳ Отзывы в холде для @{user.username} (ID: `{user_id}`)\n"
-    response_text += f"Общая сумма в холде: **{total_hold_amount}** ⭐\n\n"
+    response_text += f"Общая сумма в холде: *{total_hold_amount}* ⭐\n\n"
 
     for review in reviews_in_hold:
         hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
         response_text += (
-            f"🔹 **{review.amount} ⭐** ({review.platform})\n"
+            f"🔹 *{review.amount} ⭐* ({review.platform})\n"
             f"   - До: {hold_until_str} UTC\n"
             f"   - ID отзыва: `{review.id}`\n\n"
         )

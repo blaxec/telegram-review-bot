@@ -1,8 +1,7 @@
-# file: database/models.py
 
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger,
-                        DateTime, ForeignKey, Float, Enum, Boolean) # <-- ДОБАВЛЕН Boolean
+                        DateTime, ForeignKey, Float, Enum, Boolean)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -23,10 +22,9 @@ class User(Base):
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
     yandex_cooldown_until = Column(DateTime, nullable=True)
-    gmail_cooldown_until = Column(DateTime, nullable=True) # <-- ДОБАВЛЕНО
+    gmail_cooldown_until = Column(DateTime, nullable=True)
     blocked_until = Column(DateTime, nullable=True)
-
-    # ДОБАВЛЕНО: Новое поле для анонимности в статистике
+    
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
     
     reviews = relationship("Review", back_populates="user")
@@ -74,3 +72,31 @@ class WithdrawalRequest(Base):
     comment = Column(String, nullable=True)
 
     user = relationship("User")
+
+# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ ПРОМОКОДОВ ---
+
+class PromoCode(Base):
+    __tablename__ = 'promo_codes'
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, index=True, nullable=False)
+    condition = Column(Enum('no_condition', 'google_review', 'yandex_review', 'gmail_account', name='promo_condition_enum'), nullable=False)
+    reward = Column(Float, nullable=False)
+    total_uses = Column(Integer, nullable=False)
+    current_uses = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    activations = relationship("PromoActivation", back_populates="promo_code")
+
+
+class PromoActivation(Base):
+    __tablename__ = 'promo_activations'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    promo_code_id = Column(Integer, ForeignKey('promo_codes.id'), nullable=False)
+    status = Column(Enum('pending_condition', 'completed', name='promo_status_enum'), default='pending_condition', nullable=False)
+    activated_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    user = relationship("User")
+    promo_code = relationship("PromoCode", back_populates="activations")

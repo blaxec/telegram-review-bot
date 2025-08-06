@@ -1,4 +1,3 @@
-# file: handlers/gmail.py
 
 import datetime
 import logging
@@ -13,6 +12,7 @@ from keyboards import inline, reply
 from database import db_manager
 from config import FINAL_CHECK_ADMIN
 from handlers.earning import format_timedelta
+from logic.promo_logic import check_and_apply_promo_reward
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -68,10 +68,10 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
     device_model = message.text
     user_id = message.from_user.id
-    
+
     # Сохраняем модель устройства в состояние пользователя
     await state.update_data(device_model=device_model)
-    
+
     # Уведомление для пользователя
     await message.answer(
         f"Ваша модель устройства: **{device_model}**.\n"
@@ -128,7 +128,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
-    device_model = user_data.get('device_model', 'Не указана') # <-- Теперь модель будет извлечена корректно
+    device_model = user_data.get('device_model', 'Не указана')
     
     if not gmail_details:
         logger.error(f"Критическая ошибка для user {user_id}: gmail_details не найдены в state data.")
@@ -164,8 +164,6 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
-
-# --- ИЗМЕНЕНО: Добавлены хэндлеры для кнопки "Как создать аккаунт?" ---
 
 @router.callback_query(F.data == 'gmail_how_to_create', UserState.GMAIL_AWAITING_VERIFICATION)
 async def show_gmail_instructions(callback: CallbackQuery, state: FSMContext):
@@ -255,7 +253,6 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     )
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
-    # --- ИЗМЕНЕНО: Сохраняем данные без перезаписи состояния ---
     user_current_data = await user_state.get_data()
     user_current_data['gmail_details'] = {"name": name, "surname": surname, "password": password, "email": full_email}
 
@@ -283,6 +280,9 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
     user_id = int(callback.data.split(':')[1])
     await db_manager.update_balance(user_id, 5.0)
     await db_manager.set_platform_cooldown(user_id, "gmail", 24)
+    
+    await check_and_apply_promo_reward(user_id, "gmail_account", bot)
+    
     try:
         await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
     except Exception as e:

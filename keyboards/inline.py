@@ -1,3 +1,4 @@
+# file: keyboards/inline.py
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -180,7 +181,6 @@ def get_yandex_continue_writing_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='Продолжить', callback_data='yandex_continue_task')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- ИЗМЕНЕНО: Новая клавиатура для подтверждения "прогрева" Yandex ---
 def get_yandex_liking_confirmation_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='Выполнено', callback_data='yandex_confirm_liking_task')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -208,7 +208,6 @@ def get_gmail_verification_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- ИЗМЕНЕНО: Новая клавиатура для возврата из инструкций Gmail ---
 def get_gmail_back_to_verification_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='⬅️ Назад', callback_data='gmail_back_to_verification')]
@@ -293,3 +292,15 @@ def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПРОМОКОДОВ ---
+
+def get_promo_condition_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Без условия", callback_data="promo_cond:no_condition")
+    builder.button(text="Отзыв Google", callback_data="promo_cond:google_review")
+    builder.button(text="Отзыв Yandex", callback_data="promo_cond:yandex_review")
+    builder.button(text="Создание Gmail", callback_data="promo_cond:gmail_account")
+    builder.button(text="Отмена", callback_data="cancel_action")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()

@@ -7,7 +7,7 @@ from sqlalchemy import select, update, and_, delete, func, desc, case
 from sqlalchemy.orm import selectinload
 from typing import Union, List, Tuple
 
-from database.models import Base, User, Review, Link, WithdrawalRequest
+from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation
 from config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
@@ -394,3 +394,90 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
         
         result = await session.execute(query)
         return result.all()
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ ---
+
+async def create_promo_code(code: str, condition: str, reward: float, total_uses: int) -> Union[PromoCode, None]:
+    """Создает новый промокод в базе данных."""
+    async with async_session() as session:
+        async with session.begin():
+            # Проверяем, существует ли уже такой промокод
+            existing = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
+            if existing.scalar_one_or_none():
+                return None  # Промокод уже существует
+            
+            new_promo = PromoCode(
+                code=code,
+                condition=condition,
+                reward=reward,
+                total_uses=total_uses
+            )
+            session.add(new_promo)
+            await session.flush()
+            await session.refresh(new_promo)
+            return new_promo
+
+async def get_promo_by_code(code: str) -> Union[PromoCode, None]:
+    """Получает промокод по его названию."""
+    async with async_session() as session:
+        result = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
+        return result.scalar_one_or_none()
+
+async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[PromoActivation, None]:
+    """Проверяет, активировал ли пользователь уже этот промокод."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PromoActivation).where(
+                and_(
+                    PromoActivation.user_id == user_id,
+                    PromoActivation.promo_code_id == promo_code_id
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -> PromoActivation:
+    """Создает запись об активации промокода пользователем."""
+    async with async_session() as session:
+        async with session.begin():
+            new_activation = PromoActivation(
+                user_id=user_id,
+                promo_code_id=promo.id,
+                status=status
+            )
+            session.add(new_activation)
+            # Если статус 'completed', сразу увеличиваем счетчик использований
+            if status == 'completed':
+                promo.current_uses += 1
+            await session.flush()
+            await session.refresh(new_activation)
+            return new_activation
+
+async def find_pending_promo_activation(user_id: int, condition: str) -> Union[PromoActivation, None]:
+    """Находит ожидающую активацию промокода для пользователя по заданному условию."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PromoActivation)
+            .join(PromoCode)
+            .where(
+                and_(
+                    PromoActivation.user_id == user_id,
+                    PromoActivation.status == 'pending_condition',
+                    PromoCode.condition == condition
+                )
+            ).options(selectinload(PromoActivation.promo_code))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+async def complete_promo_activation(activation_id: int):
+    """Отмечает активацию как выполненную и увеличивает счетчик."""
+    async with async_session() as session:
+        async with session.begin():
+            activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
+            if not activation or activation.status == 'completed':
+                return False
+            
+            activation.status = 'completed'
+            activation.promo_code.current_uses += 1
+            return True

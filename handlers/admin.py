@@ -1,5 +1,6 @@
 # file: handlers/admin.py
 
+import logging
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -7,11 +8,10 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import logging
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, WITHDRAWAL_CHANNEL_ID
+from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import *
@@ -65,7 +65,6 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-# --- ИЗМЕНЕНО: Обработчик вызывает новую функцию из admin_logic ---
 @router.message(F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}))
 async def admin_add_ref_process(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -296,7 +295,7 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
 
 
-# --- ИЗМЕНЕНО: БЛОК УПРАВЛЕНИЯ ВЫВОДОМ СРЕДСТВ (теперь работает с каналом) ---
+# --- БЛОК: УПРАВЛЕНИЕ ВЫВОДОМ СРЕДСТВ ---
 
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
@@ -305,7 +304,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success:
         try:
-            new_text = callback.message.text + f"\n\n**[ ✅ ВЫПЛАЧЕНО @{callback.from_user.username} ]**"
+            new_text = callback.message.text + f"\n\n**[ ✅ ВЫПЛАЧЕНО Администратором ]**"
             await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -317,13 +316,13 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success:
         try:
-            new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО @{callback.from_user.username} ]**"
+            new_text = callback.message.text + f"\n\n**[ ❌ ОТКЛОНЕНО Администратором ]**"
             await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
 
 
-# --- БЛОК: ПРОЧИЕ КОМАНДЫ (/reset_cooldown, /fine, /viewhold) ---
+# --- БЛОК: ПРОЧИЕ КОМАНДЫ ---
 
 @router.message(Command("reset_cooldown"), F.from_user.id == ADMIN_ID_1)
 async def reset_cooldown_handler(message: Message):
@@ -383,4 +382,79 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     result_text = await apply_fine_to_user(data.get("target_user_id"), message.from_user.id, data.get("fine_amount"), message.text, bot)
     await message.answer(result_text)
+    await state.clear()
+
+# --- НОВЫЙ БЛОК: СОЗДАНИЕ ПРОМОКОДОВ ---
+
+@router.message(Command("create_promo"))
+async def create_promo_start(message: Message, state: FSMContext):
+    await state.set_state(AdminState.PROMO_CODE_NAME)
+    await message.answer("Введите название для нового промокода (например, `NEWYEAR2025`). Оно должно быть уникальным.",
+                         reply_markup=inline.get_cancel_inline_keyboard())
+
+@router.message(AdminState.PROMO_CODE_NAME)
+async def promo_name_entered(message: Message, state: FSMContext):
+    if not message.text: return
+    promo_name = message.text.strip().upper()
+    
+    existing_promo = await db_manager.get_promo_by_code(promo_name)
+    if existing_promo:
+        await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.",
+                             reply_markup=inline.get_cancel_inline_keyboard())
+        return
+        
+    await state.update_data(promo_name=promo_name)
+    await state.set_state(AdminState.PROMO_USES)
+    await message.answer("Отлично. Теперь введите количество активаций (сколько раз пользователи смогут использовать этот промокод).",
+                         reply_markup=inline.get_cancel_inline_keyboard())
+
+@router.message(AdminState.PROMO_USES)
+async def promo_uses_entered(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
+        return
+    
+    uses = int(message.text)
+    if uses <= 0:
+        await message.answer("❌ Количество активаций должно быть больше нуля.", reply_markup=inline.get_cancel_inline_keyboard())
+        return
+
+    await state.update_data(promo_uses=uses)
+    await state.set_state(AdminState.PROMO_REWARD)
+    await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, `25`).",
+                         reply_markup=inline.get_cancel_inline_keyboard())
+
+@router.message(AdminState.PROMO_REWARD)
+async def promo_reward_entered(message: Message, state: FSMContext):
+    try:
+        reward = float(message.text)
+        if reward <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например `10.5`).",
+                             reply_markup=inline.get_cancel_inline_keyboard())
+        return
+    
+    await state.update_data(promo_reward=reward)
+    await state.set_state(AdminState.PROMO_CONDITION)
+    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.",
+                         reply_markup=inline.get_promo_condition_keyboard())
+
+@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION)
+async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
+    condition = callback.data.split(":")[1]
+    data = await state.get_data()
+    
+    new_promo = await db_manager.create_promo_code(
+        code=data['promo_name'],
+        total_uses=data['promo_uses'],
+        reward=data['promo_reward'],
+        condition=condition
+    )
+    
+    if new_promo:
+        await callback.message.edit_text(f"✅ Промокод `{new_promo.code}` успешно создан!")
+    else:
+        await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
+        
     await state.clear()
