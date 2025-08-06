@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_ID_1
+from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
 from handlers import routers_list
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -39,10 +39,13 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
     
-    try:
-        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID_1))
-    except Exception as e:
-        logger.error(f"Failed to set admin commands for {ADMIN_ID_1}: {e}")
+    # ИСПРАВЛЕНО: Устанавливаем команды для КАЖДОГО админа из списка ADMIN_IDS
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+            logger.info(f"Admin commands have been set for admin ID: {admin_id}")
+        except Exception as e:
+            logger.error(f"Failed to set admin commands for {admin_id}: {e}")
 
 async def handle_telegram_bad_request(event: ErrorEvent):
     """

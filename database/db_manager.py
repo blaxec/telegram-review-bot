@@ -28,26 +28,19 @@ async def init_db():
 async def ensure_user_exists(user_id: int, username: str, referrer_id: int = None):
     async with async_session() as session:
         async with session.begin():
-            # Сначала проверяем, существует ли текущий пользователь
             user = await session.get(User, user_id)
             if not user:
-                # Пользователь не существует, поэтому мы его создаем.
-                # Теперь, перед использованием, проверим referrer_id.
                 valid_referrer_id = None
                 if referrer_id:
-                    # Проверяем, существует ли реферер в базе данных
                     referrer_user = await session.get(User, referrer_id)
                     if referrer_user:
-                        # Реферер существует, мы можем безопасно использовать его ID
                         valid_referrer_id = referrer_id
                     else:
-                        # Реферер НЕ существует в БД. Логируем это и продолжаем без реферала.
                         logger.warning(
                             f"User {user_id} tried to register with non-existent referrer_id {referrer_id}. "
                             f"Proceeding without referral."
                         )
                 
-                # Создаем нового пользователя с проверенным ID реферера (или None)
                 new_user = User(id=user_id, username=username, referrer_id=valid_referrer_id)
                 session.add(new_user)
 
@@ -65,7 +58,6 @@ async def get_user_balance(user_id: int) -> tuple[float, float]:
         return (0.0, 0.0)
 
 async def toggle_anonymity(user_id: int) -> bool:
-    """Переключает статус анонимности пользователя и возвращает новое значение."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -83,7 +75,6 @@ async def update_balance(user_id: int, amount: float):
                 user.balance += amount
 
 async def update_username(user_id: int, new_username: str):
-    """Обновляет юзернейм пользователя в базе данных."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -91,7 +82,6 @@ async def update_username(user_id: int, new_username: str):
                 user.username = new_username
 
 async def add_referral_earning(user_id: int, amount: float):
-    """Начисляет вознаграждение рефереру пользователя."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -267,16 +257,25 @@ async def db_add_reference(url: str, platform: str) -> bool:
             session.add(new_link)
         return True
 
+# ИСПРАВЛЕНО: Улучшена логика получения доступной ссылки
 async def db_get_available_reference(platform: str) -> Union[Link, None]:
+    """Находит и блокирует одну доступную ссылку для использования."""
     async with async_session() as session:
         async with session.begin():
-            query = select(Link).where(
+            # Находим ID одной доступной ссылки
+            stmt = select(Link.id).where(
                 Link.platform == platform,
                 Link.status == 'available'
-            ).limit(1).with_for_update()
-            result = await session.execute(query)
-            link = result.scalar_one_or_none()
-            return link
+            ).limit(1).with_for_update(skip_locked=True)
+            
+            result = await session.execute(stmt)
+            link_id = result.scalar_one_or_none()
+            
+            if link_id:
+                # Теперь получаем полный объект по найденному ID
+                link_obj = await session.get(Link, link_id)
+                return link_obj
+            return None
 
 async def db_update_link_status(link_id: int, status: str, user_id: int | None = None):
     async with async_session() as session:
@@ -369,7 +368,6 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             return True
 
 async def get_top_10_users() -> List[Tuple[str, float, int]]:
-    """Возвращает топ-10 пользователей по балансу с количеством их отзывов."""
     async with async_session() as session:
         subquery = (
             select(Review.user_id, func.count(Review.id).label("review_count"))
@@ -395,7 +393,7 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
         result = await session.execute(query)
         return result.all()
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ ---
+# --- ИСПРАВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ ---
 
 async def create_promo_code(code: str, condition: str, reward: float, total_uses: int) -> Union[PromoCode, None]:
     """Создает новый промокод в базе данных."""
@@ -470,7 +468,7 @@ async def find_pending_promo_activation(user_id: int, condition: str) -> Union[P
         )
         return result.scalar_one_or_none()
 
-async def complete_promo_activation(activation_id: int):
+async def complete_promo_activation(activation_id: int) -> bool:
     """Отмечает активацию как выполненную и увеличивает счетчик."""
     async with async_session() as session:
         async with session.begin():
