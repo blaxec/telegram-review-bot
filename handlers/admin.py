@@ -1,5 +1,3 @@
-# file: handlers/admin.py
-
 import logging
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
@@ -65,16 +63,30 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
+# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
 @router.message(F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}))
 async def admin_add_ref_process(message: Message, state: FSMContext):
-    data = await state.get_data()
-    platform = data.get("platform")
+    """Обрабатывает добавление ссылок с отловом ошибок."""
+    try:
+        data = await state.get_data()
+        platform = data.get("platform")
+        
+        if not platform:
+            await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
+            await state.clear()
+            return
+
+        result_text = await process_add_links_logic(message.text, platform)
+        
+        await message.answer(result_text)
+        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     
-    result_text = await process_add_links_logic(message.text, platform)
-    
-    await message.answer(result_text)
-    await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    await state.clear()
+    except Exception as e:
+        logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
+        await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
+    finally:
+        await state.clear()
+# --- КОНЕЦ ИЗМЕНЕННОЙ ФУНКЦИИ ---
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -384,7 +396,7 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     await message.answer(result_text)
     await state.clear()
 
-# --- НОВЫЙ БЛОК: СОЗДАНИЕ ПРОМОКОДОВ ---
+# --- БЛОК: СОЗДАНИЕ ПРОМОКОДОВ ---
 
 @router.message(Command("create_promo"))
 async def create_promo_start(message: Message, state: FSMContext):
