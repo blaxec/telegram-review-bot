@@ -1,3 +1,5 @@
+# file: handlers/admin.py
+
 import logging
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
@@ -63,8 +65,13 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
-@router.message(F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}))
+# --- ИСПРАВЛЕННЫЙ ХЕНДЛЕР ---
+# Добавлен фильтр F.text, чтобы он реагировал ТОЛЬКО на текстовые сообщения.
+# Это и есть причина ошибки "is not handled".
+@router.message(
+    F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
+    F.text  # Этот фильтр решает проблему
+)
 async def admin_add_ref_process(message: Message, state: FSMContext):
     """Обрабатывает добавление ссылок с отловом ошибок."""
     try:
@@ -74,6 +81,11 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
         if not platform:
             await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
             await state.clear()
+            return
+
+        # Убеждаемся, что текст сообщения не пустой
+        if not message.text:
+            await message.answer("❌ Пожалуйста, отправьте ссылки в виде текста.")
             return
 
         result_text = await process_add_links_logic(message.text, platform)
@@ -86,7 +98,7 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
         await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
     finally:
         await state.clear()
-# --- КОНЕЦ ИЗМЕНЕННОЙ ФУНКЦИИ ---
+# --- КОНЕЦ ИСПРАВЛЕННОГО ХЕНДЛЕРА ---
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_stats(callback: CallbackQuery):
