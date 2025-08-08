@@ -22,12 +22,9 @@ logger = logging.getLogger(__name__)
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
-# Фильтры для всех обработчиков в этом роутере
-router.message.filter(F.from_user.id.in_(ADMINS))
-router.callback_query.filter(F.from_user.id.in_(ADMINS))
+# --- ВАЖНО: Мы убрали общие фильтры с роутера и добавили их в каждый хендлер индивидуально ---
 
-
-@router.message(Command("addstars"))
+@router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
 async def admin_add_stars(message: Message):
     await db_manager.update_balance(message.from_user.id, 999.0)
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
@@ -65,12 +62,11 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-# --- ИСПРАВЛЕННЫЙ ХЕНДЛЕР ---
-# Добавлен фильтр F.text, чтобы он реагировал ТОЛЬКО на текстовые сообщения.
-# Это и есть причина ошибки "is not handled".
+# --- ИСПРАВЛЕННЫЙ ХЕНДЛЕР С ИНДИВИДУАЛЬНЫМИ ФИЛЬТРАМИ ---
 @router.message(
+    F.from_user.id == ADMIN_ID_1, # Явный фильтр на админа
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
-    F.text  # Этот фильтр решает проблему
+    F.text
 )
 async def admin_add_ref_process(message: Message, state: FSMContext):
     """Обрабатывает добавление ссылок с отловом ошибок."""
@@ -83,7 +79,6 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Убеждаемся, что текст сообщения не пустой
         if not message.text:
             await message.answer("❌ Пожалуйста, отправьте ссылки в виде текста.")
             return
@@ -98,7 +93,6 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
         await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
     finally:
         await state.clear()
-# --- КОНЕЦ ИСПРАВЛЕННОГО ХЕНДЛЕРА ---
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -153,7 +147,7 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
 
 # --- БЛОК: МОДЕРАЦИЯ ---
 
-@router.callback_query(F.data.startswith('admin_verify:'))
+@router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot, dp: Dispatcher):
     try: await callback.answer()
     except: pass
@@ -206,7 +200,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 # --- БЛОК: ОБРАБОТКА ТЕКСТОВЫХ ВВОДОВ ОТ АДМИНА ---
 
-@router.message(AdminState.PROVIDE_WARN_REASON)
+@router.message(AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     if not message.text: return
     admin_data = await state.get_data()
@@ -218,7 +212,7 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot, 
     await message.answer(response)
     await state.clear()
 
-@router.message(AdminState.PROVIDE_REJECTION_REASON)
+@router.message(AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
 async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     if not message.text: return
     admin_data = await state.get_data()
@@ -245,8 +239,8 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT)
-@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT)
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     if not message.text: return
     data = await state.get_data()
@@ -265,7 +259,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
 
 # --- БЛОК: МОДЕРАЦИЯ ОТЗЫВОВ (ФИНАЛЬНАЯ И В ХОЛДЕ) ---
 
-@router.callback_query(F.data.startswith('admin_final_approve:'))
+@router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     review_id = int(callback.data.split(':')[1])
     success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
@@ -273,7 +267,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     if success:
         await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ В ХОЛДЕ (@{callback.from_user.username})", reply_markup=None)
 
-@router.callback_query(F.data.startswith('admin_final_reject:'))
+@router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
 async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     review_id = int(callback.data.split(':')[1])
     success, message_text = await reject_initial_review_logic(review_id, bot, scheduler)
@@ -281,7 +275,7 @@ async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: Async
     if success:
         await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})", reply_markup=None)
 
-@router.message(Command("reviewhold"))
+@router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
 async def admin_review_hold(message: Message, bot: Bot):
     await message.answer("⏳ Загружаю отзывы в холде...")
     hold_reviews = await db_manager.get_all_hold_reviews()
@@ -300,7 +294,7 @@ async def admin_review_hold(message: Message, bot: Bot):
         except Exception as e:
             await message.answer(f"Ошибка обработки отзыва {review.id}: {e}\n\n{info_text}", reply_markup=inline.get_admin_hold_review_keyboard(review.id))
 
-@router.callback_query(F.data.startswith('admin_hold_approve:'))
+@router.callback_query(F.data.startswith('admin_hold_approve:'), F.from_user.id.in_(ADMINS))
 async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
     review_id = int(callback.data.split(':')[1])
     success, message_text = await approve_hold_review_logic(review_id, bot)
@@ -309,7 +303,7 @@ async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
         new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН (@{callback.from_user.username})"
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
 
-@router.callback_query(F.data.startswith('admin_hold_reject:'))
+@router.callback_query(F.data.startswith('admin_hold_reject:'), F.from_user.id.in_(ADMINS))
 async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
     review_id = int(callback.data.split(':')[1])
     success, message_text = await reject_hold_review_logic(review_id, bot)
@@ -321,7 +315,7 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
 
 # --- БЛОК: УПРАВЛЕНИЕ ВЫВОДОМ СРЕДСТВ ---
 
-@router.callback_query(F.data.startswith("admin_withdraw_approve:"))
+@router.callback_query(F.data.startswith("admin_withdraw_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     request_id = int(callback.data.split(":")[1])
     success, message_text, _ = await approve_withdrawal_logic(request_id, bot)
@@ -333,7 +327,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
 
-@router.callback_query(F.data.startswith("admin_withdraw_reject:"))
+@router.callback_query(F.data.startswith("admin_withdraw_reject:"), F.from_user.id.in_(ADMINS))
 async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     request_id = int(callback.data.split(":")[1])
     success, message_text, _ = await reject_withdrawal_logic(request_id, bot)
@@ -362,7 +356,7 @@ async def reset_cooldown_handler(message: Message):
         await message.answer(f"✅ Кулдауны для **{username}** сброшены.")
     else: await message.answer(f"❌ Ошибка при сбросе кулдаунов для `{args[1]}`.")
 
-@router.message(Command("viewhold"))
+@router.message(Command("viewhold"), F.from_user.id.in_(ADMINS))
 async def viewhold_handler(message: Message, bot: Bot):
     args = message.text.split()
     if len(args) < 2:
@@ -372,12 +366,12 @@ async def viewhold_handler(message: Message, bot: Bot):
     response_text = await get_user_hold_info_logic(identifier)
     await message.answer(response_text)
 
-@router.message(Command("fine"))
+@router.message(Command("fine"), F.from_user.id.in_(ADMINS))
 async def fine_user_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_USER_ID)
     await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_USER_ID)
+@router.message(AdminState.FINE_USER_ID, F.from_user.id.in_(ADMINS))
 async def fine_user_get_id(message: Message, state: FSMContext):
     if not message.text: return
     user_id = await db_manager.find_user_by_identifier(message.text)
@@ -387,7 +381,7 @@ async def fine_user_get_id(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_AMOUNT)
     await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_AMOUNT)
+@router.message(AdminState.FINE_AMOUNT, F.from_user.id.in_(ADMINS))
 async def fine_user_get_amount(message: Message, state: FSMContext):
     if not message.text: return
     try:
@@ -399,7 +393,7 @@ async def fine_user_get_amount(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_REASON)
     await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_REASON)
+@router.message(AdminState.FINE_REASON, F.from_user.id.in_(ADMINS))
 async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Введите причину.", reply_markup=inline.get_cancel_inline_keyboard()); return
@@ -410,13 +404,13 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
 
 # --- БЛОК: СОЗДАНИЕ ПРОМОКОДОВ ---
 
-@router.message(Command("create_promo"))
+@router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
 async def create_promo_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_CODE_NAME)
     await message.answer("Введите название для нового промокода (например, `NEWYEAR2025`). Оно должно быть уникальным.",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_CODE_NAME)
+@router.message(AdminState.PROMO_CODE_NAME, F.from_user.id.in_(ADMINS))
 async def promo_name_entered(message: Message, state: FSMContext):
     if not message.text: return
     promo_name = message.text.strip().upper()
@@ -432,7 +426,7 @@ async def promo_name_entered(message: Message, state: FSMContext):
     await message.answer("Отлично. Теперь введите количество активаций (сколько раз пользователи смогут использовать этот промокод).",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_USES)
+@router.message(AdminState.PROMO_USES, F.from_user.id.in_(ADMINS))
 async def promo_uses_entered(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
@@ -448,7 +442,7 @@ async def promo_uses_entered(message: Message, state: FSMContext):
     await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, `25`).",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_REWARD)
+@router.message(AdminState.PROMO_REWARD, F.from_user.id.in_(ADMINS))
 async def promo_reward_entered(message: Message, state: FSMContext):
     try:
         reward = float(message.text)
@@ -464,7 +458,7 @@ async def promo_reward_entered(message: Message, state: FSMContext):
     await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.",
                          reply_markup=inline.get_promo_condition_keyboard())
 
-@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION)
+@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
     condition = callback.data.split(":")[1]
     data = await state.get_data()
