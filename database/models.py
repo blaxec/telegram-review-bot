@@ -1,4 +1,3 @@
-
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger,
                         DateTime, ForeignKey, Float, Enum, Boolean)
@@ -28,6 +27,8 @@ class User(Base):
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
     
     reviews = relationship("Review", back_populates="user")
+    promo_activations = relationship("PromoActivation", back_populates="user")
+    support_tickets = relationship("SupportTicket", back_populates="user")
 
 
 class Review(Base):
@@ -73,7 +74,7 @@ class WithdrawalRequest(Base):
 
     user = relationship("User")
 
-# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ ПРОМОКОДОВ ---
+# --- Таблицы для промокодов ---
 
 class PromoCode(Base):
     __tablename__ = 'promo_codes'
@@ -95,8 +96,30 @@ class PromoActivation(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
     promo_code_id = Column(Integer, ForeignKey('promo_codes.id'), nullable=False)
-    status = Column(Enum('pending_condition', 'completed', name='promo_status_enum'), default='pending_condition', nullable=False)
+    status = Column(Enum('pending_condition', 'completed', 'cancelled', name='promo_status_enum'), default='pending_condition', nullable=False)
     activated_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    user = relationship("User")
+    user = relationship("User", back_populates="promo_activations")
     promo_code = relationship("PromoCode", back_populates="activations")
+
+# --- НОВАЯ ТАБЛИЦА ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
+
+class SupportTicket(Base):
+    __tablename__ = 'support_tickets'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    username = Column(String, nullable=True)
+    question = Column(String, nullable=False)
+    
+    # Сохраняем ID сообщений у обоих админов, чтобы их можно было отредактировать
+    admin_message_id_1 = Column(BigInteger, nullable=True)
+    admin_message_id_2 = Column(BigInteger, nullable=True)
+    
+    status = Column(Enum('open', 'claimed', 'closed', name='ticket_status_enum'), default='open', nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Кто из админов ответил
+    admin_id = Column(BigInteger, nullable=True)
+
+    user = relationship("User", back_populates="support_tickets")

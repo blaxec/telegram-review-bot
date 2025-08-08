@@ -49,8 +49,12 @@ class UserState(StatesGroup):
     GMAIL_ENTER_DEVICE_MODEL = State()
     GMAIL_ENTER_ANOTHER_DEVICE_MODEL = State()
 
-    # --- НОВОЕ: Состояние для ввода промокода ---
+    # Состояния для промокодов
     PROMO_ENTER_CODE = State()
+    PROMO_AWAITING_CHOICE = State() # Ожидание выбора (начать/отказаться)
+
+    # Состояния для поддержки
+    SUPPORT_AWAITING_QUESTION = State()
 
 
 class AdminState(StatesGroup):
@@ -74,8 +78,11 @@ class AdminState(StatesGroup):
     FINE_AMOUNT = State()
     FINE_REASON = State()
     
-    # --- НОВОЕ: Состояния для создания промокода ---
+    # Состояния для создания промокода
     PROMO_CODE_NAME = State()
     PROMO_CONDITION = State()
     PROMO_REWARD = State()
     PROMO_USES = State()
+    
+    # Состояния для поддержки
+    SUPPORT_AWAITING_ANSWER = State()

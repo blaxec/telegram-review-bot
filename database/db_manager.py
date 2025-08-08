@@ -7,7 +7,7 @@ from sqlalchemy import select, update, and_, delete, func, desc, case
 from sqlalchemy.orm import selectinload
 from typing import Union, List, Tuple
 
-from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation
+from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation, SupportTicket
 from config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
@@ -257,12 +257,9 @@ async def db_add_reference(url: str, platform: str) -> bool:
             session.add(new_link)
         return True
 
-# ИСПРАВЛЕНО: Улучшена логика получения доступной ссылки
 async def db_get_available_reference(platform: str) -> Union[Link, None]:
-    """Находит и блокирует одну доступную ссылку для использования."""
     async with async_session() as session:
         async with session.begin():
-            # Находим ID одной доступной ссылки
             stmt = select(Link.id).where(
                 Link.platform == platform,
                 Link.status == 'available'
@@ -272,7 +269,6 @@ async def db_get_available_reference(platform: str) -> Union[Link, None]:
             link_id = result.scalar_one_or_none()
             
             if link_id:
-                # Теперь получаем полный объект по найденному ID
                 link_obj = await session.get(Link, link_id)
                 return link_obj
             return None
@@ -393,16 +389,14 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
         result = await session.execute(query)
         return result.all()
 
-# --- ИСПРАВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ ---
+# --- Функции для работы с промокодами ---
 
 async def create_promo_code(code: str, condition: str, reward: float, total_uses: int) -> Union[PromoCode, None]:
-    """Создает новый промокод в базе данных."""
     async with async_session() as session:
         async with session.begin():
-            # Проверяем, существует ли уже такой промокод
             existing = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
             if existing.scalar_one_or_none():
-                return None  # Промокод уже существует
+                return None
             
             new_promo = PromoCode(
                 code=code,
@@ -416,13 +410,11 @@ async def create_promo_code(code: str, condition: str, reward: float, total_uses
             return new_promo
 
 async def get_promo_by_code(code: str) -> Union[PromoCode, None]:
-    """Получает промокод по его названию."""
     async with async_session() as session:
         result = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
         return result.scalar_one_or_none()
 
 async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[PromoActivation, None]:
-    """Проверяет, активировал ли пользователь уже этот промокод."""
     async with async_session() as session:
         result = await session.execute(
             select(PromoActivation).where(
@@ -434,8 +426,24 @@ async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[P
         )
         return result.scalar_one_or_none()
 
+async def find_pending_promo_activation(user_id: int, condition: str = '%') -> Union[PromoActivation, None]:
+    async with async_session() as session:
+        query = (
+            select(PromoActivation)
+            .join(PromoCode)
+            .where(
+                and_(
+                    PromoActivation.user_id == user_id,
+                    PromoActivation.status == 'pending_condition',
+                    PromoCode.condition.like(condition)
+                )
+            ).options(selectinload(PromoActivation.promo_code))
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+        
 async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -> PromoActivation:
-    """Создает запись об активации промокода пользователем."""
     async with async_session() as session:
         async with session.begin():
             new_activation = PromoActivation(
@@ -444,38 +452,70 @@ async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -
                 status=status
             )
             session.add(new_activation)
-            # Если статус 'completed', сразу увеличиваем счетчик использований
             if status == 'completed':
                 promo.current_uses += 1
             await session.flush()
             await session.refresh(new_activation)
             return new_activation
 
-async def find_pending_promo_activation(user_id: int, condition: str) -> Union[PromoActivation, None]:
-    """Находит ожидающую активацию промокода для пользователя по заданному условию."""
+async def delete_promo_activation(activation_id: int) -> bool:
     async with async_session() as session:
-        result = await session.execute(
-            select(PromoActivation)
-            .join(PromoCode)
-            .where(
-                and_(
-                    PromoActivation.user_id == user_id,
-                    PromoActivation.status == 'pending_condition',
-                    PromoCode.condition == condition
-                )
-            ).options(selectinload(PromoActivation.promo_code))
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
+        async with session.begin():
+            activation = await session.get(PromoActivation, activation_id)
+            if not activation:
+                return False
+            await session.delete(activation)
+            return True
 
 async def complete_promo_activation(activation_id: int) -> bool:
-    """Отмечает активацию как выполненную и увеличивает счетчик."""
     async with async_session() as session:
         async with session.begin():
             activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
-            if not activation or activation.status == 'completed':
+            if not activation or activation.status != 'pending_condition':
                 return False
             
             activation.status = 'completed'
             activation.promo_code.current_uses += 1
+            return True
+
+# --- Функции для системы поддержки ---
+
+async def create_support_ticket(user_id: int, username: str, question: str, admin_message_ids: dict) -> SupportTicket:
+    async with async_session() as session:
+        async with session.begin():
+            new_ticket = SupportTicket(
+                user_id=user_id,
+                username=username,
+                question=question,
+                admin_message_id_1=admin_message_ids.get(0), # Предполагаем, что ID админов идут по порядку
+                admin_message_id_2=admin_message_ids.get(1)
+            )
+            session.add(new_ticket)
+            await session.flush()
+            await session.refresh(new_ticket)
+            return new_ticket
+
+async def get_support_ticket(ticket_id: int) -> Union[SupportTicket, None]:
+    async with async_session() as session:
+        return await session.get(SupportTicket, ticket_id)
+
+async def claim_support_ticket(ticket_id: int, admin_id: int) -> Union[SupportTicket, None]:
+    async with async_session() as session:
+        async with session.begin():
+            ticket = await session.get(SupportTicket, ticket_id)
+            if not ticket or ticket.status != 'open':
+                return None
+            
+            ticket.status = 'claimed'
+            ticket.admin_id = admin_id
+            return ticket
+
+async def close_support_ticket(ticket_id: int) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            ticket = await session.get(SupportTicket, ticket_id)
+            if not ticket:
+                return False
+            
+            ticket.status = 'closed'
             return True

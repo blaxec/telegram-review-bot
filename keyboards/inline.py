@@ -23,7 +23,7 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Вывод звезд', callback_data='profile_withdraw')],
         [InlineKeyboardButton(text='Передача звезд', callback_data='profile_transfer')],
-        [InlineKeyboardButton(text='Реф. ссылка', callback_data='profile_referral')],
+        [InlineKeyboardButton(text='Реферальная ссылка', callback_data='profile_referral')],
         [InlineKeyboardButton(text='Холд', callback_data='profile_hold')],
         [InlineKeyboardButton(text='Назад', callback_data='go_main_menu')]
     ]
@@ -32,7 +32,6 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 # --- Раздел "Статистика" ---
 
 def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
-    # Текст кнопки меняется в зависимости от текущего статуса
     anonymity_text = "🙈 Стать анонимным" if not is_anonymous else "🐵 Показать в топе"
     buttons = [
         [InlineKeyboardButton(text=anonymity_text, callback_data='profile_toggle_anonymity')],
@@ -82,7 +81,7 @@ def get_withdraw_amount_keyboard() -> InlineKeyboardMarkup:
 def get_withdraw_recipient_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Себе', callback_data='withdraw_recipient_self')],
-        [InlineKeyboardButton(text='Указать юзера', callback_data='withdraw_recipient_other')],
+        [InlineKeyboardButton(text='Указать пользователя', callback_data='withdraw_recipient_other')],
         [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -210,7 +209,7 @@ def get_gmail_verification_keyboard() -> InlineKeyboardMarkup:
 
 def get_gmail_back_to_verification_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text='⬅️ Назад', callback_data='gmail_back_to_verification')]
+        [InlineKeyboardButton(text='⬅️ Назад к заданию', callback_data='gmail_back_to_verification')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
     
@@ -220,7 +219,7 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"admin_verify:reject:{context}:{user_id}")
-    builder.button(text="⚠️ Дать пред.", callback_data=f"admin_verify:warn:{context}:{user_id}")
+    builder.button(text="⚠️ Выдать предупреждение", callback_data=f"admin_verify:warn:{context}:{user_id}")
     builder.adjust(2, 1)
     return builder.as_markup()
 
@@ -258,7 +257,7 @@ def get_admin_gmail_data_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='✅ Отправить данные', callback_data=f'admin_gmail_send_data:{user_id}')
     builder.button(text='❌ Отклонить', callback_data=f'admin_verify:reject:gmail_data_request:{user_id}')
-    builder.button(text='⚠️ Дать пред.', callback_data=f'admin_verify:warn:gmail_data_request:{user_id}')
+    builder.button(text='⚠️ Выдать предупреждение', callback_data=f'admin_verify:warn:gmail_data_request:{user_id}')
     builder.adjust(2,1)
     return builder.as_markup()
 
@@ -293,7 +292,14 @@ def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- НОВАЯ КЛАВИАТУРА ДЛЯ ПРОМОКОДОВ ---
+# --- Клавиатуры для поддержки ---
+def get_support_admin_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    buttons = [[
+        InlineKeyboardButton(text='✍️ Ответить на вопрос', callback_data=f'support_answer:{ticket_id}')
+    ]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- Клавиатуры для промокодов ---
 
 def get_promo_condition_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -304,3 +310,11 @@ def get_promo_condition_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Отмена", callback_data="cancel_action")
     builder.adjust(2, 2, 1)
     return builder.as_markup()
+
+def get_promo_conditional_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура с выбором: начать или отказаться от задания для промокода."""
+    buttons = [
+        [InlineKeyboardButton(text="✅ Начать задание", callback_data="promo_start_task")],
+        [InlineKeyboardButton(text="❌ Отказаться", callback_data="promo_decline_task")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

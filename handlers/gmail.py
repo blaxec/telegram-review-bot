@@ -70,10 +70,8 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
     device_model = message.text
     user_id = message.from_user.id
 
-    # Сохраняем модель устройства в состояние пользователя
     await state.update_data(device_model=device_model)
 
-    # Уведомление для пользователя
     await message.answer(
         f"Ваша модель устройства: **{device_model}**.\n"
         "Запомните ее, администратор может ее уточнить.\n\n"
@@ -81,7 +79,6 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
     )
     await state.set_state(UserState.GMAIL_AWAITING_DATA)
 
-    # Уведомление для админа
     context = "gmail_device_model"
     admin_notification = (
         f"❗️ Пользователь @{message.from_user.username} (ID: `{user_id}`) "
@@ -253,7 +250,6 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     )
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
-    # ИСПРАВЛЕНО: Теперь мы не перезаписываем состояние пользователя, а обновляем его, сохраняя device_model
     user_current_data = await user_state.get_data()
     user_current_data['gmail_details'] = {"name": name, "surname": surname, "password": password, "email": full_email}
 
