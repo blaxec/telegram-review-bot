@@ -18,11 +18,10 @@ from utils.antiflood import AntiFloodMiddleware
 from utils.blocking import BlockingMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
-# Устанавливаем более надежную конфигурацию, чтобы логи точно отображались в Docker
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    force=True,  # Гарантирует, что эта конфигурация будет применена
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -105,7 +104,9 @@ async def main():
 
         dp.update.outer_middleware(UsernameUpdaterMiddleware())
         dp.message.middleware(AntiFloodMiddleware())
-        dp.update.middleware(BlockingMiddleware())
+        
+        # --- ИСПРАВЛЕНИЕ: МЫ ПОЛНОСТЬЮ ОТКЛЮЧАЕМ ПРОБЛЕМНЫЙ MIDDLEWARE ---
+        # dp.update.middleware(BlockingMiddleware())
         
         dp.include_routers(*routers_list)
 
