@@ -426,22 +426,35 @@ async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[P
         )
         return result.scalar_one_or_none()
 
+# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
 async def find_pending_promo_activation(user_id: int, condition: str = '%') -> Union[PromoActivation, None]:
+    """
+    Находит ожидающую активацию промокода для пользователя.
+    Если condition не указан (или '%'), ищет любую ожидающую активацию.
+    """
     async with async_session() as session:
-        query = (
-            select(PromoActivation)
-            .join(PromoCode)
-            .where(
-                and_(
-                    PromoActivation.user_id == user_id,
-                    PromoActivation.status == 'pending_condition',
-                    PromoCode.condition.like(condition)
-                )
-            ).options(selectinload(PromoActivation.promo_code))
-            .limit(1)
+        # Базовый запрос, который используется всегда
+        base_query = select(PromoActivation).join(PromoCode).where(
+            and_(
+                PromoActivation.user_id == user_id,
+                PromoActivation.status == 'pending_condition'
+            )
         )
-        result = await session.execute(query)
+
+        # Если нам нужно найти активацию для КОНКРЕТНОГО условия, добавляем фильтр
+        # Используем оператор равенства (==), а НЕ LIKE
+        if condition != '%':
+            query = base_query.where(PromoCode.condition == condition)
+        else:
+            # Если ищем любую активацию, дополнительный фильтр не нужен
+            query = base_query
+
+        # Выполняем запрос
+        result = await session.execute(
+            query.options(selectinload(PromoActivation.promo_code)).limit(1)
+        )
         return result.scalar_one_or_none()
+# --- КОНЕЦ ИЗМЕНЕННОЙ ФУНКЦИИ ---
         
 async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -> PromoActivation:
     async with async_session() as session:
@@ -487,7 +500,7 @@ async def create_support_ticket(user_id: int, username: str, question: str, admi
                 user_id=user_id,
                 username=username,
                 question=question,
-                admin_message_id_1=admin_message_ids.get(0), # Предполагаем, что ID админов идут по порядку
+                admin_message_id_1=admin_message_ids.get(0),
                 admin_message_id_2=admin_message_ids.get(1)
             )
             session.add(new_ticket)
