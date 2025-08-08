@@ -32,12 +32,12 @@ async def admin_add_stars(message: Message):
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
-@router.message(Command("admin_refs"), F.from_user.id == ADMIN_ID_1)
+@router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
-@router.callback_query(F.data == "back_to_refs_menu", F.from_user.id == ADMIN_ID_1)
+@router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
     message_ids_to_delete = data.get("link_message_ids", [])
@@ -50,7 +50,7 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
     try: await callback.answer()
     except: pass
 
-@router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id == ADMIN_ID_1)
+@router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     try: await callback.answer()
     except TelegramBadRequest: pass
@@ -64,7 +64,7 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
 
 # --- ИСПРАВЛЕННЫЙ ХЕНДЛЕР С ИНДИВИДУАЛЬНЫМИ ФИЛЬТРАМИ ---
 @router.message(
-    F.from_user.id == ADMIN_ID_1, # Явный фильтр на админа
+    F.from_user.id.in_(ADMINS), # ИСПРАВЛЕНО: Проверка всех админов
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
     F.text
 )
@@ -94,7 +94,7 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
     finally:
         await state.clear()
 
-@router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id == ADMIN_ID_1)
+@router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
     try: await callback.answer("Загружаю...", show_alert=False)
     except: pass
@@ -106,7 +106,7 @@ async def admin_view_refs_stats(callback: CallbackQuery):
             f"🟢 Доступно: {stats['available']}\n🟡 В работе: {stats['assigned']}\n🔴 Использовано: {stats['used']}")
     await callback.message.edit_text(text, reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-@router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id == ADMIN_ID_1)
+@router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
     try: await callback.answer("Загружаю список...")
     except: pass
@@ -125,7 +125,7 @@ async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
         message_ids.append(msg.message_id)
     await state.update_data(link_message_ids=message_ids)
 
-@router.callback_query(F.data.startswith("admin_refs:delete:"), F.from_user.id == ADMIN_ID_1)
+@router.callback_query(F.data.startswith("admin_refs:delete:"), F.from_user.id.in_(ADMINS))
 async def admin_delete_ref(callback: CallbackQuery, bot: Bot, dp: Dispatcher):
     link_id = int(callback.data.split(':')[2])
     success, assigned_user_id = await reference_manager.delete_reference(link_id)
@@ -342,7 +342,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
 
 # --- БЛОК: ПРОЧИЕ КОМАНДЫ ---
 
-@router.message(Command("reset_cooldown"), F.from_user.id == ADMIN_ID_1)
+@router.message(Command("reset_cooldown"), F.from_user.id.in_(ADMINS))
 async def reset_cooldown_handler(message: Message):
     args = message.text.split()
     if len(args) < 2:
