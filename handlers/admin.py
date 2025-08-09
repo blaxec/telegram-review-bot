@@ -62,9 +62,8 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-# --- ИСПРАВЛЕННЫЙ ХЕНДЛЕР С ИНДИВИДУАЛЬНЫМИ ФИЛЬТРАМИ ---
 @router.message(
-    F.from_user.id.in_(ADMINS), # ИСПРАВЛЕНО: Проверка всех админов
+    F.from_user.id.in_(ADMINS),
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
     F.text
 )
