@@ -3,9 +3,13 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties # ИСПРАВЛЕНИЕ: Добавлен необходимый импорт
-from config import BOT_TOKEN, ADMIN_IDS
-from handlers import start, admin  # <-- Импортируем ТОЛЬКО start и admin
+from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio.client import Redis
+
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_HOST, REDIS_PORT
+from database import db_manager
+from handlers import start, admin
 
 # Настраиваем логирование
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
@@ -16,20 +20,30 @@ async def main():
         logger.critical("!!! КРИТИЧЕСКАЯ ОШИБКА: Токен не найден в .env файле.")
         return
 
-    # Создаем базовые объекты без лишних зависимостей
+    # --- ВОЗВРАЩАЕМ ПОДКЛЮЧЕНИЕ К ХРАНИЛИЩАМ ---
+    try:
+        await db_manager.init_db()
+        logger.info("Успешное подключение к базе данных PostgreSQL.")
+    except Exception as e:
+        logger.critical(f"!!! ОШИБКА ПОДКЛЮЧЕНИЯ К POSTGRESQL: {e}")
+        return
+        
+    redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT)
+    storage = RedisStorage(redis=redis_client)
+    logger.info("Успешное подключение к Redis.")
+    # -----------------------------------------------
+
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-    dp = Dispatcher()
+    dp = Dispatcher(storage=storage) # <-- Передаем хранилище в диспетчер
 
     logger.info("="*50)
-    logger.info("ЗАПУСК В РЕЖИМЕ ИЗОЛЯЦИИ. РЕГИСТРИРУЕМ ТОЛЬКО start И admin РОУТЕРЫ.")
+    logger.info("ЗАПУСК. ЭТАП 1: FSM и База данных активны.")
     logger.info(f"Загруженные ID администраторов: {ADMIN_IDS}")
     logger.info("="*50)
 
-    # Регистрируем только два самых важных роутера
     dp.include_router(start.router)
     dp.include_router(admin.router)
     
-    # Удаляем старые обновления и запускаем polling
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Бот запущен и готов к работе...")
     await dp.start_polling(bot)
