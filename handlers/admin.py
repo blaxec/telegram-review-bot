@@ -1,3 +1,4 @@
+# file: handlers/admin.py
 
 import logging
 from aiogram import Router, F, Bot, Dispatcher
@@ -61,12 +62,13 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
 @router.message(
     F.from_user.id.in_(ADMINS),
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
-    F.text
+    F.text.as_("text")  # Заменяем F.text на F.text.as_("text")
 )
-async def admin_add_ref_process(message: Message, state: FSMContext):
+async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
     """Обрабатывает добавление ссылок с отловом ошибок."""
     try:
         data = await state.get_data()
@@ -77,11 +79,8 @@ async def admin_add_ref_process(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        if not message.text:
-            await message.answer("❌ Пожалуйста, отправьте ссылки в виде текста.")
-            return
-
-        result_text = await process_add_links_logic(message.text, platform)
+        # Используем переменную text, полученную из фильтра
+        result_text = await process_add_links_logic(text, platform)
         
         await message.answer(result_text)
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
