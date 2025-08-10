@@ -12,7 +12,8 @@ from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
-from handlers import routers_list
+# ИСПРАВЛЕНИЕ: Импортируем каждый модуль с роутером отдельно
+from handlers import start, profile, support, earning, admin, gmail, stats, promo
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -90,15 +91,21 @@ async def main():
     scheduler = AsyncIOScheduler(timezone="UTC")
     
     # --- Создание и конфигурация Dispatcher ---
-    # ИСПРАВЛЕНИЕ: Передаем зависимости в диспетчер ПРАВИЛЬНЫМ способом
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
     # Регистрация middleware
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
     dp.message.middleware(AntiFloodMiddleware())
     
-    # Регистрация роутеров
-    dp.include_routers(*routers_list)
+    # ИСПРАВЛЕНИЕ: Регистрируем каждый роутер напрямую и по отдельности
+    dp.include_router(start.router)
+    dp.include_router(profile.router)
+    dp.include_router(support.router)
+    dp.include_router(earning.router)
+    dp.include_router(promo.router)
+    dp.include_router(admin.router)
+    dp.include_router(gmail.router)
+    dp.include_router(stats.router)
     
     # Регистрация обработчика ошибок
     dp.errors.register(handle_telegram_bad_request)
@@ -110,7 +117,6 @@ async def main():
         await set_bot_commands(bot)
         logger.info("Bot is running and ready to process updates...")
         
-        # ИСПРАВЛЕНИЕ: Используем стандартный, стабильный вызов start_polling
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
     finally:
