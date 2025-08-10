@@ -93,7 +93,7 @@ async def main():
 
     # Регистрация middleware
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    dp.message.middleware(AntiFloodMiddleware())
+    #dp.message.middleware(AntiFloodMiddleware())
     
     # Регистрируем каждый роутер напрямую и по отдельности
     dp.include_router(start.router)
