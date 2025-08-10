@@ -1,4 +1,3 @@
-# file: handlers/admin.py
 
 import logging
 from aiogram import Router, F, Bot, Dispatcher
@@ -238,7 +237,6 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-# ИСПРАВЛЕНИЕ: Объединяем два обработчика в один с правильным фильтром
 @router.message(
     F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}),
     F.from_user.id == TEXT_ADMIN
@@ -478,3 +476,17 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
         
     await state.clear()
+
+
+# <<< НОВЫЕ ДИАГНОСТИЧЕСКИЕ ОБРАБОТЧИКИ >>>
+
+@router.message(Command("testadmin"), F.from_user.id.in_(ADMINS))
+async def admin_test_handler(message: Message):
+    """Простейший обработчик для проверки, регистрируется ли роутер."""
+    await message.answer("✅ Тест пройден! Роутер администратора работает.")
+
+@router.message(Command("whatstate"))
+async def get_current_state(message: Message, state: FSMContext):
+    """Команда для получения текущего состояния FSM."""
+    current_state = await state.get_state()
+    await message.answer(f"Ваше текущее состояние: `{current_state}`")
