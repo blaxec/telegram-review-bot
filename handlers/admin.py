@@ -62,7 +62,6 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-# ИСПРАВЛЕНИЕ: Убираем диагностический код и возвращаем рабочий обработчик
 @router.message(
     F.from_user.id.in_(ADMINS),
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
@@ -82,7 +81,6 @@ async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
         result_text = await process_add_links_logic(text, platform)
         
         await message.answer(result_text)
-        # Возвращаем в главное меню админки ссылок
         await state.clear()
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     
@@ -90,7 +88,6 @@ async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
         logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
         await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
         await state.clear()
-
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -476,17 +473,3 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
         
     await state.clear()
-
-
-# <<< ОБЫЧНЫЕ ДИАГНОСТИЧЕСКИЕ ОБРАБОТЧИКИ (можно оставить или удалить) >>>
-
-@router.message(Command("testadmin"), F.from_user.id.in_(ADMINS))
-async def admin_test_handler(message: Message):
-    """Простейший обработчик для проверки, регистрируется ли роутер."""
-    await message.answer("✅ Тест пройден! Роутер администратора работает.")
-
-@router.message(Command("whatstate"))
-async def get_current_state(message: Message, state: FSMContext):
-    """Команда для получения текущего состояния FSM."""
-    current_state = await state.get_state()
-    await message.answer(f"Ваше текущее состояние: `{current_state}`")

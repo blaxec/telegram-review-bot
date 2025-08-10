@@ -15,7 +15,8 @@ from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
 from handlers import routers_list
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
-from utils.blocking import BlockingMiddleware
+# ИСПРАВЛЕНИЕ: Полностью удаляем импорт проблемного middleware
+# from utils.blocking import BlockingMiddleware 
 from utils.username_updater import UsernameUpdaterMiddleware
 
 logging.basicConfig(
@@ -105,7 +106,7 @@ async def main():
         dp.update.outer_middleware(UsernameUpdaterMiddleware())
         dp.message.middleware(AntiFloodMiddleware())
         
-        # --- ИСПРАВЛЕНИЕ: МЫ ПОЛНОСТЬЮ ОТКЛЮЧАЕМ ПРОБЛЕМНЫЙ MIDDLEWARE ---
+        # ИСПРАВЛЕНИЕ: Убеждаемся, что строка с BlockingMiddleware полностью удалена
         # dp.update.middleware(BlockingMiddleware())
         
         dp.include_routers(*routers_list)
