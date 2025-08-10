@@ -62,31 +62,7 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
         await state.update_data(platform=platform)
         await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
-
-# <<< --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА --- >>>
-# Этот обработчик максимально простой. Он сработает на ЛЮБОЕ сообщение,
-# если бот находится в одном из состояний ожидания ссылок.
-@router.message(
-    F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE})
-)
-async def catch_all_in_add_ref_state(message: Message, state: FSMContext):
-    logger.info("--- [ДИАГНОСТИКА] Обработчик-перехватчик сработал! ---")
-    # Выводим в лог всю информацию о сообщении в удобном формате
-    logger.info(f"ПОЛНЫЙ ОБЪЕКТ СООБЩЕНИЯ:\n{message.model_dump_json(indent=2)}")
-    
-    await message.answer(
-        "🤖 **Диагностический режим** 🤖\n\n"
-        "Я перехватил ваше сообщение, но еще не обработал его.\n"
-        "Это значит, что основная проблема найдена!\n\n"
-        "**Пожалуйста, скопируйте ВЕСЬ текст из лога в терминале (начиная со строки `--- [ДИАГНОСТИКА] ...`) и отправьте его мне.**"
-    )
-    # Важно: не сбрасываем состояние, чтобы можно было продолжить отладку
-    # await state.clear() 
-# <<< --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА --- >>>
-
-
-# Этот обработчик пока не будет работать, так как его перехватит тот, что выше.
-# Это сделано намеренно для диагностики.
+# ИСПРАВЛЕНИЕ: Убираем диагностический код и возвращаем рабочий обработчик
 @router.message(
     F.from_user.id.in_(ADMINS),
     F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
@@ -106,13 +82,15 @@ async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
         result_text = await process_add_links_logic(text, platform)
         
         await message.answer(result_text)
+        # Возвращаем в главное меню админки ссылок
+        await state.clear()
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     
     except Exception as e:
         logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
         await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
-    finally:
         await state.clear()
+
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -500,7 +478,7 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-# <<< НОВЫЕ ДИАГНОСТИЧЕСКИЕ ОБРАБОТЧИКИ >>>
+# <<< ОБЫЧНЫЕ ДИАГНОСТИЧЕСКИЕ ОБРАБОТЧИКИ (можно оставить или удалить) >>>
 
 @router.message(Command("testadmin"), F.from_user.id.in_(ADMINS))
 async def admin_test_handler(message: Message):

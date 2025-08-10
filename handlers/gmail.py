@@ -12,7 +12,8 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from config import FINAL_CHECK_ADMIN
-from handlers.earning import format_timedelta
+# ИСПРАВЛЕНИЕ: Импортируем из нового файла, а не из earning.py
+from logic.user_notifications import format_timedelta
 from logic.promo_logic import check_and_apply_promo_reward
 
 router = Router()
