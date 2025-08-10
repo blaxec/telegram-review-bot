@@ -238,8 +238,11 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
-@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+# ИСПРАВЛЕНИЕ: Объединяем два обработчика в один с правильным фильтром
+@router.message(
+    F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}),
+    F.from_user.id == TEXT_ADMIN
+)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, dp: Dispatcher):
     if not message.text: return
     data = await state.get_data()
