@@ -26,11 +26,12 @@ async def start_handler(message: Message, state: FSMContext):
             if ref_id != message.from_user.id:
                 referrer_id = ref_id
 
-    await db_manager.ensure_user_exists(
-        user_id=message.from_user.id,
-        username=message.from_user.username,
-        referrer_id=referrer_id
-    )
+    # Временно отключаем работу с БД для чистоты теста
+    # await db_manager.ensure_user_exists(
+    #     user_id=message.from_user.id,
+    #     username=message.from_user.username,
+    #     referrer_id=referrer_id
+    # )
 
     welcome_text = (
         "Привет! Я помогу тебе зарабатывать звезды за твои отзывы.\n\n"
