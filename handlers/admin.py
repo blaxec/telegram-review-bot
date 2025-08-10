@@ -14,7 +14,22 @@ from keyboards import inline, reply
 from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
-from logic.admin_logic import *
+# ИСПРАВЛЕНИЕ: Убран 'звездочный' импорт, добавлены явные импорты
+from logic.admin_logic import (
+    process_add_links_logic,
+    process_rejection_reason_logic,
+    process_warning_reason_logic,
+    send_review_text_to_user_logic,
+    approve_review_to_hold_logic,
+    reject_initial_review_logic,
+    get_user_hold_info_logic,
+    approve_hold_review_logic,
+    reject_hold_review_logic,
+    approve_withdrawal_logic,
+    reject_withdrawal_logic,
+    apply_fine_to_user
+)
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -80,6 +95,7 @@ async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
         
         await message.answer(result_text)
         await state.clear()
+        # Возвращаем в меню ссылок, а не в главное меню
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     
     except Exception as e:
@@ -93,10 +109,13 @@ async def admin_view_refs_stats(callback: CallbackQuery):
     except: pass
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
-    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used']}
+    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
     text = (f"📊 Статистика по **{platform}**:\n\n"
             f"Всего: {len(all_links)}\n"
-            f"🟢 Доступно: {stats['available']}\n🟡 В работе: {stats['assigned']}\n🔴 Использовано: {stats['used']}")
+            f"🟢 Доступно: {stats.get('available', 0)}\n"
+            f"🟡 В работе: {stats.get('assigned', 0)}\n"
+            f"🔴 Использовано: {stats.get('used', 0)}\n"
+            f"⚫️ Просрочено: {stats.get('expired', 0)}")
     await callback.message.edit_text(text, reply_markup=inline.get_back_to_admin_refs_keyboard())
 
 @router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id.in_(ADMINS))

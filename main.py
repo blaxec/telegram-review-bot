@@ -1,4 +1,3 @@
-# file: main.py
 
 import asyncio
 import logging
@@ -12,7 +11,6 @@ from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
-# ИСПРАВЛЕНИЕ: Импортируем каждый модуль с роутером отдельно
 from handlers import start, profile, support, earning, admin, gmail, stats, promo
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -97,7 +95,7 @@ async def main():
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
     dp.message.middleware(AntiFloodMiddleware())
     
-    # ИСПРАВЛЕНИЕ: Регистрируем каждый роутер напрямую и по отдельности
+    # Регистрируем каждый роутер напрямую и по отдельности
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)

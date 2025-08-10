@@ -13,7 +13,6 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
-# ИСПРАВЛЕНИЕ: Импортируем из нового, чистого файла, разрывая цикл
 from logic.user_notifications import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
 
 logger = logging.getLogger(__name__)
