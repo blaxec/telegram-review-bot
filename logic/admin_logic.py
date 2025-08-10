@@ -12,14 +12,14 @@ from database import db_manager
 from states.user_states import UserState
 from keyboards import inline, reply
 from references import reference_manager
-# ИСПРАВЛЕНИЕ: Убираем импорт отсюда, чтобы разорвать цикл
-# from handlers.earning import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
 from logic.promo_logic import check_and_apply_promo_reward
+# ИСПРАВЛЕНИЕ: Импортируем из нового, чистого файла, разрывая цикл
+from logic.user_notifications import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
 
 logger = logging.getLogger(__name__)
 
 
-# --- ИСПРАВЛЕННАЯ ЛОГИКА: Добавление ссылок ---
+# --- ЛОГИКА: Добавление ссылок ---
 async def process_add_links_logic(links_text: str, platform: str) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
@@ -110,9 +110,6 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
 
 async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: AsyncIOScheduler, user_id: int, link_id: int, platform: str, review_text: str):
     """Логика отправки текста отзыва пользователю и планирования задач."""
-    # ИСПРАВЛЕНИЕ: Переносим импорт внутрь функции
-    from handlers.earning import send_confirmation_button, handle_task_timeout
-    
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     user_info = await bot.get_chat(user_id)
     link = await db_manager.db_get_link_by_id(link_id)
@@ -204,9 +201,6 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
 
 async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler) -> tuple[bool, str]:
     """Логика для одобрения начального отзыва и перевода его в холд."""
-    # ИСПРАВЛЕНИЕ: Переносим импорт внутрь функции
-    from handlers.earning import notify_cooldown_expired
-
     review = await db_manager.get_review_by_id(review_id)
     if not review or review.status != 'pending':
         return False, "Ошибка: отзыв не найден или уже обработан."
@@ -237,9 +231,6 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
 
 async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler) -> tuple[bool, str]:
     """Логика для отклонения начального отзыва."""
-    # ИСПРАВЛЕНИЕ: Переносим импорт внутрь функции
-    from handlers.earning import notify_cooldown_expired
-
     review = await db_manager.get_review_by_id(review_id)
     if not review:
         return False, "Ошибка: отзыв не найден."
