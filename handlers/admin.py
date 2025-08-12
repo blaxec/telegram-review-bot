@@ -35,55 +35,69 @@ logger = logging.getLogger(__name__)
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
-# --- ОБХОДНОЙ ПУТЬ ВМЕСТО FSM ДЛЯ ДОБАВЛЕНИЯ ССЫЛОК ---
-# Это временное хранилище в памяти. Оно сбрасывается при перезапуске бота,
-# но гарантированно работает для диагностики.
-temp_admin_tasks = {} # Словарь для хранения {user_id: platform}
+@router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
+async def admin_add_stars(message: Message):
+    await db_manager.update_balance(message.from_user.id, 999.0)
+    await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (ВОССТАНОВЛЕННАЯ ЛОГИКА FSM) ---
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
-    await state.clear() # На всякий случай чистим старые состояния FSM
-    temp_admin_tasks.pop(message.from_user.id, None) # Чистим наше временное хранилище
+    await state.clear()
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await state.clear()
-    temp_admin_tasks.pop(callback.from_user.id, None)
-    
     data = await state.get_data()
     message_ids_to_delete = data.get("link_message_ids", [])
     message_ids_to_delete.append(callback.message.message_id)
     for msg_id in set(message_ids_to_delete):
         try: await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
         except TelegramBadRequest: pass
-    
+    await state.clear()
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     try: await callback.answer()
     except: pass
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    """
-    НЕ ИСПОЛЬЗУЕТ FSM. Сохраняет задачу в словарь в памяти.
-    """
-    await state.clear() # Гарантируем чистоту FSM
+    try: await callback.answer()
+    except TelegramBadRequest: pass
     platform = callback.data.split(':')[2]
-    
-    # Сохраняем задачу во временное хранилище
-    temp_admin_tasks[callback.from_user.id] = platform
-    
-    logger.debug(f"ADMIN_ADD_REF_START: User {callback.from_user.id} chose '{platform}'. Saved to temp storage.")
-    
-    await callback.message.edit_text(
-        f"Выбрана платформа: **{platform}**.\n\n"
-        "Теперь отправьте ссылки следующим сообщением.",
-        reply_markup=inline.get_back_to_admin_refs_keyboard()
-    )
-    await callback.answer()
+    state_map = {"google_maps": AdminState.ADD_GOOGLE_REFERENCE, "yandex_maps": AdminState.ADD_YANDEX_REFERENCE}
+    current_state = state_map.get(platform)
+    if current_state:
+        await state.set_state(current_state)
+        await state.update_data(platform=platform)
+        await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
 
+@router.message(
+    F.from_user.id.in_(ADMINS),
+    F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
+    F.text.as_("text")
+)
+async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
+    """Обрабатывает добавление ссылок с отловом ошибок."""
+    try:
+        data = await state.get_data()
+        platform = data.get("platform")
+        
+        if not platform:
+            await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
+            await state.clear()
+            return
+        
+        result_text = await process_add_links_logic(text, platform)
+        
+        await message.answer(result_text)
+        await state.clear()
+        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+    
+    except Exception as e:
+        logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
+        await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
+        await state.clear()
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -472,31 +486,3 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
         
     await state.clear()
-
-# --- УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДЛЯ ДОБАВЛЕНИЯ ССЫЛОК БЕЗ FSM ---
-@router.message(F.text, F.from_user.id.in_(ADMINS))
-async def admin_text_message_handler(message: Message, state: FSMContext):
-    """
-    Этот обработчик перехватывает ВСЕ текстовые сообщения от админа,
-    у которых нет более специфичного обработчика (например, по состоянию FSM).
-    Он проверяет, есть ли для админа активная задача в нашем временном хранилище.
-    """
-    user_id = message.from_user.id
-    
-    # Проверяем, есть ли задача для этого админа
-    if user_id in temp_admin_tasks:
-        platform = temp_admin_tasks.pop(user_id) # Получаем платформу и удаляем задачу
-        logger.debug(f"TEXT_HANDLER: Found temp task for user {user_id}, platform '{platform}'. Processing...")
-        
-        try:
-            result_text = await process_add_links_logic(message.text, platform)
-            await message.answer(result_text)
-            await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-        except Exception as e:
-            logger.exception(f"Критическая ошибка при обработке ссылок (без FSM) для пользователя {user_id}: {e}")
-            await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
-    else:
-        # Если задачи нет, то сообщение не обрабатывается.
-        # Это нужно, чтобы другие хэндлеры (например, для ввода причин) могли сработать.
-        # Мы НЕ отвечаем пользователю, чтобы не мешать другим функциям.
-        logger.debug(f"TEXT_HANDLER: No temp task for user {user_id}. Passing message to other handlers.")
