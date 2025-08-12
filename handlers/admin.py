@@ -499,4 +499,4 @@ async def admin_text_message_handler(message: Message, state: FSMContext):
         # Если задачи нет, то сообщение не обрабатывается.
         # Это нужно, чтобы другие хэндлеры (например, для ввода причин) могли сработать.
         # Мы НЕ отвечаем пользователю, чтобы не мешать другим функциям.
-        logger.debug(f"TEXT_HANDLER: No temp task for user {user_id}. Passing message to other handlers.")вв
+        logger.debug(f"TEXT_HANDLER: No temp task for user {user_id}. Passing message to other handlers.")
