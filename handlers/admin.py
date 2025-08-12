@@ -35,80 +35,54 @@ logger = logging.getLogger(__name__)
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
-@router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
-async def admin_add_stars(message: Message):
-    await db_manager.update_balance(message.from_user.id, 999.0)
-    await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
+# --- ОБХОДНОЙ ПУТЬ ВМЕСТО FSM ДЛЯ ДОБАВЛЕНИЯ ССЫЛОК ---
+# Это временное хранилище в памяти. Оно сбрасывается при перезапуске бота,
+# но гарантированно работает для диагностики.
+temp_admin_tasks = {} # Словарь для хранения {user_id: platform}
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
-    await state.clear()
+    await state.clear() # На всякий случай чистим старые состояния FSM
+    temp_admin_tasks.pop(message.from_user.id, None) # Чистим наше временное хранилище
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await state.clear()
+    temp_admin_tasks.pop(callback.from_user.id, None)
+    
     data = await state.get_data()
     message_ids_to_delete = data.get("link_message_ids", [])
     message_ids_to_delete.append(callback.message.message_id)
     for msg_id in set(message_ids_to_delete):
         try: await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
         except TelegramBadRequest: pass
-    await state.clear()
+    
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     try: await callback.answer()
     except: pass
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    try: await callback.answer()
-    except TelegramBadRequest: pass
+    """
+    НЕ ИСПОЛЬЗУЕТ FSM. Сохраняет задачу в словарь в памяти.
+    """
+    await state.clear() # Гарантируем чистоту FSM
     platform = callback.data.split(':')[2]
-    state_map = {"google_maps": AdminState.ADD_GOOGLE_REFERENCE, "yandex_maps": AdminState.ADD_YANDEX_REFERENCE}
-    current_state = state_map.get(platform)
-    if current_state:
-        await state.set_state(current_state)
-        await state.update_data(platform=platform)
-        await callback.message.edit_text(f"Отправьте ссылки для **{platform}**, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
-
-@router.message(
-    F.from_user.id.in_(ADMINS),
-    F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
-    F.text.as_("text")
-)
-async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
-    """Обрабатывает добавление ссылок с отловом ошибок."""
-    # --- ДИАГНОСТИЧЕСКИЕ МАЯЧКИ ---
-    print("\n" + "="*50)
-    print("!!! МАЯЧОК 1: Вход в обработчик admin_add_ref_process !!!")
-    try:
-        data = await state.get_data()
-        platform = data.get("platform")
-        print(f"!!! МАЯЧОК 2: Состояние FSM получено. Платформа: '{platform}'")
-        
-        if not platform:
-            print("!!! ОШИБКА: Платформа не найдена в состоянии FSM.")
-            await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
-            await state.clear()
-            return
-        
-        # Вызываем логику, которая тоже будет выводить отладочную информацию
-        result_text = await process_add_links_logic(text, platform)
-        
-        print("!!! МАЯЧОК 5: Логика добавления ссылок отработала. Результат:")
-        print(result_text)
-        
-        await message.answer(result_text)
-        await state.clear()
-        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     
-    except Exception as e:
-        logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
-        await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
-        await state.clear()
-    finally:
-        print("="*50 + "\n")
+    # Сохраняем задачу во временное хранилище
+    temp_admin_tasks[callback.from_user.id] = platform
+    
+    logger.debug(f"ADMIN_ADD_REF_START: User {callback.from_user.id} chose '{platform}'. Saved to temp storage.")
+    
+    await callback.message.edit_text(
+        f"Выбрана платформа: **{platform}**.\n\n"
+        "Теперь отправьте ссылки следующим сообщением.",
+        reply_markup=inline.get_back_to_admin_refs_keyboard()
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
@@ -220,7 +194,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 # --- БЛОК: ОБРАБОТКА ТЕКСТОВЫХ ВВОДОВ ОТ АДМИНА ---
 
-@router.message(AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     if not message.text: return
     admin_data = await state.get_data()
@@ -232,7 +206,7 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot, 
     await message.answer(response)
     await state.clear()
 
-@router.message(AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
 async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot, dp: Dispatcher):
     if not message.text: return
     admin_data = await state.get_data()
@@ -393,7 +367,7 @@ async def fine_user_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_USER_ID)
     await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_USER_ID, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.FINE_USER_ID, F.from_user.id.in_(ADMINS))
 async def fine_user_get_id(message: Message, state: FSMContext):
     if not message.text: return
     user_id = await db_manager.find_user_by_identifier(message.text)
@@ -403,7 +377,7 @@ async def fine_user_get_id(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_AMOUNT)
     await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_AMOUNT, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.FINE_AMOUNT, F.from_user.id.in_(ADMINS))
 async def fine_user_get_amount(message: Message, state: FSMContext):
     if not message.text: return
     try:
@@ -415,7 +389,7 @@ async def fine_user_get_amount(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_REASON)
     await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.FINE_REASON, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.FINE_REASON, F.from_user.id.in_(ADMINS))
 async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Введите причину.", reply_markup=inline.get_cancel_inline_keyboard()); return
@@ -432,7 +406,7 @@ async def create_promo_start(message: Message, state: FSMContext):
     await message.answer("Введите название для нового промокода (например, `NEWYEAR2025`). Оно должно быть уникальным.",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_CODE_NAME, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.PROMO_CODE_NAME, F.from_user.id.in_(ADMINS))
 async def promo_name_entered(message: Message, state: FSMContext):
     if not message.text: return
     promo_name = message.text.strip().upper()
@@ -448,7 +422,7 @@ async def promo_name_entered(message: Message, state: FSMContext):
     await message.answer("Отлично. Теперь введите количество активаций (сколько раз пользователи смогут использовать этот промокод).",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_USES, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.PROMO_USES, F.from_user.id.in_(ADMINS))
 async def promo_uses_entered(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
@@ -464,7 +438,7 @@ async def promo_uses_entered(message: Message, state: FSMContext):
     await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, `25`).",
                          reply_markup=inline.get_cancel_inline_keyboard())
 
-@router.message(AdminState.PROMO_REWARD, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.PROMO_REWARD, F.from_user.id.in_(ADMINS))
 async def promo_reward_entered(message: Message, state: FSMContext):
     try:
         reward = float(message.text)
@@ -480,7 +454,7 @@ async def promo_reward_entered(message: Message, state: FSMContext):
     await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.",
                          reply_markup=inline.get_promo_condition_keyboard())
 
-@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
+@router.callback_query(F.data.startswith("promo_cond:"), F.state == AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
     condition = callback.data.split(":")[1]
     data = await state.get_data()
@@ -498,3 +472,31 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
         
     await state.clear()
+
+# --- УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДЛЯ ДОБАВЛЕНИЯ ССЫЛОК БЕЗ FSM ---
+@router.message(F.text, F.from_user.id.in_(ADMINS))
+async def admin_text_message_handler(message: Message, state: FSMContext):
+    """
+    Этот обработчик перехватывает ВСЕ текстовые сообщения от админа,
+    у которых нет более специфичного обработчика (например, по состоянию FSM).
+    Он проверяет, есть ли для админа активная задача в нашем временном хранилище.
+    """
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли задача для этого админа
+    if user_id in temp_admin_tasks:
+        platform = temp_admin_tasks.pop(user_id) # Получаем платформу и удаляем задачу
+        logger.debug(f"TEXT_HANDLER: Found temp task for user {user_id}, platform '{platform}'. Processing...")
+        
+        try:
+            result_text = await process_add_links_logic(message.text, platform)
+            await message.answer(result_text)
+            await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+        except Exception as e:
+            logger.exception(f"Критическая ошибка при обработке ссылок (без FSM) для пользователя {user_id}: {e}")
+            await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
+    else:
+        # Если задачи нет, то сообщение не обрабатывается.
+        # Это нужно, чтобы другие хэндлеры (например, для ввода причин) могли сработать.
+        # Мы НЕ отвечаем пользователю, чтобы не мешать другим функциям.
+        logger.debug(f"TEXT_HANDLER: No temp task for user {user_id}. Passing message to other handlers.")вв
