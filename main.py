@@ -68,9 +68,9 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
-    # --- ВРЕМЕННО ОТКЛЮЧАЕМ MIDDLEWARE ---
+    # --- ПОСЛЕДНИЙ ШАГ: ОТКЛЮЧАЕМ MIDDLEWARE ---
     # dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    # ------------------------------------
+    # ---------------------------------------------
 
     dp.include_router(start.router)
     dp.include_router(profile.router)
