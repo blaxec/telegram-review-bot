@@ -5,22 +5,19 @@ import logging
 import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage # <-- ИМПОРТИРУЕМ НОВОЕ ХРАНИЛИЩЕ
+from aiogram.fsm.storage.memory import MemoryStorage 
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# Убираем импорты Redis, они больше не нужны
-# from redis.asyncio.client import Redis
-
-from config import BOT_TOKEN, ADMIN_IDS # Убираем REDIS_HOST, REDIS_PORT
+from config import BOT_TOKEN, ADMIN_IDS
 from handlers import start, profile, support, earning, admin, gmail, stats, promo
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
 logging.basicConfig(
-    level=logging.INFO, # Возвращаем INFO, т.к. DEBUG больше не нужен
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     force=True,
 )
@@ -63,18 +60,17 @@ async def main():
 
     await db_manager.init_db()
     
-    # --- ЗАМЕНЯЕМ REDISSTORAGE НА MEMORYSTORAGE ---
     storage = MemoryStorage()
     logger.info("Using MemoryStorage for FSM.")
-    # -----------------------------------------------
     
     scheduler = AsyncIOScheduler(timezone="UTC")
     
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
-    dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    # dp.message.middleware(AntiFloodMiddleware())
+    # --- ВРЕМЕННО ОТКЛЮЧАЕМ MIDDLEWARE ---
+    # dp.update.outer_middleware(UsernameUpdaterMiddleware())
+    # ------------------------------------
 
     dp.include_router(start.router)
     dp.include_router(profile.router)
