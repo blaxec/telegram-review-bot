@@ -24,26 +24,27 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
     """
+    # --- ДИАГНОСТИЧЕСКИЕ МАЯЧКИ ---
+    print(f"!!! МАЯЧОК 3: Вход в логику process_add_links_logic. Платформа: '{platform}'")
     if not links_text:
         return "Текст со ссылками не может быть пустым."
 
-    links = links_text.split('\n')
+    links = links_text.strip().split('\n')
     added_count, skipped_count = 0, 0
 
     for link in links:
         stripped_link = link.strip()
-        # Проверяем, что строка не пустая и действительно похожа на ссылку
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
+            print(f"!!! МАЯЧОК 4: Пытаюсь добавить ссылку: '{stripped_link}'")
             try:
-                if await reference_manager.add_reference(stripped_link, platform):
+                if await db_manager.db_add_reference(stripped_link, platform):
                     added_count += 1
                 else:
-                    # Эта ветка может сработать, если в будущем будет добавлена проверка на уникальность
                     skipped_count += 1
             except Exception as e:
-                logger.error(f"Failed to add link '{stripped_link}' to DB: {e}")
+                logger.error(f"!!! ОШИБКА ДОБАВЛЕНИЯ В БД: Не удалось добавить ссылку '{stripped_link}': {e}")
                 skipped_count += 1
-        elif stripped_link: # Если строка не пустая, но не ссылка
+        elif stripped_link:
             logger.warning(f"Skipping invalid link format: {stripped_link}")
             skipped_count += 1
 
