@@ -40,7 +40,7 @@ async def admin_add_stars(message: Message):
     await db_manager.update_balance(message.from_user.id, 999.0)
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (ВОССТАНОВЛЕННАЯ ЛОГИКА FSM) ---
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (СТАНДАРТНАЯ ЛОГИКА FSM) ---
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):

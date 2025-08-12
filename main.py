@@ -5,21 +5,22 @@ import logging
 import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.fsm.storage.memory import MemoryStorage # <-- ИМПОРТИРУЕМ НОВОЕ ХРАНИЛИЩЕ
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
-from redis.asyncio.client import Redis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, REDIS_HOST, REDIS_PORT, ADMIN_IDS
+# Убираем импорты Redis, они больше не нужны
+# from redis.asyncio.client import Redis
+
+from config import BOT_TOKEN, ADMIN_IDS # Убираем REDIS_HOST, REDIS_PORT
 from handlers import start, profile, support, earning, admin, gmail, stats, promo
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
-# ИЗМЕНЕНИЕ: Уровень логирования установлен на DEBUG для максимальной детализации
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO, # Возвращаем INFO, т.к. DEBUG больше не нужен
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     force=True,
 )
@@ -62,15 +63,17 @@ async def main():
 
     await db_manager.init_db()
     
-    redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT)
-    storage = RedisStorage(redis=redis_client)
+    # --- ЗАМЕНЯЕМ REDISSTORAGE НА MEMORYSTORAGE ---
+    storage = MemoryStorage()
+    logger.info("Using MemoryStorage for FSM.")
+    # -----------------------------------------------
+    
     scheduler = AsyncIOScheduler(timezone="UTC")
     
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    # AntiFloodMiddleware пока оставляем отключенным, он может быть причиной проблемы
     # dp.message.middleware(AntiFloodMiddleware())
 
     dp.include_router(start.router)
@@ -94,7 +97,6 @@ async def main():
         await dp.storage.close()
         await bot.session.close()
         scheduler.shutdown()
-        await redis_client.aclose()
         logger.info("Bot stopped.")
 
 
