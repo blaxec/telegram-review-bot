@@ -68,8 +68,9 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
-    # dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    # dp.message.middleware(AntiFloodMiddleware())
+    # --- ВОЗВРАЩАЕМ MIDDLEWARE ---
+    dp.update.outer_middleware(UsernameUpdaterMiddleware())
+    # dp.message.middleware(AntiFloodMiddleware()) # AntiFlood пока оставим выключенным
 
     dp.include_router(start.router)
     dp.include_router(profile.router)

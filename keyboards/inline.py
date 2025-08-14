@@ -103,19 +103,19 @@ def get_back_to_profile_keyboard() -> InlineKeyboardMarkup:
 # --- Раздел "Заработок" ---
 
 def get_earning_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text='Написание отзыва', callback_data='earning_write_review')],
-        [InlineKeyboardButton(text='Сделать аккаунт Gmail', callback_data='earning_create_gmail')],
-        [InlineKeyboardButton(text='Назад', callback_data='go_main_menu')]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    builder = InlineKeyboardBuilder()
+    builder.button(text='Написание отзыва', callback_data='earning_write_review')
+    builder.button(text='Сделать аккаунт Gmail', callback_data='earning_create_gmail')
+    builder.button(text='Назад', callback_data='go_main_menu')
+    builder.adjust(1)
+    return builder.as_markup()
 
 def get_write_review_platform_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='Google карты', callback_data='review_google_maps')
     builder.button(text='Yandex карты', callback_data='review_yandex_maps')
     builder.button(text='Yandex услуги', callback_data='review_yandex_services')
-    builder.button(text='Назад', callback_data='earning_menu_back')
+    builder.button(text='Назад', callback_data='earning_menu')
     builder.adjust(2, 1, 1)
     return builder.as_markup()
 
@@ -317,4 +317,9 @@ def get_promo_conditional_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✅ Начать задание", callback_data="promo_start_task")],
         [InlineKeyboardButton(text="❌ Отказаться", callback_data="promo_decline_task")]
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- НОВАЯ ФУНКЦИЯ ДЛЯ КНОПКИ ОТМЕНЫ В GMAIL ---
+def get_cancel_to_earning_keyboard() -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='Отмена', callback_data='cancel_to_earning')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

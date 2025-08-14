@@ -92,30 +92,19 @@ async def add_referral_earning(user_id: int, amount: float):
                     referrer.referral_earnings += amount
                     logger.info(f"Added {amount} stars to referrer {referrer.id} from user {user_id}")
 
-
-# --- ИЗМЕНЕНИЕ ЗДЕСЬ: ФУНКЦИЯ ПОЛНОСТЬЮ ПЕРЕПИСАНА ДЛЯ НАДЕЖНОСТИ ---
 async def get_referrer_info(user_id: int) -> str:
-    """
-    Надежно получает информацию о реферере, избегая сложных "ленивых" загрузок.
-    """
     async with async_session() as session:
-        # Сначала получаем ID реферера для текущего пользователя
         query_referrer_id = select(User.referrer_id).where(User.id == user_id)
         result_referrer_id = await session.execute(query_referrer_id)
         referrer_id = result_referrer_id.scalar_one_or_none()
 
         if referrer_id:
-            # Если ID реферера есть, получаем его username
             query_username = select(User.username).where(User.id == referrer_id)
             result_username = await session.execute(query_username)
             username = result_username.scalar_one_or_none()
-            # Возвращаем @username если он есть, иначе просто ID
             return f"@{username}" if username else f"ID: {referrer_id}"
         
-        # Если у пользователя нет реферера
         return "-"
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
 
 async def find_user_by_identifier(identifier: str) -> Union[int, None]:
     async with async_session() as session:
@@ -382,15 +371,13 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
             return True
 
+# --- ИЗМЕНЕНИЕ: ФУНКЦИЯ ПЕРЕПИСАНА ДЛЯ НАДЕЖНОСТИ ---
 async def get_top_10_users() -> List[Tuple[str, float, int]]:
+    """
+    Возвращает топ-10 пользователей, делая явный JOIN для подсчета отзывов.
+    Это более надежно, чем сложный subquery.
+    """
     async with async_session() as session:
-        subquery = (
-            select(Review.user_id, func.count(Review.id).label("review_count"))
-            .where(Review.status == 'approved')
-            .group_by(Review.user_id)
-            .subquery()
-        )
-        
         query = (
             select(
                 case(
@@ -398,15 +385,18 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
                     else_=User.username
                 ).label("display_name"),
                 User.balance,
-                func.coalesce(subquery.c.review_count, 0).label("approved_reviews")
+                func.count(Review.id).label("approved_reviews")
             )
-            .outerjoin(subquery, User.id == subquery.c.user_id)
+            .join(Review, and_(User.id == Review.user_id, Review.status == 'approved'), isouter=True)
+            .group_by(User.id)
             .order_by(desc(User.balance))
             .limit(10)
         )
         
         result = await session.execute(query)
         return result.all()
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
 # --- Функции для работы с промокодами ---
 
@@ -446,10 +436,6 @@ async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[P
         return result.scalar_one_or_none()
 
 async def find_pending_promo_activation(user_id: int, condition: str = '%') -> Union[PromoActivation, None]:
-    """
-    Находит ожидающую активацию промокода для пользователя.
-    Если condition не указан (или '%'), ищет любую ожидающую активацию.
-    """
     async with async_session() as session:
         base_query = select(PromoActivation).join(PromoCode).where(
             and_(
