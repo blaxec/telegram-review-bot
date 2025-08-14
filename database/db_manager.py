@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete, func, desc, case
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 from typing import Union, List, Tuple
 
 from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation, SupportTicket
@@ -91,12 +92,30 @@ async def add_referral_earning(user_id: int, amount: float):
                     referrer.referral_earnings += amount
                     logger.info(f"Added {amount} stars to referrer {referrer.id} from user {user_id}")
 
+
+# --- ИЗМЕНЕНИЕ ЗДЕСЬ: ФУНКЦИЯ ПОЛНОСТЬЮ ПЕРЕПИСАНА ДЛЯ НАДЕЖНОСТИ ---
 async def get_referrer_info(user_id: int) -> str:
-    user = await get_user(user_id)
-    if user and user.referrer_id:
-        referrer = await get_user(user.referrer_id)
-        return f"@{referrer.username}" if referrer and referrer.username else f"ID: {user.referrer_id}"
-    return "-"
+    """
+    Надежно получает информацию о реферере, избегая сложных "ленивых" загрузок.
+    """
+    async with async_session() as session:
+        # Сначала получаем ID реферера для текущего пользователя
+        query_referrer_id = select(User.referrer_id).where(User.id == user_id)
+        result_referrer_id = await session.execute(query_referrer_id)
+        referrer_id = result_referrer_id.scalar_one_or_none()
+
+        if referrer_id:
+            # Если ID реферера есть, получаем его username
+            query_username = select(User.username).where(User.id == referrer_id)
+            result_username = await session.execute(query_username)
+            username = result_username.scalar_one_or_none()
+            # Возвращаем @username если он есть, иначе просто ID
+            return f"@{username}" if username else f"ID: {referrer_id}"
+        
+        # Если у пользователя нет реферера
+        return "-"
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
 async def find_user_by_identifier(identifier: str) -> Union[int, None]:
     async with async_session() as session:
@@ -426,14 +445,12 @@ async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[P
         )
         return result.scalar_one_or_none()
 
-# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
 async def find_pending_promo_activation(user_id: int, condition: str = '%') -> Union[PromoActivation, None]:
     """
     Находит ожидающую активацию промокода для пользователя.
     Если condition не указан (или '%'), ищет любую ожидающую активацию.
     """
     async with async_session() as session:
-        # Базовый запрос, который используется всегда
         base_query = select(PromoActivation).join(PromoCode).where(
             and_(
                 PromoActivation.user_id == user_id,
@@ -441,20 +458,15 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
             )
         )
 
-        # Если нам нужно найти активацию для КОНКРЕТНОГО условия, добавляем фильтр
-        # Используем оператор равенства (==), а НЕ LIKE
         if condition != '%':
             query = base_query.where(PromoCode.condition == condition)
         else:
-            # Если ищем любую активацию, дополнительный фильтр не нужен
             query = base_query
 
-        # Выполняем запрос
         result = await session.execute(
             query.options(selectinload(PromoActivation.promo_code)).limit(1)
         )
         return result.scalar_one_or_none()
-# --- КОНЕЦ ИЗМЕНЕННОЙ ФУНКЦИИ ---
         
 async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -> PromoActivation:
     async with async_session() as session:
