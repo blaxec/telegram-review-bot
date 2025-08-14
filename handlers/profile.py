@@ -6,7 +6,6 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, User
 from aiogram.exceptions import TelegramBadRequest
-from functools import wraps
 
 from states.user_states import UserState
 from keyboards import inline, reply
@@ -23,9 +22,17 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     await state.set_state(UserState.MAIN_MENU)
     user_id = message_or_callback.from_user.id
     
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: "Железная" проверка существования пользователя ---
+    # Перед тем как получить данные, мы гарантируем, что пользователь есть в базе.
+    # Это решает проблему, показанную на скриншоте.
+    await db_manager.ensure_user_exists(user_id, message_or_callback.from_user.username)
+    # --------------------------------------------------------------------
+    
     user = await db_manager.get_user(user_id)
+    # Теперь эта проверка практически не нужна, но мы оставим ее как последнюю линию защиты.
     if not user:
-        await message_or_callback.answer("Произошла ошибка, не удалось найти ваш профиль. Попробуйте /start")
+        # Это сообщение больше не должно появляться.
+        await message_or_callback.answer("Произошла критическая ошибка, не удалось найти или создать ваш профиль. Попробуйте /start")
         return
 
     balance, hold_balance = user.balance, user.hold_balance
@@ -53,10 +60,12 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
                     pass
             else:
                 try:
-                    await message_or_callback.message.delete()
+                    if message_or_callback.message:
+                        await message_or_callback.message.delete()
                 except TelegramBadRequest:
                     pass
-                await message_or_callback.message.answer(profile_text, reply_markup=keyboard)
+                if message_or_callback.message:
+                    await message_or_callback.message.answer(profile_text, reply_markup=keyboard)
 
 
 @router.message(Command("stars"))
@@ -93,10 +102,11 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
         return
 
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
-    await callback.message.edit_text(
-        "Сколько звезд вы хотите передать?",
-        reply_markup=inline.get_cancel_inline_keyboard()
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            "Сколько звезд вы хотите передать?",
+            reply_markup=inline.get_cancel_inline_keyboard()
+        )
 
 async def process_transfer_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
@@ -111,7 +121,7 @@ async def process_transfer_amount(amount: float, message: Message, state: FSMCon
         reply_markup=inline.get_cancel_inline_keyboard()
     )
 
-@router.message(UserState.TRANSFER_AMOUNT_OTHER)
+@router.message(F.state == UserState.TRANSFER_AMOUNT_OTHER)
 async def transfer_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
@@ -122,7 +132,7 @@ async def transfer_other_amount_input(message: Message, state: FSMContext):
         return
     await process_transfer_amount(amount, message, state)
 
-@router.message(UserState.TRANSFER_RECIPIENT)
+@router.message(F.state == UserState.TRANSFER_RECIPIENT)
 async def process_transfer_recipient(message: Message, state: FSMContext):
     if not message.text: return
     recipient_id = await db_manager.find_user_by_identifier(message.text)
@@ -137,27 +147,30 @@ async def process_transfer_recipient(message: Message, state: FSMContext):
         reply_markup=inline.get_transfer_show_nick_keyboard()
     )
 
-@router.callback_query(F.data.in_({'transfer_show_nick_yes', 'transfer_show_nick_no'}), UserState.TRANSFER_SHOW_MY_NICK)
+@router.callback_query(F.data.in_({'transfer_show_nick_yes', 'transfer_show_nick_no'}), F.state == UserState.TRANSFER_SHOW_MY_NICK)
 async def process_transfer_show_nick(callback: CallbackQuery, state: FSMContext):
     show_nick = callback.data == 'transfer_show_nick_yes'
     await state.update_data(show_nick=show_nick)
     await state.set_state(UserState.TRANSFER_ASK_COMMENT)
-    await callback.message.edit_text(
-        "Хотите оставить комментарий к передаче?",
-        reply_markup=inline.get_ask_comment_keyboard(prefix='transfer')
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            "Хотите оставить комментарий к передаче?",
+            reply_markup=inline.get_ask_comment_keyboard(prefix='transfer')
+        )
 
-@router.callback_query(F.data == 'transfer_ask_comment_no', UserState.TRANSFER_ASK_COMMENT)
+@router.callback_query(F.data == 'transfer_ask_comment_no', F.state == UserState.TRANSFER_ASK_COMMENT)
 async def process_transfer_no_comment(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await callback.message.delete()
+    if callback.message:
+        await callback.message.delete()
     await finish_transfer(callback.from_user, state, bot, comment=None)
 
-@router.callback_query(F.data == 'transfer_ask_comment_yes', UserState.TRANSFER_ASK_COMMENT)
+@router.callback_query(F.data == 'transfer_ask_comment_yes', F.state == UserState.TRANSFER_ASK_COMMENT)
 async def process_transfer_yes_comment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
-    await callback.message.edit_text("Введите ваш комментарий:")
+    if callback.message:
+        await callback.message.edit_text("Введите ваш комментарий:")
 
-@router.message(UserState.TRANSFER_COMMENT_INPUT)
+@router.message(F.state == UserState.TRANSFER_COMMENT_INPUT)
 async def process_transfer_comment_input(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
     await finish_transfer(message.from_user, state, bot, comment=message.text)
@@ -221,19 +234,21 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         return
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
-    await callback.message.edit_text(
-        "Сколько звезд вы хотите вывести?",
-        reply_markup=inline.get_withdraw_amount_keyboard()
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            "Сколько звезд вы хотите вывести?",
+            reply_markup=inline.get_withdraw_amount_keyboard()
+        )
 
-@router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
+@router.callback_query(F.data.startswith('withdraw_amount_'), F.state == UserState.WITHDRAW_AMOUNT)
 async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     amount_str = callback.data.split('_')[-1]
     
     if amount_str == 'other':
         await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
-        await callback.message.edit_text("Введите сумму для вывода (минимум 15):", reply_markup=inline.get_cancel_inline_keyboard())
+        if callback.message:
+            await callback.message.edit_text("Введите сумму для вывода (минимум 15):", reply_markup=inline.get_cancel_inline_keyboard())
         return
 
     amount = float(amount_str)
@@ -245,12 +260,13 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
 
     await state.update_data(withdraw_amount=amount)
     await state.set_state(UserState.WITHDRAW_RECIPIENT)
-    await callback.message.edit_text(
-        "Кому вы хотите отправить подарок?",
-        reply_markup=inline.get_withdraw_recipient_keyboard()
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            "Кому вы хотите отправить подарок?",
+            reply_markup=inline.get_withdraw_recipient_keyboard()
+        )
 
-@router.message(UserState.WITHDRAW_AMOUNT_OTHER)
+@router.message(F.state == UserState.WITHDRAW_AMOUNT_OTHER)
 async def withdraw_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
@@ -304,22 +320,21 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
         )
         await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.")
     except Exception as e:
-        # --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ---
         logger.error(f"Failed to send withdrawal request to channel {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Пожалуйста, обратитесь в поддержку.")
-        # Возвращаем деньги пользователю, если не удалось отправить запрос
         await db_manager.update_balance(user.id, amount)
     
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
-@router.callback_query(F.data.startswith('withdraw_recipient_'), UserState.WITHDRAW_RECIPIENT)
+@router.callback_query(F.data.startswith('withdraw_recipient_'), F.state == UserState.WITHDRAW_RECIPIENT)
 async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext, bot: Bot):
     recipient_type = callback.data.split('_')[-1]
     data = await state.get_data()
     amount = data['withdraw_amount']
     
-    await callback.message.delete()
+    if callback.message:
+        await callback.message.delete()
 
     if recipient_type == 'self':
         await _create_and_notify_withdrawal(callback.from_user, amount, "Себе", None, bot, state)
@@ -331,7 +346,7 @@ async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext,
             reply_markup=inline.get_cancel_inline_keyboard()
         )
 
-@router.message(UserState.WITHDRAW_USER_ID)
+@router.message(F.state == UserState.WITHDRAW_USER_ID)
 async def process_withdraw_user_id(message: Message, state: FSMContext):
     if not message.text: return
     recipient_id = await db_manager.find_user_by_identifier(message.text)
@@ -346,17 +361,19 @@ async def process_withdraw_user_id(message: Message, state: FSMContext):
         reply_markup=inline.get_ask_comment_keyboard(prefix='withdraw')
     )
 
-@router.callback_query(F.data == 'withdraw_ask_comment_no', UserState.WITHDRAW_ASK_COMMENT)
+@router.callback_query(F.data == 'withdraw_ask_comment_no', F.state == UserState.WITHDRAW_ASK_COMMENT)
 async def process_withdraw_no_comment(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await callback.message.delete()
+    if callback.message:
+        await callback.message.delete()
     await finish_withdraw(callback.from_user, state, bot, comment=None)
 
-@router.callback_query(F.data == 'withdraw_ask_comment_yes', UserState.WITHDRAW_ASK_COMMENT)
+@router.callback_query(F.data == 'withdraw_ask_comment_yes', F.state == UserState.WITHDRAW_ASK_COMMENT)
 async def process_withdraw_yes_comment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.WITHDRAW_COMMENT_INPUT)
-    await callback.message.edit_text("Введите ваш комментарий к подарку:")
+    if callback.message:
+        await callback.message.edit_text("Введите ваш комментарий к подарку:")
 
-@router.message(UserState.WITHDRAW_COMMENT_INPUT)
+@router.message(F.state == UserState.WITHDRAW_COMMENT_INPUT)
 async def process_withdraw_comment_input(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
     await finish_withdraw(message.from_user, state, bot, comment=message.text)
@@ -367,7 +384,7 @@ async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str 
     recipient_id = data.get('withdraw_recipient_id')
     
     recipient_user = await db_manager.get_user(recipient_id)
-    recipient_info = f"@{recipient_user.username}" if recipient_user else f"ID: {recipient_id}"
+    recipient_info = f"@{recipient_user.username}" if recipient_user and recipient_user.username else f"ID: {recipient_id}"
 
     await _create_and_notify_withdrawal(user, amount, recipient_info, comment, bot, state)
 
@@ -382,7 +399,8 @@ async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bo
     if bot_info.username:
         referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
     else:
-        referral_link = f"https://t.me/start?bot={bot.id}&start={user_id}"
+        # Fallback for bots without a username
+        referral_link = f"tg://resolve?domain={bot.id}&start={user_id}"
         
     referral_earnings = await db_manager.get_referral_earnings(user_id)
     
@@ -395,15 +413,16 @@ async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bo
         f"💰 Заработано всего: {referral_earnings} ⭐"
     )
     
-    try:
-        await callback.message.edit_text(ref_text, reply_markup=inline.get_referral_info_keyboard(), parse_mode="Markdown")
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.warning(f"Error editing referral message: {e}")
+    if callback.message:
         try:
-            await callback.answer()
-        except TelegramBadRequest:
-            pass
+            await callback.message.edit_text(ref_text, reply_markup=inline.get_referral_info_keyboard(), parse_mode="Markdown")
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                logger.warning(f"Error editing referral message: {e}")
+            try:
+                await callback.answer()
+            except TelegramBadRequest:
+                pass
 
 @router.callback_query(F.data == 'profile_referrals_list')
 async def show_referrals_list(callback: CallbackQuery, state: FSMContext, **kwargs):
@@ -413,10 +432,11 @@ async def show_referrals_list(callback: CallbackQuery, state: FSMContext, **kwar
     else:
         text = f"🤝 Ваши рефералы:\nУ вас {len(referrals)} рефералов.\n\nСписок:\n" + "\n".join([f"- @{username}" for username in referrals if username])
     
-    try:
-        await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
-    except TelegramBadRequest:
-        pass
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data == 'profile_claim_referral_stars')
@@ -439,7 +459,8 @@ async def show_hold_info(callback: CallbackQuery, state: FSMContext, **kwargs):
         review_lines = [f"- {review.amount} ⭐ ({review.platform}) до {review.hold_until.strftime('%d.%m.%Y %H:%M')} UTC" for review in reviews_in_hold]
         text += "\n".join(review_lines)
     
-    try:
-        await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
-    except TelegramBadRequest:
-        pass
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
+        except TelegramBadRequest:
+            pass
