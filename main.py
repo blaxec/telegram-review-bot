@@ -16,11 +16,13 @@ from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    force=True,
-)
+# --- ИСПРАВЛЕНИЕ: Гарантируем, что логирование настраивается только один раз ---
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        force=True,
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -69,7 +71,6 @@ async def main():
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
-    # dp.message.middleware(AntiFloodMiddleware())
 
     dp.include_router(start.router)
     dp.include_router(profile.router)

@@ -35,21 +35,27 @@ logger = logging.getLogger(__name__)
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
+# --- ПОСТОЯННЫЙ ОБХОДНОЙ ПУТЬ ВМЕСТО FSM ДЛЯ ДОБАВЛЕНИЯ ССЫЛОК ---
+# Этот механизм доказал свою работоспособность в данной среде.
+temp_admin_tasks = {}  # Хранит {user_id: platform}
+
 @router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
 async def admin_add_stars(message: Message):
     await db_manager.update_balance(message.from_user.id, 999.0)
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
 
-
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (СТАНДАРТНАЯ ЛОГИКА FSM) ---
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (с использованием обходного пути) ---
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
+    temp_admin_tasks.pop(message.from_user.id, None)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await state.clear()
+    temp_admin_tasks.pop(callback.from_user.id, None)
     data = await state.get_data()
     message_ids_to_delete = data.get("link_message_ids", [])
     if callback.message:
@@ -57,45 +63,52 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
     for msg_id in set(message_ids_to_delete):
         try: await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
         except TelegramBadRequest: pass
-    await state.clear()
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     try: await callback.answer()
     except: pass
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    try: await callback.answer()
-    except TelegramBadRequest: pass
+    await state.clear()
     platform = callback.data.split(':')[2]
-    state_map = {"google_maps": AdminState.ADD_GOOGLE_REFERENCE, "yandex_maps": AdminState.ADD_YANDEX_REFERENCE}
-    current_state = state_map.get(platform)
-    if current_state:
-        await state.set_state(current_state)
-        await state.update_data(platform=platform)
-        if callback.message:
-            await callback.message.edit_text(f"Отправьте ссылки для <i>{platform}</i>, каждую с новой строки.", reply_markup=inline.get_back_to_admin_refs_keyboard())
+    temp_admin_tasks[callback.from_user.id] = platform
+    logger.info(f"[NO_FSM] Task started for user {callback.from_user.id}. Platform: {platform}")
+    if callback.message:
+        await callback.message.edit_text(
+            f"Выбрана платформа: <i>{platform}</i>.\n\nОтправьте ссылки следующим сообщением.",
+            reply_markup=inline.get_back_to_admin_refs_keyboard()
+        )
+    await callback.answer()
 
-@router.message(
-    F.from_user.id.in_(ADMINS),
-    F.state.in_({AdminState.ADD_GOOGLE_REFERENCE, AdminState.ADD_YANDEX_REFERENCE}),
-    F.text.as_("text")
-)
-async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
-    try:
-        data = await state.get_data()
-        platform = data.get("platform")
-        if not platform:
-            await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
-            await state.clear()
-            return
-        result_text = await process_add_links_logic(text, platform)
-        await message.answer(result_text)
-        await state.clear()
-        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    except Exception as e:
-        logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
-        await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
-        await state.clear()
+@router.message(F.text, F.from_user.id.in_(ADMINS))
+async def admin_universal_text_handler(message: Message, state: FSMContext):
+    """
+    Этот обработчик ловит все текстовые сообщения от админа.
+    Сначала он проверяет, есть ли задача на добавление ссылок.
+    Если нет, он передает управление дальше (aiogram сам вызовет нужный хэндлер по состоянию).
+    """
+    user_id = message.from_user.id
+
+    if user_id in temp_admin_tasks:
+        platform = temp_admin_tasks.pop(user_id)
+        logger.info(f"[NO_FSM] Processing link submission for user {user_id}. Platform: {platform}")
+        try:
+            result_text = await process_add_links_logic(message.text, platform)
+            await message.answer(result_text)
+            await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+        except Exception as e:
+            logger.exception(f"Критическая ошибка (без FSM) для пользователя {user_id}: {e}")
+            await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
+        # Важно! Мы обработали это сообщение, поэтому выходим.
+        return
+
+    # Если мы здесь, значит, это не сообщение со ссылками.
+    # Мы ничего не делаем, и aiogram продолжит искать другие подходящие
+    # обработчики (например, те, что с фильтрами по FSM состояниям).
+    logger.debug(f"Message from admin {user_id} not a link submission. Passing to FSM handlers.")
+
+
+# --- Остальные функции, которые используют FSM, теперь будут работать ---
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -122,7 +135,8 @@ async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
     if callback.message:
         await callback.message.edit_text(f"Список ссылок для <i>{platform}</i>:", reply_markup=inline.get_back_to_admin_refs_keyboard())
     if not all_links:
-        await callback.message.answer("В базе нет ссылок для этой платформы.")
+        if callback.message:
+            await callback.message.answer("В базе нет ссылок для этой платформы.")
         return
     message_ids = []
     for link in all_links:
@@ -153,9 +167,6 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, state: FSMContext)
             await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
             await user_state.set_state(UserState.MAIN_MENU)
         except Exception as e: logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
-
-
-# --- БЛОК: МОДЕРАЦИЯ ---
 
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -210,33 +221,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             else: await callback.message.edit_text(f"{original_text}\n\n{action_text}", reply_markup=None)
         except TelegramBadRequest: pass
 
-
-# --- БЛОК: ОБРАБОТКА ТЕКСТОВЫХ ВВОДОВ ОТ АДМИНА ---
-
-@router.message(F.state == AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
-async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    admin_data = await state.get_data()
-    user_id, platform, context = admin_data.get("target_user_id"), admin_data.get("platform"), admin_data.get("context")
-    if not all([user_id, platform, context]):
-        await message.answer("Ошибка: не найдены данные. Состояние сброшено."); await state.clear(); return
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
-    await message.answer(response)
-    await state.clear()
-
-@router.message(F.state == AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
-async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    admin_data = await state.get_data()
-    user_id, context = admin_data.get("target_user_id"), admin_data.get("rejection_context")
-    if not user_id:
-        await message.answer("Ошибка: не найден ID. Состояние сброшено."); await state.clear(); return
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
-    await message.answer(response)
-    await state.clear()
-
 @router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
     try:
@@ -252,30 +236,6 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
             if callback.message.photo: await callback.message.edit_caption(caption=new_content, reply_markup=None)
             else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
-
-@router.message(
-    F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}),
-    F.from_user.id == TEXT_ADMIN
-)
-async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    if not message.text: return
-    data = await state.get_data()
-    # Создаем Dispatcher "на лету" для передачи в логику, если он там нужен
-    dp_dummy = Dispatcher(storage=state.storage)
-    success, response_text = await send_review_text_to_user_logic(
-        bot=bot,
-        dp=dp_dummy,
-        scheduler=scheduler,
-        user_id=data['target_user_id'],
-        link_id=data['target_link_id'],
-        platform=data['platform'],
-        review_text=message.text
-    )
-    await message.answer(response_text)
-    if success: await state.clear()
-
-
-# --- БЛОК: МОДЕРАЦИЯ ОТЗЫВОВ (ФИНАЛЬНАЯ И В ХОЛДЕ) ---
 
 @router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
@@ -330,9 +290,6 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
         new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})"
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
 
-
-# --- БЛОК: УПРАВЛЕНИЕ ВЫВОДОМ СРЕДСТВ ---
-
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     request_id = int(callback.data.split(":")[1])
@@ -356,9 +313,6 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
-
-
-# --- БЛОК: ПРОЧИЕ КОМАНДЫ ---
 
 @router.message(Command("reset_cooldown"), F.from_user.id.in_(ADMINS))
 async def reset_cooldown_handler(message: Message):
@@ -388,6 +342,51 @@ async def viewhold_handler(message: Message, bot: Bot):
 async def fine_user_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_USER_ID)
     await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
+
+@router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
+async def create_promo_start(message: Message, state: FSMContext):
+    await state.set_state(AdminState.PROMO_CODE_NAME)
+    await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
+                         reply_markup=inline.get_cancel_inline_keyboard())
+
+# --- Обработчики с фильтрами по FSM состояниям ---
+
+@router.message(F.state == AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
+async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
+    if not message.text: return
+    admin_data = await state.get_data()
+    user_id, platform, context = admin_data.get("target_user_id"), admin_data.get("platform"), admin_data.get("context")
+    if not all([user_id, platform, context]):
+        await message.answer("Ошибка: не найдены данные. Состояние сброшено."); await state.clear(); return
+    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
+    await message.answer(response)
+    await state.clear()
+
+@router.message(F.state == AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
+async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
+    if not message.text: return
+    admin_data = await state.get_data()
+    user_id, context = admin_data.get("target_user_id"), admin_data.get("rejection_context")
+    if not user_id:
+        await message.answer("Ошибка: не найден ID. Состояние сброшено."); await state.clear(); return
+    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    response = await process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
+    await message.answer(response)
+    await state.clear()
+
+@router.message(F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}), F.from_user.id == TEXT_ADMIN)
+async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    if not message.text: return
+    data = await state.get_data()
+    dp_dummy = Dispatcher(storage=state.storage)
+    success, response_text = await send_review_text_to_user_logic(
+        bot=bot, dp=dp_dummy, scheduler=scheduler,
+        user_id=data['target_user_id'], link_id=data['target_link_id'],
+        platform=data['platform'], review_text=message.text
+    )
+    await message.answer(response_text)
+    if success: await state.clear()
 
 @router.message(F.state == AdminState.FINE_USER_ID, F.from_user.id.in_(ADMINS))
 async def fine_user_get_id(message: Message, state: FSMContext):
@@ -420,77 +419,53 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     await message.answer(result_text)
     await state.clear()
 
-# --- БЛОК: СОЗДАНИЕ ПРОМОКОДОВ ---
-
-@router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
-async def create_promo_start(message: Message, state: FSMContext):
-    await state.set_state(AdminState.PROMO_CODE_NAME)
-    await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
-                         reply_markup=inline.get_cancel_inline_keyboard())
-
 @router.message(F.state == AdminState.PROMO_CODE_NAME, F.from_user.id.in_(ADMINS))
 async def promo_name_entered(message: Message, state: FSMContext):
     if not message.text: return
     promo_name = message.text.strip().upper()
-    
     existing_promo = await db_manager.get_promo_by_code(promo_name)
     if existing_promo:
-        await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.",
-                             reply_markup=inline.get_cancel_inline_keyboard())
+        await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.", reply_markup=inline.get_cancel_inline_keyboard())
         return
-        
     await state.update_data(promo_name=promo_name)
     await state.set_state(AdminState.PROMO_USES)
-    await message.answer("Отлично. Теперь введите количество активаций (сколько раз пользователи смогут использовать этот промокод).",
-                         reply_markup=inline.get_cancel_inline_keyboard())
+    await message.answer("Отлично. Теперь введите количество активаций.", reply_markup=inline.get_cancel_inline_keyboard())
 
 @router.message(F.state == AdminState.PROMO_USES, F.from_user.id.in_(ADMINS))
 async def promo_uses_entered(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
         return
-    
     uses = int(message.text)
     if uses <= 0:
         await message.answer("❌ Количество активаций должно быть больше нуля.", reply_markup=inline.get_cancel_inline_keyboard())
         return
-
     await state.update_data(promo_uses=uses)
     await state.set_state(AdminState.PROMO_REWARD)
-    await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).",
-                         reply_markup=inline.get_cancel_inline_keyboard())
+    await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
 
 @router.message(F.state == AdminState.PROMO_REWARD, F.from_user.id.in_(ADMINS))
 async def promo_reward_entered(message: Message, state: FSMContext):
     try:
         reward = float(message.text.replace(',', '.'))
-        if reward <= 0:
-            raise ValueError
+        if reward <= 0: raise ValueError
     except (ValueError, TypeError):
-        await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например <code>10.5</code>).",
-                             reply_markup=inline.get_cancel_inline_keyboard())
+        await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например <code>10.5</code>).", reply_markup=inline.get_cancel_inline_keyboard())
         return
-    
     await state.update_data(promo_reward=reward)
     await state.set_state(AdminState.PROMO_CONDITION)
-    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.",
-                         reply_markup=inline.get_promo_condition_keyboard())
+    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
 
 @router.callback_query(F.data.startswith("promo_cond:"), F.state == AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
     condition = callback.data.split(":")[1]
     data = await state.get_data()
-    
     new_promo = await db_manager.create_promo_code(
-        code=data['promo_name'],
-        total_uses=data['promo_uses'],
-        reward=data['promo_reward'],
-        condition=condition
+        code=data['promo_name'], total_uses=data['promo_uses'],
+        reward=data['promo_reward'], condition=condition
     )
-    
     if new_promo and callback.message:
         await callback.message.edit_text(f"✅ Промокод <code>{new_promo.code}</code> успешно создан!")
     elif callback.message:
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
-        
     await state.clear()
