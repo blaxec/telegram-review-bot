@@ -58,11 +58,6 @@ class UserState(StatesGroup):
 
 
 class AdminState(StatesGroup):
-    # Состояния для добавления ссылок
-    # Больше не используются, так как применяется обходной путь
-    # ADD_GOOGLE_REFERENCE = State()
-    # ADD_YANDEX_REFERENCE = State()
-
     # Состояния для указания причин
     PROVIDE_REJECTION_REASON = State()
     PROVIDE_WARN_REASON = State()
@@ -87,3 +82,6 @@ class AdminState(StatesGroup):
     
     # Состояния для поддержки
     SUPPORT_AWAITING_ANSWER = State()
+
+    # Новое состояние для удаления ссылок
+    DELETE_LINK_ID = State()

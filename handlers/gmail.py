@@ -48,7 +48,8 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             "За создание аккаунта выдается <i>5 звезд</i>.\n\n"
             "Пожалуйста, укажите <i>модель вашего устройства</i> (например, iPhone 13 Pro или Samsung Galaxy S22), "
-            "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.",
+            "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.\n\n"
+            "Отправьте модель следующим сообщением.",
             reply_markup=inline.get_cancel_to_earning_keyboard()
         )
 
@@ -70,18 +71,18 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
 
 async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
-    if not message.text:
-        return
     device_model = message.text
     user_id = message.from_user.id
-
-    await state.update_data(device_model=device_model)
-
+    
+    # Сначала подтверждаем пользователю, что его сообщение принято
     await message.answer(
         f"Ваша модель устройства: <i>{device_model}</i>.\n"
         "Запомните ее, администратор может ее уточнить.\n\n"
         "Ваш запрос отправлен администратору на проверку. Ожидайте..."
     )
+    
+    # Обновляем данные и состояние в FSM
+    await state.update_data(device_model=device_model)
     await state.set_state(UserState.GMAIL_AWAITING_DATA)
 
     context = "gmail_device_model"
@@ -104,19 +105,15 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         await state.clear()
         logger.error(f"Ошибка отправки модели устройства админу {FINAL_CHECK_ADMIN}: {e}")
 
-@router.message(F.state == UserState.GMAIL_ENTER_DEVICE_MODEL)
+@router.message(F.state == UserState.GMAIL_ENTER_DEVICE_MODEL, F.text)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
-    if not message.text:
-        await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
-        return
+    logger.info(f"Caught device model from user {message.from_user.id} in state GMAIL_ENTER_DEVICE_MODEL.")
     await send_device_model_to_admin(message, state, bot, is_another=False)
 
 
-@router.message(F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
+@router.message(F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL, F.text)
 async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
-    if not message.text:
-        await message.answer("Пожалуйста, отправьте текстовое сообщение с моделью вашего устройства.")
-        return
+    logger.info(f"Caught another device model from user {message.from_user.id} in state GMAIL_ENTER_ANOTHER_DEVICE_MODEL.")
     await send_device_model_to_admin(message, state, bot, is_another=True)
 
 

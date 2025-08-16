@@ -57,15 +57,24 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
     await state.clear()
     temp_admin_tasks.pop(callback.from_user.id, None)
     data = await state.get_data()
+    # Удаляем предыдущие сообщения со списком ссылок
     message_ids_to_delete = data.get("link_message_ids", [])
     if callback.message:
         message_ids_to_delete.append(callback.message.message_id)
+    
     for msg_id in set(message_ids_to_delete):
-        try: await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
-        except TelegramBadRequest: pass
+        try: 
+            await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
+        except TelegramBadRequest: 
+            pass
+
+    # Отправляем новое сообщение с меню, чтобы избежать ошибок редактирования
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    try: await callback.answer()
-    except: pass
+    try: 
+        await callback.answer()
+    except: 
+        pass
+
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
@@ -88,6 +97,13 @@ async def admin_universal_text_handler(message: Message, state: FSMContext):
     Если нет, он передает управление дальше (aiogram сам вызовет нужный хэндлер по состоянию).
     """
     user_id = message.from_user.id
+    current_state = await state.get_state()
+
+    # Сначала проверяем FSM состояния, кроме дефолтного
+    if current_state and current_state != AdminState.DELETE_LINK_ID:
+         # Если есть состояние, даем FSM-хэндлерам приоритет
+        logger.debug(f"Message from admin {user_id} in state {current_state}. Passing to FSM handlers.")
+        return
 
     if user_id in temp_admin_tasks:
         platform = temp_admin_tasks.pop(user_id)
@@ -99,13 +115,12 @@ async def admin_universal_text_handler(message: Message, state: FSMContext):
         except Exception as e:
             logger.exception(f"Критическая ошибка (без FSM) для пользователя {user_id}: {e}")
             await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
-        # Важно! Мы обработали это сообщение, поэтому выходим.
         return
-
+    
     # Если мы здесь, значит, это не сообщение со ссылками.
     # Мы ничего не делаем, и aiogram продолжит искать другие подходящие
     # обработчики (например, те, что с фильтрами по FSM состояниям).
-    logger.debug(f"Message from admin {user_id} not a link submission. Passing to FSM handlers.")
+    logger.debug(f"Message from admin {user_id} not a link submission. Passing to other handlers.")
 
 
 # --- Остальные функции, которые используют FSM, теперь будут работать ---
@@ -127,46 +142,83 @@ async def admin_view_refs_stats(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_admin_refs_keyboard())
 
 @router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id.in_(ADMINS))
-async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
-    try: await callback.answer("Загружаю список...")
-    except: pass
+async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await callback.answer("Загружаю список...")
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
-    if callback.message:
-        await callback.message.edit_text(f"Список ссылок для <i>{platform}</i>:", reply_markup=inline.get_back_to_admin_refs_keyboard())
-    if not all_links:
-        if callback.message:
-            await callback.message.answer("В базе нет ссылок для этой платформы.")
-        return
-    message_ids = []
-    for link in all_links:
-        icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
-        user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
-        text = f"{icons.get(link.status, '❓')} <i>ID:{link.id}</i> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>"
-        if callback.message:
-            msg = await callback.message.answer(text, reply_markup=inline.get_delete_ref_keyboard(link.id), disable_web_page_preview=True)
-            message_ids.append(msg.message_id)
-    await state.update_data(link_message_ids=message_ids)
 
-@router.callback_query(F.data.startswith("admin_refs:delete:"), F.from_user.id.in_(ADMINS))
-async def admin_delete_ref(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    link_id = int(callback.data.split(':')[2])
-    success, assigned_user_id = await reference_manager.delete_reference(link_id)
-    if not success:
-        try: await callback.answer("Не удалось удалить ссылку.", show_alert=True)
-        except: pass
-        return
     if callback.message:
         await callback.message.delete()
-    try: await callback.answer(f"Ссылка ID {link_id} удалена.", show_alert=True)
-    except: pass
+
+    if not all_links:
+        await bot.send_message(callback.from_user.id, "В базе нет ссылок для этой платформы.", reply_markup=inline.get_admin_refs_list_keyboard(platform))
+        return
+
+    message_ids = []
+    base_text = f"📄 Список ссылок для <i>{platform}</i>:\n\n"
+    chunks = [""]
+    icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
+
+    for link in all_links:
+        user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
+        line = f"{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>\n\n"
+        
+        if len(chunks[-1] + line) > 4000:
+            chunks.append("")
+        chunks[-1] += line
+    
+    for i, chunk in enumerate(chunks):
+        final_text = (base_text + chunk) if i == 0 else chunk
+        # Клавиатуру добавляем только к последнему сообщению
+        keyboard = inline.get_admin_refs_list_keyboard(platform) if i == len(chunks) - 1 else None
+        msg = await bot.send_message(callback.from_user.id, final_text, reply_markup=keyboard, disable_web_page_preview=True)
+        message_ids.append(msg.message_id)
+
+    await state.update_data(link_message_ids=message_ids)
+
+
+@router.callback_query(F.data.startswith("admin_refs:delete_start:"), F.from_user.id.in_(ADMINS))
+async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(':')[2]
+    await state.set_state(AdminState.DELETE_LINK_ID)
+    await state.update_data(platform_for_deletion=platform)
+    await callback.message.edit_text("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_back_to_admin_refs_keyboard())
+    await callback.answer()
+
+@router.message(F.state == AdminState.DELETE_LINK_ID, F.from_user.id.in_(ADMINS))
+async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
+        return
+    
+    link_id = int(message.text)
+    data = await state.get_data()
+    platform = data.get("platform_for_deletion")
+    
+    success, assigned_user_id = await reference_manager.delete_reference(link_id)
+    
+    if not success:
+        await message.answer(f"❌ Ссылка с ID {link_id} не найдена в базе.")
+        return
+    
+    await message.answer(f"✅ Ссылка с ID {link_id} успешно удалена.")
+    
     if assigned_user_id:
         try:
             user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
             await user_state.clear()
-            await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
+            await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена администратором. Процесс выполнения остановлен.", reply_markup=reply.get_main_menu_keyboard())
             await user_state.set_state(UserState.MAIN_MENU)
-        except Exception as e: logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
+        except Exception as e: 
+            logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
+
+    # После удаления возвращаем обновленный список
+    await state.clear()
+    
+    # Имитируем нажатие на кнопку "list", чтобы показать обновленный список
+    callback_dummy = message  # Используем message как замену callback
+    callback_dummy.data = f"admin_refs:list:{platform}"
+    await admin_view_refs_list(callback=callback_dummy, bot=bot, state=state)
 
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -225,7 +277,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
-        state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
+        state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
         if platform not in state_map: await callback.answer("Ошибка платформы."); return
         await state.set_state(state_map[platform])
         await state.update_data(target_user_id=int(user_id_str), target_link_id=int(link_id_str), platform=platform)

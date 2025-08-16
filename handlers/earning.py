@@ -464,7 +464,6 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
     
     else: # review_type == "without_text"
         # Новая логика: сразу просим оставить отзыв
-        await state.set_state(UserState.YANDEX_REVIEW_TASK_ACTIVE)
         link_id = user_data.get('active_link_id')
         link = await db_manager.db_get_link_by_id(link_id)
         
@@ -569,9 +568,14 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
 
 
 # --- Прочие хэндлеры ---
-@router.callback_query(F.data.in_({'review_zoon', 'review_avito'}))
+@router.callback_query(F.data.in_({'review_zoon', 'review_avito', 'review_yandex_services'}))
 async def handle_unsupported_services(callback: CallbackQuery):
-    platform_name = "Zoon" if callback.data == 'review_zoon' else "Avito"
+    platform_map = {
+        'review_zoon': 'Zoon',
+        'review_avito': 'Avito',
+        'review_yandex_services': 'Yandex.Услуги'
+    }
+    platform_name = platform_map.get(callback.data)
     await callback.answer(f"К сожалению, в данный момент сервис {platform_name} не поддерживается.", show_alert=True)
 
 # --- НОВЫЙ ХЭНДЛЕР ДЛЯ КНОПКИ ОТМЕНЫ ИЗ GMAIL ---

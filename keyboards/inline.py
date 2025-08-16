@@ -116,6 +116,7 @@ def get_write_review_platform_keyboard() -> InlineKeyboardMarkup:
     builder.button(text='Yandex карты', callback_data='review_yandex_maps')
     builder.button(text='Zoon', callback_data='review_zoon')
     builder.button(text='Avito', callback_data='review_avito')
+    builder.button(text='Yandex услуги', callback_data='review_yandex_services')
     builder.button(text='Назад', callback_data='earning_menu')
     builder.adjust(2)
     return builder.as_markup()
@@ -263,6 +264,13 @@ def get_back_to_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
     return builder.as_markup()
 
+def get_admin_refs_list_keyboard(platform: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text='🗑️ Удалить ссылку из базы', callback_data=f'admin_refs:delete_start:{platform}')
+    builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_admin_hold_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
     buttons = [
         [
@@ -296,10 +304,6 @@ def get_admin_final_verdict_keyboard(review_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='❌ Отклонить', callback_data=f'admin_final_reject:{review_id}')
         ]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def get_delete_ref_keyboard(link_id: int) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='🗑️ Удалить эту ссылку', callback_data=f'admin_refs:delete:{link_id}')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
