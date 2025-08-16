@@ -41,7 +41,7 @@ async def admin_add_stars(message: Message):
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
 
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (ВОЗВРАЩАЕМ FSM) ---
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (СТАНДАРТНАЯ ЛОГИКА FSM) ---
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
@@ -81,22 +81,17 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     F.text.as_("text")
 )
 async def admin_add_ref_process(message: Message, state: FSMContext, text: str):
-    """Обрабатывает добавление ссылок с отловом ошибок."""
     try:
         data = await state.get_data()
         platform = data.get("platform")
-        
         if not platform:
             await message.answer("❌ Произошла ошибка: не удалось определить платформу. Пожалуйста, начните заново.")
             await state.clear()
             return
-        
         result_text = await process_add_links_logic(text, platform)
-        
         await message.answer(result_text)
         await state.clear()
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    
     except Exception as e:
         logger.exception(f"Критическая ошибка в admin_add_ref_process для пользователя {message.from_user.id}: {e}")
         await message.answer("❌ Произошла критическая ошибка при добавлении ссылок. Обратитесь к логам.")
@@ -139,7 +134,6 @@ async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
             message_ids.append(msg.message_id)
     await state.update_data(link_message_ids=message_ids)
 
-# --- ИЗМЕНЕНИЕ: Убран аргумент 'dp', используется 'state.storage' ---
 @router.callback_query(F.data.startswith("admin_refs:delete:"), F.from_user.id.in_(ADMINS))
 async def admin_delete_ref(callback: CallbackQuery, bot: Bot, state: FSMContext):
     link_id = int(callback.data.split(':')[2])
@@ -163,7 +157,6 @@ async def admin_delete_ref(callback: CallbackQuery, bot: Bot, state: FSMContext)
 
 # --- БЛОК: МОДЕРАЦИЯ ---
 
-# --- ИЗМЕНЕНИЕ: Убран аргумент 'dp', используется 'state.storage' ---
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try: await callback.answer()
@@ -220,7 +213,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 # --- БЛОК: ОБРАБОТКА ТЕКСТОВЫХ ВВОДОВ ОТ АДМИНА ---
 
-# --- ИЗМЕНЕНИЕ: Убран аргумент 'dp', используется 'state.storage' ---
 @router.message(F.state == AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
@@ -233,7 +225,6 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     await message.answer(response)
     await state.clear()
 
-# --- ИЗМЕНЕНИЕ: Убран аргумент 'dp', используется 'state.storage' ---
 @router.message(F.state == AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
 async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
@@ -262,7 +253,6 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
             else: await callback.message.edit_text(new_content, reply_markup=None)
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-# --- ИЗМЕНЕНИЕ: Убран аргумент 'dp', используется 'state.storage' ---
 @router.message(
     F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}),
     F.from_user.id == TEXT_ADMIN
@@ -271,7 +261,6 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     if not message.text: return
     data = await state.get_data()
     # Создаем Dispatcher "на лету" для передачи в логику, если он там нужен
-    # Но лучше переписать логику, чтобы она не требовала всего dp
     dp_dummy = Dispatcher(storage=state.storage)
     success, response_text = await send_review_text_to_user_logic(
         bot=bot,
@@ -340,6 +329,7 @@ async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})"
         await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+
 
 # --- БЛОК: УПРАВЛЕНИЕ ВЫВОДОМ СРЕДСТВ ---
 
