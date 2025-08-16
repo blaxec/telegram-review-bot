@@ -1,4 +1,4 @@
-# file: database/db_manager.py
+# file: telegram-review-bot-main/database/db_manager.py
 
 import datetime
 import logging
@@ -371,12 +371,7 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
             return True
 
-# --- ИЗМЕНЕНИЕ: ФУНКЦИЯ ПЕРЕПИСАНА ДЛЯ НАДЕЖНОСТИ ---
 async def get_top_10_users() -> List[Tuple[str, float, int]]:
-    """
-    Возвращает топ-10 пользователей, делая явный JOIN для подсчета отзывов.
-    Это более надежно, чем сложный subquery.
-    """
     async with async_session() as session:
         query = (
             select(
@@ -395,8 +390,6 @@ async def get_top_10_users() -> List[Tuple[str, float, int]]:
         
         result = await session.execute(query)
         return result.all()
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
 
 # --- Функции для работы с промокодами ---
 

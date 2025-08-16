@@ -114,24 +114,26 @@ def get_write_review_platform_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='Google карты', callback_data='review_google_maps')
     builder.button(text='Yandex карты', callback_data='review_yandex_maps')
-    builder.button(text='Yandex услуги', callback_data='review_yandex_services')
+    builder.button(text='Zoon', callback_data='review_zoon')
+    builder.button(text='Avito', callback_data='review_avito')
     builder.button(text='Назад', callback_data='earning_menu')
-    builder.adjust(2, 1, 1)
+    builder.adjust(2)
     return builder.as_markup()
+
 
 # --- Google Отзывы ---
 
 def get_google_init_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Выполнено', callback_data='google_review_done')],
-        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_google_ask_profile_screenshot_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Где взять профиль?', callback_data='google_get_profile_screenshot')],
-        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
     
@@ -145,7 +147,7 @@ def get_invalid_input_keyboard(platform: str) -> InlineKeyboardMarkup:
 def get_google_last_reviews_check_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Где найти последние отзывы', callback_data='google_last_reviews_where')],
-        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -162,17 +164,26 @@ def get_task_confirmation_keyboard(platform: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Yandex Отзывы ---
+def get_yandex_review_type_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text='С текстом (50 ⭐)', callback_data='yandex_review_type:with_text')],
+        [InlineKeyboardButton(text='Без текста (15 ⭐)', callback_data='yandex_review_type:without_text')],
+        [InlineKeyboardButton(text='Назад', callback_data='earning_write_review')]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_yandex_init_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='Я готов(а) отправить скриншот', callback_data='yandex_ready_to_screenshot')],
         [InlineKeyboardButton(text='Как повысить уровень знатока', callback_data='yandex_how_to_be_expert')],
-        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
     
 def get_yandex_ask_profile_screenshot_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text='Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -229,15 +240,23 @@ def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -
 
 def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="📊 Статистика Google", callback_data="admin_refs:stats:google_maps")
-    builder.button(text="📊 Статистика Yandex", callback_data="admin_refs:stats:yandex_maps")
-    builder.button(text="➕ Добавить Google", callback_data="admin_refs:add:google_maps")
-    builder.button(text="➕ Добавить Yandex", callback_data="admin_refs:add:yandex_maps")
-    builder.button(text="📄 Показать Google", callback_data="admin_refs:list:google_maps")
-    builder.button(text="📄 Показать Yandex", callback_data="admin_refs:list:yandex_maps")
+    # Google
+    builder.button(text="📊 Google Статистика", callback_data="admin_refs:stats:google_maps")
+    builder.button(text="📄 Google Список", callback_data="admin_refs:list:google_maps")
+    builder.button(text="➕ Google Добавить", callback_data="admin_refs:add:google_maps")
+    # Yandex With Text
+    builder.button(text="📊 Янд. (с текстом) Стат.", callback_data="admin_refs:stats:yandex_with_text")
+    builder.button(text="📄 Янд. (с текстом) Список", callback_data="admin_refs:list:yandex_with_text")
+    builder.button(text="➕ Янд. (с текстом) Добавить", callback_data="admin_refs:add:yandex_with_text")
+    # Yandex Without Text
+    builder.button(text="📊 Янд. (без текста) Стат.", callback_data="admin_refs:stats:yandex_without_text")
+    builder.button(text="📄 Янд. (без текста) Список", callback_data="admin_refs:list:yandex_without_text")
+    builder.button(text="➕ Янд. (без текста) Добавить", callback_data="admin_refs:add:yandex_without_text")
+    # Exit
     builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
-    builder.adjust(2)
+    builder.adjust(2, 1, 2, 1, 2, 1, 1)
     return builder.as_markup()
+
 
 def get_back_to_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

@@ -24,8 +24,6 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
     """
-    # --- ДИАГНОСТИЧЕСКИЕ МАЯЧКИ ---
-    print(f"!!! МАЯЧОК 3: Вход в логику process_add_links_logic. Платформа: '{platform}'")
     if not links_text:
         return "Текст со ссылками не может быть пустым."
 
@@ -35,7 +33,6 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
     for link in links:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
-            print(f"!!! МАЯЧОК 4: Пытаюсь добавить ссылку: '{stripped_link}'")
             try:
                 if await db_manager.db_add_reference(stripped_link, platform):
                     added_count += 1
@@ -136,7 +133,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=7)
         run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=15)
 
-    elif platform == "yandex":
+    elif platform == "yandex_with_text":
         task_state = UserState.YANDEX_REVIEW_TASK_ACTIVE
         task_message = (
             "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
@@ -154,17 +151,23 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
-        await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
+        # Редактируем последнее сообщение бота, чтобы не спамить
+        last_message = (await user_state.get_data()).get('last_bot_message')
+        if last_message:
+            await bot.edit_message_text(task_message, user_id, last_message, parse_mode='HTML', disable_web_page_preview=True)
+        else:
+            sent_msg = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
+            await user_state.update_data(last_bot_message=sent_msg.message_id)
     except Exception as e:
         await reference_manager.release_reference_from_user(user_id, 'available')
         await user_state.clear()
         return False, f"Не удалось отправить задание пользователю {user_id}. Ошибка: {e}"
 
     await user_state.set_state(task_state)
-    await user_state.update_data(username=user_info.username, review_text=review_text)
+    await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
 
     scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp, user_id, platform, 'основное задание'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp, user_id, platform.split('_')[0], 'основное задание'])
     await user_state.update_data(timeout_job_id=timeout_job.id)
     
     return True, f"Текст успешно отправлен пользователю @{user_info.username} (ID: {user_id})."
@@ -205,8 +208,9 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     if not review or review.status != 'pending':
         return False, "Ошибка: отзыв не найден или уже обработан."
 
-    amount_map = {'google': 15.0, 'yandex': 50.0}
-    hold_minutes_map = {'google': 5, 'yandex': 24 * 60}
+    amount_map = {'google': 15.0, 'yandex_with_text': 50.0, 'yandex_without_text': 15.0}
+    hold_minutes_map = {'google': 5, 'yandex_with_text': 24 * 60, 'yandex_without_text': 72 * 60}
+    
     amount = amount_map.get(review.platform, 0.0)
     hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
     
@@ -215,9 +219,11 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         return False, "Не удалось одобрить отзыв (ошибка БД)."
 
     cooldown_hours = 72
-    await db_manager.set_platform_cooldown(review.user_id, review.platform, cooldown_hours)
+    platform_for_cooldown = 'yandex' if 'yandex' in review.platform else review.platform
+    await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
+    
     cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
-    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, review.user_id, review.platform], id=f"cooldown_notify_{review.user_id}_{review.platform}")
+    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, review.user_id, platform_for_cooldown], id=f"cooldown_notify_{review.user_id}_{platform_for_cooldown}")
     
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
@@ -227,7 +233,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
     
     hold_hours = hold_duration_minutes / 60
-    return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.2f} ч."
+    return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.0f} ч."
 
 async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler) -> tuple[bool, str]:
     """Логика для отклонения начального отзыва."""
@@ -240,9 +246,10 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
         return False, "Не удалось отклонить отзыв (возможно, уже обработан)."
 
     cooldown_hours = 72
-    await db_manager.set_platform_cooldown(rejected_review.user_id, rejected_review.platform, cooldown_hours)
+    platform_for_cooldown = 'yandex' if 'yandex' in rejected_review.platform else rejected_review.platform
+    await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
     cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
-    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, rejected_review.platform], id=f"cooldown_notify_{rejected_review.user_id}_{rejected_review.platform}")
+    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, platform_for_cooldown], id=f"cooldown_notify_{rejected_review.user_id}_{platform_for_cooldown}")
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
     try:
@@ -276,7 +283,7 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     # Проверяем и начисляем награду за промокод
     if approved_review.platform == 'google':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
-    elif approved_review.platform == 'yandex':
+    elif 'yandex' in approved_review.platform:
         await check_and_apply_promo_reward(user_id, "yandex_review", bot)
     
     try:

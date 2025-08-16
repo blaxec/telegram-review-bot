@@ -59,8 +59,9 @@ class UserState(StatesGroup):
 
 class AdminState(StatesGroup):
     # Состояния для добавления ссылок
-    ADD_GOOGLE_REFERENCE = State()
-    ADD_YANDEX_REFERENCE = State()
+    # Больше не используются, так как применяется обходной путь
+    # ADD_GOOGLE_REFERENCE = State()
+    # ADD_YANDEX_REFERENCE = State()
 
     # Состояния для указания причин
     PROVIDE_REJECTION_REASON = State()

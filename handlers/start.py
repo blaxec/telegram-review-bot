@@ -1,4 +1,3 @@
-
 import re
 import asyncio
 from aiogram import Router, F
@@ -26,12 +25,11 @@ async def start_handler(message: Message, state: FSMContext):
             if ref_id != message.from_user.id:
                 referrer_id = ref_id
 
-    # Временно отключаем работу с БД для чистоты теста
-    # await db_manager.ensure_user_exists(
-    #     user_id=message.from_user.id,
-    #     username=message.from_user.username,
-    #     referrer_id=referrer_id
-    # )
+    await db_manager.ensure_user_exists(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        referrer_id=referrer_id
+    )
 
     welcome_text = (
         "Привет! Я помогу тебе зарабатывать звезды за твои отзывы.\n\n"
@@ -79,7 +77,7 @@ async def cancel_handler_reply(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        "Действие отменено. Возвращаю вас в главное меню.",
+        "Действие отменено.",
         reply_markup=reply.get_main_menu_keyboard()
     )
     await state.set_state(UserState.MAIN_MENU)
@@ -103,10 +101,7 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await callback.message.answer(
-        "Действие отменено. Возвращаю вас в главное меню.",
-        reply_markup=reply.get_main_menu_keyboard()
-    )
+    # Убираем отправку сообщения "Возвращаю вас..."
     await state.set_state(UserState.MAIN_MENU)
 
 
@@ -124,7 +119,8 @@ async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
         print(f"Error deleting message on go_main_menu: {e}")
         
     await state.set_state(UserState.MAIN_MENU)
+    # Отправляем новое сообщение, потому что старое удалено
     await callback.message.answer(
-        "Вы вернулись в главное меню.",
+        "Главное меню:",
         reply_markup=reply.get_main_menu_keyboard()
     )
