@@ -1,3 +1,5 @@
+# file: docker-compose.yml
+
 services:
   postgres_db:
     image: postgres:15-alpine
@@ -29,7 +31,12 @@ services:
       - .env
     volumes:
       - .:/app
-    restart: always
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Убираем 'restart: always', чтобы избежать случайных перезапусков,
+    # и меняем команду запуска на более надежную.
+    # Это гарантирует, что при любых обстоятельствах будет запущен только один процесс.
+    command: ["python", "main.py"]
+    # -----------------------
 
 volumes:
   postgres_data:
