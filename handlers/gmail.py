@@ -18,6 +18,20 @@ from logic.promo_logic import check_and_apply_promo_reward
 router = Router()
 logger = logging.getLogger(__name__)
 
+async def delete_previous_messages(message: Message, state: FSMContext):
+    """Вспомогательная функция для удаления старых сообщений."""
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_message_id)
+        except TelegramBadRequest:
+            pass
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @router.callback_query(F.data == 'earning_create_gmail')
 async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
     try:
@@ -52,6 +66,7 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
             "Отправьте модель следующим сообщением.",
             reply_markup=inline.get_cancel_to_earning_keyboard()
         )
+        await state.update_data(prompt_message_id=callback.message.message_id)
 
 
 @router.callback_query(F.data == 'gmail_another_phone', F.state.in_('*'))
@@ -68,6 +83,7 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
             "Этот запрос будет отправлен на ручное подтверждение администратору.",
             reply_markup=inline.get_cancel_to_earning_keyboard()
         )
+        await state.update_data(prompt_message_id=callback.message.message_id)
 
 async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
@@ -105,19 +121,29 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         await state.clear()
         logger.error(f"Ошибка отправки модели устройства админу {FINAL_CHECK_ADMIN}: {e}")
 
-@router.message(F.state == UserState.GMAIL_ENTER_DEVICE_MODEL, F.text)
+@router.message(UserState.GMAIL_ENTER_DEVICE_MODEL)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
+    await delete_previous_messages(message, state)
+    if not message.text:
+        prompt_msg = await message.answer("Пожалуйста, отправьте модель устройства в виде текста.")
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        return
     logger.info(f"Caught device model from user {message.from_user.id} in state GMAIL_ENTER_DEVICE_MODEL.")
     await send_device_model_to_admin(message, state, bot, is_another=False)
 
 
-@router.message(F.state == UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL, F.text)
+@router.message(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
 async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
+    await delete_previous_messages(message, state)
+    if not message.text:
+        prompt_msg = await message.answer("Пожалуйста, отправьте модель устройства в виде текста.")
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        return
     logger.info(f"Caught another device model from user {message.from_user.id} in state GMAIL_ENTER_ANOTHER_DEVICE_MODEL.")
     await send_device_model_to_admin(message, state, bot, is_another=True)
 
 
-@router.callback_query(F.data == 'gmail_send_for_verification', F.state == UserState.GMAIL_AWAITING_VERIFICATION)
+@router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
     try:
@@ -166,7 +192,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     await state.set_state(UserState.MAIN_MENU)
 
 
-@router.callback_query(F.data == 'gmail_how_to_create', F.state == UserState.GMAIL_AWAITING_VERIFICATION)
+@router.callback_query(F.data == 'gmail_how_to_create', UserState.GMAIL_AWAITING_VERIFICATION)
 async def show_gmail_instructions(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.GMAIL_INSTRUCTIONS)
     instructions_text = (
@@ -187,7 +213,7 @@ async def show_gmail_instructions(callback: CallbackQuery, state: FSMContext):
         )
 
 
-@router.callback_query(F.data == 'gmail_back_to_verification', F.state == UserState.GMAIL_INSTRUCTIONS)
+@router.callback_query(F.data == 'gmail_back_to_verification', UserState.GMAIL_INSTRUCTIONS)
 async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details', {})
@@ -233,9 +259,10 @@ async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMConte
         )
 
 
-@router.message(F.state == AdminState.ENTER_GMAIL_DATA)
+@router.message(AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
+    await delete_previous_messages(message, state)
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     

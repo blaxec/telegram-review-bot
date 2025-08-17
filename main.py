@@ -16,13 +16,12 @@ from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
-# --- ИСПРАВЛЕНИЕ: Гарантируем, что логирование настраивается только один раз ---
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        force=True,
-    )
+# ИСПРАВЛЕНИЕ: Гарантируем единую конфигурацию логирования при запуске
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 

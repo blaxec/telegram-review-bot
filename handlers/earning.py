@@ -82,7 +82,7 @@ async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
             reply_markup=inline.get_google_init_keyboard()
         )
 
-@router.callback_query(F.data == 'google_review_done', F.state == UserState.GOOGLE_REVIEW_INIT)
+@router.callback_query(F.data == 'google_review_done', UserState.GOOGLE_REVIEW_INIT)
 async def process_google_review_done(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
@@ -94,7 +94,7 @@ async def process_google_review_done(callback: CallbackQuery, state: FSMContext)
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
 
-@router.callback_query(F.data == 'google_get_profile_screenshot', F.state == UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+@router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
     if callback.message:
         await callback.message.edit_text(
@@ -106,7 +106,7 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
             disable_web_page_preview=True
         )
 
-@router.message(F.photo, F.state == UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+@router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
     
@@ -129,7 +129,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
-@router.message(F.photo, F.state == UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
+@router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
     await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
@@ -148,7 +148,7 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
-@router.callback_query(F.data == 'google_continue_writing_review', F.state == UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
+@router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
 async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = callback.from_user.id
     
@@ -175,7 +175,7 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
-@router.callback_query(F.data == 'google_confirm_liking_task', F.state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
+@router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
@@ -222,7 +222,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
 
 
-@router.callback_query(F.data == 'google_confirm_task', F.state == UserState.GOOGLE_REVIEW_TASK_ACTIVE)
+@router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
 async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
@@ -238,7 +238,7 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
             "Отлично! Теперь, пожалуйста, отправьте <i>скриншот вашего опубликованного отзыва</i>."
         )
 
-@router.message(F.photo, F.state == UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
+@router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
 async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
     user_data = await state.get_data()
@@ -333,14 +333,14 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
             reply_markup=inline.get_yandex_init_keyboard()
         )
 
-@router.callback_query(F.data == 'yandex_how_to_be_expert', F.state == UserState.YANDEX_REVIEW_INIT)
+@router.callback_query(F.data == 'yandex_how_to_be_expert', UserState.YANDEX_REVIEW_INIT)
 async def show_yandex_instructions(callback: CallbackQuery):
     text = ("💡 Чтобы повысить уровень \"Знатока города\", достаточно выполнять достижения.\n"
             "Где их взять? В вашем профиле, нажав на <i>\"Знатока города\"</i>.")
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
-@router.callback_query(F.data == 'yandex_ready_to_screenshot', F.state == UserState.YANDEX_REVIEW_INIT)
+@router.callback_query(F.data == 'yandex_ready_to_screenshot', UserState.YANDEX_REVIEW_INIT)
 async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
@@ -354,7 +354,7 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
             reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
         )
 
-@router.message(F.photo, F.state == UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
+@router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
     photo_file_id = message.photo[-1].file_id
@@ -379,7 +379,7 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
-@router.callback_query(F.data == 'yandex_continue_task', F.state == UserState.YANDEX_REVIEW_READY_TO_TASK)
+@router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
 async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = callback.from_user.id
     user_data = await state.get_data()
@@ -411,7 +411,7 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, 'yandex', 'этап прогрева'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
-@router.callback_query(F.data == 'yandex_confirm_liking_task', F.state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
+@router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
@@ -475,7 +475,7 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             await callback.message.edit_text(task_text, disable_web_page_preview=True)
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 
-@router.callback_query(F.data == 'yandex_with_text_confirm_task', F.state == UserState.YANDEX_REVIEW_TASK_ACTIVE)
+@router.callback_query(F.data == 'yandex_with_text_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
 async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
     if callback.message:
         await callback.message.delete()
@@ -491,7 +491,7 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
         "Отлично! Теперь отправьте <i>скриншот опубликованного отзыва</i>."
     )
     
-@router.message(F.photo, F.state == UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
+@router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
     user_data = await state.get_data()

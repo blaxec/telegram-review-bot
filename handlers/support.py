@@ -14,6 +14,20 @@ from database import db_manager
 router = Router()
 logger = logging.getLogger(__name__)
 
+async def delete_previous_messages(message: Message, state: FSMContext):
+    """Вспомогательная функция для удаления старых сообщений."""
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_message_id)
+        except TelegramBadRequest:
+            pass
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @router.message(F.text == 'Поддержка', UserState.MAIN_MENU)
 async def support_handler(message: Message, state: FSMContext):
     """Начало диалога с поддержкой."""
@@ -23,14 +37,17 @@ async def support_handler(message: Message, state: FSMContext):
         pass
     
     await state.set_state(UserState.SUPPORT_AWAITING_QUESTION)
-    await message.answer(
+    prompt_msg = await message.answer(
         "Пожалуйста, опишите вашу проблему или задайте вопрос одним сообщением. Мы передадим его администратору.",
         reply_markup=inline.get_cancel_inline_keyboard()
     )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
 
 @router.message(UserState.SUPPORT_AWAITING_QUESTION)
 async def process_question(message: Message, state: FSMContext, bot: Bot):
     """Обработка вопроса от пользователя и отправка его админам."""
+    await delete_previous_messages(message, state)
     if not message.text:
         await message.answer("Пожалуйста, отправьте ваш вопрос в виде текста.")
         return
@@ -120,20 +137,25 @@ async def admin_claim_question(callback: CallbackQuery, state: FSMContext, bot: 
                 logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id}: {e}")
 
     # Редактируем сообщение у того, кто нажал
-    await callback.message.edit_text(
+    prompt_msg = await callback.message.edit_text(
         f"{callback.message.text}\n\n"
         f"✅ Вы отвечаете на этот вопрос. Отправьте ответ следующим сообщением.",
         reply_markup=None
     )
     
     await state.set_state(AdminState.SUPPORT_AWAITING_ANSWER)
-    await state.update_data(support_ticket_id=ticket_id, support_user_id=ticket.user_id)
+    await state.update_data(
+        support_ticket_id=ticket_id, 
+        support_user_id=ticket.user_id,
+        prompt_message_id=prompt_msg.message_id
+    )
     
     await callback.answer()
 
 @router.message(AdminState.SUPPORT_AWAITING_ANSWER)
 async def admin_send_answer(message: Message, state: FSMContext, bot: Bot):
     """Админ отправляет ответ, который пересылается пользователю."""
+    await delete_previous_messages(message, state)
     if not message.text:
         await message.answer("Пожалуйста, введите ответ текстом.")
         return

@@ -3,6 +3,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 import logging
 
 from states.user_states import UserState
@@ -13,18 +14,34 @@ from database import db_manager
 router = Router()
 logger = logging.getLogger(__name__)
 
+async def delete_previous_messages(message: Message, state: FSMContext):
+    """Вспомогательная функция для удаления старых сообщений."""
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_message_id)
+        except TelegramBadRequest:
+            pass
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @router.message(Command("promo"))
 async def promo_start(message: Message, state: FSMContext):
     """Начало процесса ввода промокода."""
     await state.set_state(UserState.PROMO_ENTER_CODE)
-    await message.answer(
+    prompt_msg = await message.answer(
         "Пожалуйста, введите ваш промокод:",
         reply_markup=inline.get_cancel_inline_keyboard()
     )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.PROMO_ENTER_CODE)
 async def promo_entered(message: Message, state: FSMContext):
     """Обработка введенного промокода."""
+    await delete_previous_messages(message, state)
     if not message.text:
         await message.answer("Пожалуйста, введите промокод текстом.")
         return
