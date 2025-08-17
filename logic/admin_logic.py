@@ -167,7 +167,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
 
     scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp, user_id, platform.split('_')[0], 'основное задание'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform.split('_')[0], 'основное задание'])
     await user_state.update_data(timeout_job_id=timeout_job.id)
     
     return True, f"Текст успешно отправлен пользователю @{user_info.username} (ID: {user_id})."

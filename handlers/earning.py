@@ -29,7 +29,7 @@ TEXT_ADMIN = ADMIN_ID_1
 
 # --- Основное меню Заработка ---
 
-@router.message(F.text == 'Заработок', UserState.MAIN_MENU)
+@router.message(F.text == '💰 Заработок', UserState.MAIN_MENU)
 async def earning_handler_message(message: Message, state: FSMContext):
     try:
         await message.delete()

@@ -2,9 +2,9 @@
 
 import datetime
 import logging
-from aiogram import Bot, Dispatcher
+from aiogram import Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.base import Storage, StorageKey
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 
 from keyboards import inline, reply
@@ -61,14 +61,17 @@ async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки подтверждения пользователю {user_id}: {e}")
 
-async def handle_task_timeout(bot: Bot, dp: Dispatcher, user_id: int, platform: str, message_to_admins: str):
+async def handle_task_timeout(bot: Bot, storage: Storage, user_id: int, platform: str, message_to_admins: str):
     """Обрабатывает истечение времени на любом из этапов задания."""
-    state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
     current_state_str = await state.get_state()
     if not current_state_str:
+        logger.info(f"Timeout handler for user {user_id} triggered, but state is None. Aborting.")
         return
 
+    logger.info(f"Timeout for user {user_id} on platform {platform}. Current state: {current_state_str}. Releasing reference and setting cooldown.")
+    
     user_data = await state.get_data()
     await reference_manager.release_reference_from_user(user_id, final_status='available')
     await db_manager.set_platform_cooldown(user_id, platform, 72)

@@ -1,3 +1,4 @@
+# file: handlers/promo.py
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
@@ -31,6 +32,10 @@ async def delete_previous_messages(message: Message, state: FSMContext):
 @router.message(Command("promo"))
 async def promo_start(message: Message, state: FSMContext):
     """Начало процесса ввода промокода."""
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
+    
     await state.set_state(UserState.PROMO_ENTER_CODE)
     prompt_msg = await message.answer(
         "Пожалуйста, введите ваш промокод:",

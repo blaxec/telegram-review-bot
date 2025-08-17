@@ -1,4 +1,3 @@
-# file: handlers/support.py
 
 import logging
 from aiogram import Router, F, Bot
@@ -28,7 +27,7 @@ async def delete_previous_messages(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
 
-@router.message(F.text == 'Поддержка', UserState.MAIN_MENU)
+@router.message(F.text == '💬 Поддержка', UserState.MAIN_MENU)
 async def support_handler(message: Message, state: FSMContext):
     """Начало диалога с поддержкой."""
     try:

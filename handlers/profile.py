@@ -36,16 +36,10 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     await state.set_state(UserState.MAIN_MENU)
     user_id = message_or_callback.from_user.id
     
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: "Железная" проверка существования пользователя ---
-    # Перед тем как получить данные, мы гарантируем, что пользователь есть в базе.
-    # Это решает проблему, показанную на скриншоте.
     await db_manager.ensure_user_exists(user_id, message_or_callback.from_user.username)
-    # --------------------------------------------------------------------
     
     user = await db_manager.get_user(user_id)
-    # Теперь эта проверка практически не нужна, но мы оставим ее как последнюю линию защиты.
     if not user:
-        # Это сообщение больше не должно появляться.
         await message_or_callback.answer("Произошла критическая ошибка, не удалось найти или создать ваш профиль. Попробуйте /start")
         return
 
@@ -83,7 +77,7 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
 
 
 @router.message(Command("stars"))
-@router.message(F.text == 'Профиль', UserState.MAIN_MENU)
+@router.message(F.text == '👤 Профиль', UserState.MAIN_MENU)
 async def profile_handler(message: Message, state: FSMContext):
     try:
         await message.delete()

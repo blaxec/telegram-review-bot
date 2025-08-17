@@ -1,4 +1,3 @@
-# file: handlers/admin.py
 
 import logging
 from aiogram import Router, F, Bot, Dispatcher
@@ -55,6 +54,9 @@ async def delete_previous_messages(message: Message, state: FSMContext):
 
 @router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
 async def admin_add_stars(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     await db_manager.update_balance(message.from_user.id, 999.0)
     await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
@@ -63,6 +65,9 @@ async def admin_add_stars(message: Message, state: FSMContext):
 
 @router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
 async def admin_refs_menu(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     temp_admin_tasks.pop(message.from_user.id, None)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
@@ -193,10 +198,8 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     success, assigned_user_id = await reference_manager.delete_reference(link_id)
     
     if not success:
-        # ИСПРАВЛЕНИЕ: Отправляем обычное сообщение вместо ошибочного answer_callback_query
         await message.answer(f"❌ Ссылка с ID {link_id} не найдена.")
     else:
-        # ИСПРАВЛЕНИЕ: Отправляем обычное сообщение вместо ошибочного answer_callback_query
         await message.answer(f"✅ Ссылка ID {link_id} удалена.")
     
         if assigned_user_id:
@@ -210,7 +213,6 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
 
     await state.clear()
     
-    # Создаем временный CallbackQuery, чтобы переиспользовать функцию отображения списка
     temp_message = await message.answer("Обновляю список...")
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
@@ -255,7 +257,13 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         platform = "gmail" if "gmail" in context else context.split('_')[0]
         prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
         await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
-        await admin_state.update_data(target_user_id=user_id, platform=platform, context=context, prompt_message_id=prompt_msg.message_id)
+        await admin_state.update_data(
+            target_user_id=user_id, 
+            platform=platform, 
+            context=context, 
+            prompt_message_id=prompt_msg.message_id,
+            original_verification_message_id=callback.message.message_id
+        )
 
     elif action == "reject":
         action_text = f"❌ ОТКЛОНЕН (@{callback.from_user.username})"
@@ -264,7 +272,12 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         if rejection_context:
             prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину отклонения для {user_id_str}.")
             await admin_state.set_state(AdminState.PROVIDE_REJECTION_REASON)
-            await admin_state.update_data(target_user_id=user_id, rejection_context=rejection_context, prompt_message_id=prompt_msg.message_id)
+            await admin_state.update_data(
+                target_user_id=user_id, 
+                rejection_context=rejection_context, 
+                prompt_message_id=prompt_msg.message_id,
+                original_verification_message_id=callback.message.message_id
+            )
         else:
             await bot.send_message(callback.from_user.id, "Ошибка: неизвестный контекст.")
     
@@ -318,6 +331,9 @@ async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: Async
 
 @router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
 async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     await message.answer("⏳ Загружаю отзывы в холде...")
     hold_reviews = await db_manager.get_all_hold_reviews()
@@ -380,6 +396,9 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
 
 @router.message(Command("reset_cooldown"), F.from_user.id.in_(ADMINS))
 async def reset_cooldown_handler(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     args = message.text.split()
     if len(args) < 2:
@@ -395,6 +414,9 @@ async def reset_cooldown_handler(message: Message, state: FSMContext):
 
 @router.message(Command("viewhold"), F.from_user.id.in_(ADMINS))
 async def viewhold_handler(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     args = message.text.split()
     if len(args) < 2:
@@ -406,6 +428,9 @@ async def viewhold_handler(message: Message, state: FSMContext):
 
 @router.message(Command("fine"), F.from_user.id.in_(ADMINS))
 async def fine_user_start(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     prompt_msg = await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.FINE_USER_ID)
@@ -413,6 +438,9 @@ async def fine_user_start(message: Message, state: FSMContext):
 
 @router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
 async def create_promo_start(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
     await state.clear()
     prompt_msg = await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
                          reply_markup=inline.get_cancel_inline_keyboard())
@@ -432,6 +460,15 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
     await message.answer(response)
+    
+    # Удаляем исходное сообщение для проверки
+    original_message_id = admin_data.get("original_verification_message_id")
+    if original_message_id:
+        try:
+            await bot.delete_message(chat_id=message.from_user.id, message_id=original_message_id)
+        except TelegramBadRequest:
+            pass
+    
     await state.clear()
 
 @router.message(AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
@@ -445,6 +482,15 @@ async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     response = await process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
     await message.answer(response)
+
+    # Удаляем исходное сообщение для проверки
+    original_message_id = admin_data.get("original_verification_message_id")
+    if original_message_id:
+        try:
+            await bot.delete_message(chat_id=message.from_user.id, message_id=original_message_id)
+        except TelegramBadRequest:
+            pass
+
     await state.clear()
 
 @router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)

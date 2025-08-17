@@ -1,3 +1,5 @@
+# file: handlers/start.py
+
 import re
 import asyncio
 from aiogram import Router, F
@@ -12,9 +14,26 @@ from database import db_manager
 
 router = Router()
 
+async def schedule_message_deletion(message: Message, delay: int):
+    """Планирует удаление сообщения через заданную задержку."""
+    async def delete_after_delay():
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            # Сообщение могло быть уже удалено, игнорируем.
+            pass
+    asyncio.create_task(delete_after_delay())
+
+
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext):
     """Обработчик команды /start."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass # Игнорируем ошибку, если не удалось удалить (например, нет прав)
+    
     await state.clear()
     
     referrer_id = None
@@ -54,22 +73,33 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
         pass
         
     try:
-        await callback.message.edit_text("Вы приняли соглашение.")
+        if callback.message:
+            await callback.message.edit_text("Вы приняли соглашение.")
+            # Планируем удаление этого сообщения
+            await schedule_message_deletion(callback.message, 15)
     except TelegramBadRequest:
         pass
 
     await state.set_state(UserState.MAIN_MENU)
-    await callback.message.answer(
-        "Добро пожаловать в главное меню!",
-        reply_markup=reply.get_main_menu_keyboard()
-    )
+    if callback.message:
+        welcome_msg = await callback.message.answer(
+            "Добро пожаловать в главное меню!",
+            reply_markup=reply.get_main_menu_keyboard()
+        )
+        # Планируем удаление и этого сообщения
+        await schedule_message_deletion(welcome_msg, 15)
 
 
 # --- Универсальные обработчики отмены и возврата ---
 
-@router.message(F.text.lower() == 'отмена')
+@router.message(F.text == '❌ Отмена')
 async def cancel_handler_reply(message: Message, state: FSMContext):
     """Обработчик кнопки 'Отмена', сбрасывает любое состояние."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+        
     current_state = await state.get_state()
     if current_state is None:
         await message.answer("Нечего отменять. Вы уже в главном меню.")
@@ -92,7 +122,8 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
         pass
     
     try:
-        await callback.message.delete()
+        if callback.message:
+            await callback.message.delete()
     except TelegramBadRequest as e:
         print(f"Error deleting message: {e}")
 
@@ -101,7 +132,6 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    # Убираем отправку сообщения "Возвращаю вас..."
     await state.set_state(UserState.MAIN_MENU)
 
 
@@ -114,13 +144,16 @@ async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
         pass
         
     try:
-        await callback.message.delete()
+        if callback.message:
+            await callback.message.delete()
     except TelegramBadRequest as e:
         print(f"Error deleting message on go_main_menu: {e}")
         
     await state.set_state(UserState.MAIN_MENU)
-    # Отправляем новое сообщение, потому что старое удалено
-    await callback.message.answer(
-        "Главное меню:",
-        reply_markup=reply.get_main_menu_keyboard()
-    )
+    if callback.message:
+        menu_msg = await callback.message.answer(
+            "Главное меню:",
+            reply_markup=reply.get_main_menu_keyboard()
+        )
+        # Планируем удаление сообщения "Главное меню"
+        await schedule_message_deletion(menu_msg, 15)
