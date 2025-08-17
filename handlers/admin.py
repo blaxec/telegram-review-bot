@@ -38,6 +38,21 @@ TEXT_ADMIN = ADMIN_ID_1
 # Хранилище для временной задачи добавления ссылок
 temp_admin_tasks = {}  # Хранит {user_id: platform}
 
+async def delete_previous_messages(message: Message, state: FSMContext):
+    """Вспомогательная функция для удаления старых сообщений."""
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_message_id)
+        except TelegramBadRequest:
+            pass
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+
 @router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
 async def admin_add_stars(message: Message, state: FSMContext):
     await state.clear()
@@ -159,12 +174,15 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
     if callback.message:
-        await callback.message.edit_text("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_back_to_admin_refs_keyboard())
+        prompt_msg = await callback.message.edit_text("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_back_to_admin_refs_keyboard())
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer()
 
-@router.message(F.state == AdminState.DELETE_LINK_ID, F.from_user.id.in_(ADMINS))
+@router.message(F.state == AdminState.DELETE_LINK_ID, F.text, F.from_user.id.in_(ADMINS))
 async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
-    if not message.text or not message.text.isdigit():
+    await delete_previous_messages(message, state)
+
+    if not message.text.isdigit():
         await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
         return
     
@@ -175,29 +193,24 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     success, assigned_user_id = await reference_manager.delete_reference(link_id)
     
     if not success:
-        await message.answer(f"❌ Ссылка с ID {link_id} не найдена в базе.")
-        return
+        await bot.answer_callback_query(message.from_user.id, f"❌ Ссылка с ID {link_id} не найдена.", show_alert=True)
+    else:
+        await bot.answer_callback_query(message.from_user.id, f"✅ Ссылка ID {link_id} удалена.", show_alert=True)
     
-    await message.answer(f"✅ Ссылка с ID {link_id} успешно удалена.")
-    
-    if assigned_user_id:
-        try:
-            user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
-            await user_state.clear()
-            await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена администратором. Процесс выполнения остановлен.", reply_markup=reply.get_main_menu_keyboard())
-            await user_state.set_state(UserState.MAIN_MENU)
-        except Exception as e: 
-            logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
+        if assigned_user_id:
+            try:
+                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
+                await user_state.clear()
+                await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
+                await user_state.set_state(UserState.MAIN_MENU)
+            except Exception as e: 
+                logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
 
     await state.clear()
     
-    # Имитируем нажатие на кнопку "list", чтобы показать обновленный список
-    # Создаем фиктивный объект CallbackQuery из Message
     dummy_callback_query = CallbackQuery(
-        id="dummy",
-        from_user=message.from_user,
-        chat_instance="dummy",
-        message=message, # Передаем сообщение для последующего удаления
+        id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
+        message=await message.answer("..."),
         data=f"admin_refs:list:{platform}"
     )
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
@@ -227,25 +240,25 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
             await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
         elif context == "gmail_device_model":
+            prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.\nВведите данные для аккаунта:\nИмя\nФамилия\nПароль\nПочта (без @gmail.com)")
             await admin_state.set_state(AdminState.ENTER_GMAIL_DATA)
-            await admin_state.update_data(gmail_user_id=user_id)
-            await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.\nВведите данные для аккаунта:\nИмя\nФамилия\nПароль\nПочта (без @gmail.com)")
+            await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
     
     elif action == "warn":
         action_text = f"⚠️ ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ (@{callback.from_user.username})"
         platform = "gmail" if "gmail" in context else context.split('_')[0]
+        prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
         await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
-        await admin_state.update_data(target_user_id=user_id, platform=platform, context=context)
-        await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
+        await admin_state.update_data(target_user_id=user_id, platform=platform, context=context, prompt_message_id=prompt_msg.message_id)
 
     elif action == "reject":
         action_text = f"❌ ОТКЛОНЕН (@{callback.from_user.username})"
         context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_device_model"}
         rejection_context = context_map.get(context)
         if rejection_context:
+            prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину отклонения для {user_id_str}.")
             await admin_state.set_state(AdminState.PROVIDE_REJECTION_REASON)
-            await admin_state.update_data(target_user_id=user_id, rejection_context=rejection_context)
-            await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину отклонения для {user_id_str}.")
+            await admin_state.update_data(target_user_id=user_id, rejection_context=rejection_context, prompt_message_id=prompt_msg.message_id)
         else:
             await bot.send_message(callback.from_user.id, "Ошибка: неизвестный контекст.")
     
@@ -261,14 +274,24 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         _, platform, user_id_str, link_id_str = callback.data.split(':')
         state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
         if platform not in state_map: await callback.answer("Ошибка платформы."); return
-        await state.set_state(state_map[platform])
-        await state.update_data(target_user_id=int(user_id_str), target_link_id=int(link_id_str), platform=platform)
         
         edit_text = f"✍️ Введите текст отзыва для ID: {user_id_str}"
         new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
+        
+        prompt_msg = None
         if callback.message:
-            if callback.message.photo: await callback.message.edit_caption(caption=new_content, reply_markup=None)
-            else: await callback.message.edit_text(new_content, reply_markup=None)
+            if callback.message.photo: 
+                await callback.message.edit_caption(caption=new_content, reply_markup=None)
+            else: 
+                prompt_msg = await callback.message.edit_text(new_content, reply_markup=None)
+
+        await state.set_state(state_map[platform])
+        await state.update_data(
+            target_user_id=int(user_id_str), 
+            target_link_id=int(link_id_str), 
+            platform=platform,
+            prompt_message_id=prompt_msg.message_id if prompt_msg else None
+        )
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
 @router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
@@ -378,21 +401,23 @@ async def viewhold_handler(message: Message, state: FSMContext):
 @router.message(Command("fine"), F.from_user.id.in_(ADMINS))
 async def fine_user_start(message: Message, state: FSMContext):
     await state.clear()
+    prompt_msg = await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.FINE_USER_ID)
-    await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
 async def create_promo_start(message: Message, state: FSMContext):
     await state.clear()
-    await state.set_state(AdminState.PROMO_CODE_NAME)
-    await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
+    prompt_msg = await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
                          reply_markup=inline.get_cancel_inline_keyboard())
+    await state.set_state(AdminState.PROMO_CODE_NAME)
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 # --- Обработчики состояний (FSM) ---
 
 @router.message(F.state == AdminState.PROVIDE_WARN_REASON, F.text, F.from_user.id.in_(ADMINS))
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     admin_data = await state.get_data()
     user_id, platform, context = admin_data.get("target_user_id"), admin_data.get("platform"), admin_data.get("context")
     if not all([user_id, platform, context]):
@@ -404,7 +429,7 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(F.state == AdminState.PROVIDE_REJECTION_REASON, F.text, F.from_user.id.in_(ADMINS))
 async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     admin_data = await state.get_data()
     user_id, context = admin_data.get("target_user_id"), admin_data.get("rejection_context")
     if not user_id:
@@ -416,7 +441,7 @@ async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot
 
 @router.message(F.state.in_({AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, AdminState.PROVIDE_YANDEX_REVIEW_TEXT}), F.text, F.from_user.id == TEXT_ADMIN)
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     data = await state.get_data()
     dp_dummy = Dispatcher(storage=state.storage)
     success, response_text = await send_review_text_to_user_logic(
@@ -429,30 +454,31 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
 
 @router.message(F.state == AdminState.FINE_USER_ID, F.text, F.from_user.id.in_(ADMINS))
 async def fine_user_get_id(message: Message, state: FSMContext):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     user_id = await db_manager.find_user_by_identifier(message.text)
     if not user_id:
         await message.answer(f"❌ Пользователь <code>{message.text}</code> не найден.", reply_markup=inline.get_cancel_inline_keyboard()); return
     await state.update_data(target_user_id=user_id)
+    prompt_msg = await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.FINE_AMOUNT)
-    await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(F.state == AdminState.FINE_AMOUNT, F.text, F.from_user.id.in_(ADMINS))
 async def fine_user_get_amount(message: Message, state: FSMContext):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     try:
         amount = float(message.text)
         if amount <= 0: raise ValueError
     except (ValueError, TypeError):
         await message.answer("❌ Введите положительное число.", reply_markup=inline.get_cancel_inline_keyboard()); return
     await state.update_data(fine_amount=amount)
+    prompt_msg = await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.FINE_REASON)
-    await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(F.state == AdminState.FINE_REASON, F.text, F.from_user.id.in_(ADMINS))
 async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text:
-        await message.answer("Введите причину.", reply_markup=inline.get_cancel_inline_keyboard()); return
+    await delete_previous_messages(message, state)
     data = await state.get_data()
     result_text = await apply_fine_to_user(data.get("target_user_id"), message.from_user.id, data.get("fine_amount"), message.text, bot)
     await message.answer(result_text)
@@ -460,19 +486,21 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(F.state == AdminState.PROMO_CODE_NAME, F.text, F.from_user.id.in_(ADMINS))
 async def promo_name_entered(message: Message, state: FSMContext):
-    if not message.text: return
+    await delete_previous_messages(message, state)
     promo_name = message.text.strip().upper()
     existing_promo = await db_manager.get_promo_by_code(promo_name)
     if existing_promo:
         await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.", reply_markup=inline.get_cancel_inline_keyboard())
         return
     await state.update_data(promo_name=promo_name)
+    prompt_msg = await message.answer("Отлично. Теперь введите количество активаций.", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.PROMO_USES)
-    await message.answer("Отлично. Теперь введите количество активаций.", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(F.state == AdminState.PROMO_USES, F.text, F.from_user.id.in_(ADMINS))
 async def promo_uses_entered(message: Message, state: FSMContext):
-    if not message.text or not message.text.isdigit():
+    await delete_previous_messages(message, state)
+    if not message.text.isdigit():
         await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
         return
     uses = int(message.text)
@@ -480,11 +508,13 @@ async def promo_uses_entered(message: Message, state: FSMContext):
         await message.answer("❌ Количество активаций должно быть больше нуля.", reply_markup=inline.get_cancel_inline_keyboard())
         return
     await state.update_data(promo_uses=uses)
+    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.PROMO_REWARD)
-    await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(F.state == AdminState.PROMO_REWARD, F.text, F.from_user.id.in_(ADMINS))
 async def promo_reward_entered(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
     try:
         reward = float(message.text.replace(',', '.'))
         if reward <= 0: raise ValueError
@@ -492,8 +522,8 @@ async def promo_reward_entered(message: Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например <code>10.5</code>).", reply_markup=inline.get_cancel_inline_keyboard())
         return
     await state.update_data(promo_reward=reward)
-    await state.set_state(AdminState.PROMO_CONDITION)
     await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
+    await state.set_state(AdminState.PROMO_CONDITION)
 
 @router.callback_query(F.data.startswith("promo_cond:"), F.state == AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
