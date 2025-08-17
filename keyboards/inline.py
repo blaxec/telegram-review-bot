@@ -118,7 +118,7 @@ def get_write_review_platform_keyboard() -> InlineKeyboardMarkup:
     builder.button(text='Avito', callback_data='review_avito')
     builder.button(text='Yandex услуги', callback_data='review_yandex_services')
     builder.button(text='Назад', callback_data='earning_menu')
-    builder.adjust(2)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 

@@ -109,10 +109,6 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
 @router.message(F.photo, F.state == UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
     if not message.photo: return
-    # Удаляем сообщение с просьбой отправить фото
-    try:
-        if message.reply_to_message: await bot.delete_message(message.chat.id, message.reply_to_message.message_id)
-    except: pass
     
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
@@ -312,7 +308,7 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     review_type = callback.data.split(':')[1]
     user_id = callback.from_user.id
     
-    platform = f"yandex_{review_type}" # yandex_with_text или yandex_without_text
+    platform = f"yandex_{review_type}"
     
     cooldown = await db_manager.check_platform_cooldown(user_id, "yandex")
     if cooldown:
@@ -336,7 +332,6 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
             "💡 Аккаунты принимаются не ниже <i>\"Знатока города\"</i>.",
             reply_markup=inline.get_yandex_init_keyboard()
         )
-
 
 @router.callback_query(F.data == 'yandex_how_to_be_expert', F.state == UserState.YANDEX_REVIEW_INIT)
 async def show_yandex_instructions(callback: CallbackQuery):
@@ -416,7 +411,6 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, 'yandex', 'этап прогрева'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
-
 @router.callback_query(F.data == 'yandex_confirm_liking_task', F.state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_data = await state.get_data()
@@ -427,9 +421,7 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
 
     review_type = user_data.get("yandex_review_type", "with_text")
 
-    # --- РАЗДЕЛЕНИЕ ЛОГИКИ ---
     if review_type == "with_text":
-        # Старая логика: ждем текст от админа
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
         if callback.message:
             await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
@@ -463,7 +455,6 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
     
     else: # review_type == "without_text"
-        # Новая логика: сразу просим оставить отзыв
         link_id = user_data.get('active_link_id')
         link = await db_manager.db_get_link_by_id(link_id)
         
@@ -482,14 +473,12 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         )
         if callback.message:
             await callback.message.edit_text(task_text, disable_web_page_preview=True)
-        # Устанавливаем состояние ожидания скриншота
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
-
 
 @router.callback_query(F.data == 'yandex_with_text_confirm_task', F.state == UserState.YANDEX_REVIEW_TASK_ACTIVE)
 async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
     if callback.message:
-        await callback.message.delete() # Удаляем, т.к. клавиатура одноразовая
+        await callback.message.delete()
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -510,7 +499,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     review_type = user_data.get("yandex_review_type", "with_text")
     platform = f"yandex_{review_type}"
 
-    review_text = user_data.get('review_text', '') # Будет пустым для 'without_text'
+    review_text = user_data.get('review_text', '')
     
     active_link_id = await reference_manager.get_user_active_link_id(user_id)
     if not active_link_id:
@@ -566,8 +555,6 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
-
-# --- Прочие хэндлеры ---
 @router.callback_query(F.data.in_({'review_zoon', 'review_avito', 'review_yandex_services'}))
 async def handle_unsupported_services(callback: CallbackQuery):
     platform_map = {
@@ -578,7 +565,6 @@ async def handle_unsupported_services(callback: CallbackQuery):
     platform_name = platform_map.get(callback.data)
     await callback.answer(f"К сожалению, в данный момент сервис {platform_name} не поддерживается.", show_alert=True)
 
-# --- НОВЫЙ ХЭНДЛЕР ДЛЯ КНОПКИ ОТМЕНЫ ИЗ GMAIL ---
 @router.callback_query(F.data == 'cancel_to_earning')
 async def cancel_to_earning_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
