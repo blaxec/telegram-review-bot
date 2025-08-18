@@ -4,7 +4,8 @@ import datetime
 import logging
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import Storage, StorageKey
+# ИСПРАВЛЕНИЕ: 'Storage' переименован в 'BaseStorage' в новых версиях aiogram
+from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 
 from keyboards import inline, reply
@@ -61,7 +62,7 @@ async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки подтверждения пользователю {user_id}: {e}")
 
-async def handle_task_timeout(bot: Bot, storage: Storage, user_id: int, platform: str, message_to_admins: str):
+async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, platform: str, message_to_admins: str):
     """Обрабатывает истечение времени на любом из этапов задания."""
     state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
