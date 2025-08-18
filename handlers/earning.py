@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import asyncio
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
@@ -27,6 +28,31 @@ logger = logging.getLogger(__name__)
 
 TEXT_ADMIN = ADMIN_ID_1
 
+async def schedule_message_deletion(message: Message, delay: int):
+    """Планирует удаление сообщения через заданную задержку."""
+    async def delete_after_delay():
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(delete_after_delay())
+
+async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
+    """Удаляет сообщение пользователя и предыдущее сообщение-приглашение от бота."""
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_message_id)
+        except TelegramBadRequest:
+            pass
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+
 # --- Основное меню Заработка ---
 
 @router.message(F.text == '💰 Заработок', UserState.MAIN_MENU)
@@ -35,7 +61,6 @@ async def earning_handler_message(message: Message, state: FSMContext):
         await message.delete()
     except TelegramBadRequest:
         pass
-    # Отправляем новое сообщение, так как старое было с Reply кнопкой
     await message.answer("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
 
 async def earning_menu_logic(callback: CallbackQuery):
@@ -75,24 +100,28 @@ async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
         
     await state.set_state(UserState.GOOGLE_REVIEW_INIT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "⭐ За отзыв в Google.Картах начисляется 15 звезд.\n\n"
             "💡 Для повышения проходимости вашего отзыва, пожалуйста, временно отключите "
             "<i>\"Определение местоположения\"</i> в настройках приложения на вашем телефоне.",
             reply_markup=inline.get_google_init_keyboard()
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
 
 @router.callback_query(F.data == 'google_review_done', UserState.GOOGLE_REVIEW_INIT)
 async def process_google_review_done(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
             "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
             "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
             "Отправьте фото следующим сообщением.",
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
 
 @router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
@@ -108,12 +137,15 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
     
-    await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    await schedule_message_deletion(response_msg, 25)
+    
     await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
     caption = f"[Админ: @SHAD0W_F4]\nПроверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
@@ -131,8 +163,12 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
-    await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
+    
+    response_msg = await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
+    await schedule_message_deletion(response_msg, 25)
+
     await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
     caption = f"[Админ: @SHAD0W_F4]\nПроверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
@@ -187,7 +223,8 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
 
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
     if callback.message:
-        await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+        response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+        await schedule_message_deletion(response_msg, 25)
             
     user_info = await bot.get_chat(callback.from_user.id)
     link_id = user_data.get('active_link_id')
@@ -234,12 +271,15 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
     
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Отлично! Теперь, пожалуйста, отправьте <i>скриншот вашего опубликованного отзыва</i>."
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
 async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
     user_id = message.from_user.id
@@ -284,7 +324,8 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
 
-        await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        await schedule_message_deletion(response_msg, 25)
 
     except Exception as e:
         print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
@@ -310,9 +351,10 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     
     platform = f"yandex_{review_type}"
     
-    cooldown = await db_manager.check_platform_cooldown(user_id, "yandex")
+    # ИСПРАВЛЕНИЕ: Проверяем кулдаун для конкретного типа отзыва Yandex
+    cooldown = await db_manager.check_platform_cooldown(user_id, platform)
     if cooldown:
-        await callback.answer(f"Вы сможете написать отзыв в Yandex через {format_timedelta(cooldown)}.", show_alert=True)
+        await callback.answer(f"Вы сможете написать отзыв в Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'}) через {format_timedelta(cooldown)}.", show_alert=True)
         return
         
     if not await reference_manager.has_available_references(platform):
@@ -344,7 +386,7 @@ async def show_yandex_instructions(callback: CallbackQuery):
 async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Хорошо. Пожалуйста, сделайте и пришлите <i>скриншот вашего профиля</i> в Яндекс.Картах.\n\n"
             "❗️<i>Требования к скриншоту:</i>\n"
             "1. Скриншот должен быть <i>полным</i>, без обрезаний и замазывания.\n"
@@ -353,14 +395,19 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
             "Отправьте фото следующим сообщением.",
             reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
 
 @router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
     
-    await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    await schedule_message_deletion(response_msg, 25)
+    
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
     
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
@@ -408,7 +455,7 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     
     now = datetime.datetime.now(datetime.timezone.utc)
     scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=5), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, 'yandex', 'этап прогрева'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
@@ -424,7 +471,8 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
     if review_type == "with_text":
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
         if callback.message:
-            await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            await schedule_message_deletion(response_msg, 25)
         
         user_id = callback.from_user.id
         user_info = await bot.get_chat(user_id)
@@ -472,7 +520,8 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             "После этого сделайте скриншот опубликованного отзыва и отправьте его сюда."
         )
         if callback.message:
-            await callback.message.edit_text(task_text, disable_web_page_preview=True)
+            prompt_msg = await callback.message.edit_text(task_text, disable_web_page_preview=True)
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 
 @router.callback_query(F.data == 'yandex_with_text_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
@@ -487,12 +536,15 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
         except Exception: 
             pass
     await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
-    await callback.message.answer(
+    prompt_msg = await callback.message.answer(
         "Отлично! Теперь отправьте <i>скриншот опубликованного отзыва</i>."
     )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
     
 @router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
     user_id = message.from_user.id
@@ -544,7 +596,8 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
 
-        await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        await schedule_message_deletion(response_msg, 25)
 
     except Exception as e:
         print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
