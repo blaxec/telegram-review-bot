@@ -5,9 +5,10 @@ import logging
 import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage 
-from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
+# ИСПРАВЛЕНИЕ: Возвращаем недостающий импорт
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, ADMIN_IDS
@@ -16,7 +17,6 @@ from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
-# ИСПРАВЛЕНИЕ: Гарантируем единую конфигурацию логирования при запуске
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -53,20 +53,16 @@ async def handle_telegram_bad_request(event: ErrorEvent):
     logger.error(f"Unhandled exception in error handler: {event.exception.__class__.__name__}: {event.exception}")
     return False
 
-# ДОБАВЛЕНИЕ: Обработчик для всех неопознанных сообщений
 async def handle_unknown_messages(message: Message):
     """Ловит все сообщения, которые не были обработаны другими хэндлерами."""
     try:
-        # Пытаемся удалить сообщение пользователя, чтобы не засорять чат
         await message.delete()
     except TelegramBadRequest:
         pass
     
-    # Отправляем ответное сообщение
     response_msg = await message.answer(
         "😕 Не могу распознать вашу команду. Пожалуйста, используйте кнопки меню или команду /start для перезапуска."
     )
-    # Планируем удаление ответа бота через 10 секунд
     async def delete_after_delay():
         await asyncio.sleep(10)
         try:
@@ -74,6 +70,16 @@ async def handle_unknown_messages(message: Message):
         except TelegramBadRequest:
             pass
     asyncio.create_task(delete_after_delay())
+
+async def handle_unknown_callbacks(callback: CallbackQuery):
+    """Ловит все колбэки от устаревших или неработающих кнопок."""
+    try:
+        await callback.answer(
+            "Эта кнопка больше не активна. Пожалуйста, воспользуйтесь меню.",
+            show_alert=True
+        )
+    except TelegramBadRequest:
+        pass
 
 
 async def main():
@@ -93,6 +99,7 @@ async def main():
 
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
+    # --- РЕГИСТРАЦИЯ РОУТЕРОВ ---
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
@@ -102,8 +109,9 @@ async def main():
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # ДОБАВЛЕНИЕ: Регистрируем catch-all хэндлер последним
+    # --- РЕГИСТРАЦИЯ УНИВЕРСАЛЬНЫХ ОБРАБОТЧИКОВ ---
     dp.message.register(handle_unknown_messages)
+    dp.callback_query.register(handle_unknown_callbacks)
     
     dp.errors.register(handle_telegram_bad_request)
 
