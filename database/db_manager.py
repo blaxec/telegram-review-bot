@@ -364,7 +364,10 @@ async def reset_user_cooldowns(user_id: int) -> bool:
                 return False
             
             user.google_cooldown_until = None
-            user.yandex_cooldown_until = None
+            # ИЗМЕНЕНИЕ: Сброс новых полей Yandex
+            user.yandex_with_text_cooldown_until = None
+            user.yandex_without_text_cooldown_until = None
+            # ------------------------------------
             user.gmail_cooldown_until = None
             user.blocked_until = None
             user.warnings = 0

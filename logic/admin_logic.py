@@ -2,6 +2,10 @@
 
 import logging
 import datetime
+# ИСПРАВЛЕНИЕ: Добавлены недостающие импорты
+import asyncio
+from aiogram.types import Message
+# -----------------------------------------
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -167,7 +171,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
 
     scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform.split('_')[0], 'основное задание'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform, 'основное задание'])
     await user_state.update_data(timeout_job_id=timeout_job.id)
     
     return True, f"Текст успешно отправлен пользователю @{user_info.username} (ID: {user_id})."
@@ -219,7 +223,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         return False, "Не удалось одобрить отзыв (ошибка БД)."
 
     cooldown_hours = 72
-    platform_for_cooldown = 'yandex' if 'yandex' in review.platform else review.platform
+    platform_for_cooldown = review.platform
     await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
     
     cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
@@ -228,7 +232,8 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
     try:
-        await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) прошел проверку и отправлен в холд. +{amount} ⭐ в холд.")
+        msg = await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) прошел проверку и отправлен в холд. +{amount} ⭐ в холд.")
+        asyncio.create_task(schedule_message_deletion(msg, 25))
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
     
@@ -246,7 +251,7 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
         return False, "Не удалось отклонить отзыв (возможно, уже обработан)."
 
     cooldown_hours = 72
-    platform_for_cooldown = 'yandex' if 'yandex' in rejected_review.platform else rejected_review.platform
+    platform_for_cooldown = rejected_review.platform
     await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
     cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
     scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, platform_for_cooldown], id=f"cooldown_notify_{rejected_review.user_id}_{platform_for_cooldown}")
@@ -269,7 +274,6 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     
     user_id = approved_review.user_id
     
-    # Начисление реферального вознаграждения
     if approved_review.platform == 'google':
         user = await db_manager.get_user(user_id)
         if user and user.referrer_id:
@@ -280,14 +284,14 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
             except Exception as e:
                 logger.error(f"Не удалось уведомить реферера {user.referrer_id}: {e}")
     
-    # Проверяем и начисляем награду за промокод
     if approved_review.platform == 'google':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
     elif 'yandex' in approved_review.platform:
         await check_and_apply_promo_reward(user_id, "yandex_review", bot)
     
     try:
-        await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
+        msg = await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
+        asyncio.create_task(schedule_message_deletion(msg, 25))
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении: {e}")
         
@@ -370,3 +374,13 @@ async def get_user_hold_info_logic(identifier: str) -> str:
             f"   - ID отзыва: `{review.id}`\n\n"
         )
     return response_text
+
+async def schedule_message_deletion(message: Message, delay: int):
+    """Вспомогательная функция для планирования удаления сообщения."""
+    async def delete_after_delay():
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(delete_after_delay())

@@ -6,7 +6,7 @@ import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage 
-from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
+from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -53,6 +53,28 @@ async def handle_telegram_bad_request(event: ErrorEvent):
     logger.error(f"Unhandled exception in error handler: {event.exception.__class__.__name__}: {event.exception}")
     return False
 
+# ДОБАВЛЕНИЕ: Обработчик для всех неопознанных сообщений
+async def handle_unknown_messages(message: Message):
+    """Ловит все сообщения, которые не были обработаны другими хэндлерами."""
+    try:
+        # Пытаемся удалить сообщение пользователя, чтобы не засорять чат
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    
+    # Отправляем ответное сообщение
+    response_msg = await message.answer(
+        "😕 Не могу распознать вашу команду. Пожалуйста, используйте кнопки меню или команду /start для перезапуска."
+    )
+    # Планируем удаление ответа бота через 10 секунд
+    async def delete_after_delay():
+        await asyncio.sleep(10)
+        try:
+            await response_msg.delete()
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(delete_after_delay())
+
 
 async def main():
     if not BOT_TOKEN:
@@ -79,6 +101,9 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
+    
+    # ДОБАВЛЕНИЕ: Регистрируем catch-all хэндлер последним
+    dp.message.register(handle_unknown_messages)
     
     dp.errors.register(handle_telegram_bad_request)
 

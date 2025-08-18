@@ -43,7 +43,6 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
         user = await db_manager.get_user(user_id)
         
         if not user:
-            # Эта ситуация маловероятна после ensure_user_exists, но является защитой
             error_text = "Не удалось загрузить ваш профиль для отображения статистики."
             if isinstance(message_or_callback, Message):
                 await message_or_callback.answer(error_text)
@@ -80,7 +79,7 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
             await message_or_callback.answer(error_text, show_alert=True)
 
 
-@router.message(F.text == 'Статистика', UserState.MAIN_MENU)
+@router.message(F.text == '📊 Статистика', UserState.MAIN_MENU)
 async def stats_handler(message: Message):
     """Обработчик для раздела 'Статистика'."""
     await show_stats_menu(message)

@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import asyncio
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -17,6 +18,16 @@ from logic.promo_logic import check_and_apply_promo_reward
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+async def schedule_message_deletion(message: Message, delay: int):
+    """Планирует удаление сообщения через заданную задержку."""
+    async def delete_after_delay():
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(delete_after_delay())
 
 async def delete_previous_messages(message: Message, state: FSMContext):
     """Вспомогательная функция для удаления старых сообщений."""
@@ -59,14 +70,14 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "За создание аккаунта выдается <i>5 звезд</i>.\n\n"
             "Пожалуйста, укажите <i>модель вашего устройства</i> (например, iPhone 13 Pro или Samsung Galaxy S22), "
             "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.\n\n"
             "Отправьте модель следующим сообщением.",
             reply_markup=inline.get_cancel_to_earning_keyboard()
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
 @router.callback_query(F.data == 'gmail_another_phone', F.state.in_('*'))
@@ -78,12 +89,12 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
         
     await state.set_state(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Введите модель <i>второго устройства</i>, с которого вы хотите создать аккаунт. "
             "Этот запрос будет отправлен на ручное подтверждение администратору.",
             reply_markup=inline.get_cancel_to_earning_keyboard()
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
@@ -91,11 +102,12 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
     user_id = message.from_user.id
     
     # Сначала подтверждаем пользователю, что его сообщение принято
-    await message.answer(
+    response_msg = await message.answer(
         f"Ваша модель устройства: <i>{device_model}</i>.\n"
         "Запомните ее, администратор может ее уточнить.\n\n"
         "Ваш запрос отправлен администратору на проверку. Ожидайте..."
     )
+    await schedule_message_deletion(response_msg, 25)
     
     # Обновляем данные и состояние в FSM
     await state.update_data(device_model=device_model)
@@ -152,7 +164,9 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         pass
     
     if callback.message:
-        await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
+        response_msg = await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
+        await schedule_message_deletion(response_msg, 25)
+
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
     device_model = user_data.get('device_model', 'Не указана')
@@ -262,7 +276,6 @@ async def admin_send_gmail_data_request(callback: CallbackQuery, state: FSMConte
 @router.message(AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
-    await delete_previous_messages(message, state)
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     
@@ -314,11 +327,16 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
     await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
     try:
-        await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
+        msg = await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
+        await schedule_message_deletion(msg, 25)
     except Exception as e:
         logger.error(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
     if callback.message:
-        await callback.message.edit_text(f"{callback.message.text}\n\n✅ АККАУНТ ПОДТВЕРЖДЕН (админ @{callback.from_user.username})", reply_markup=None)
+        try:
+            # ИЗМЕНЕНИЕ: Удаляем сообщение после подтверждения
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
@@ -329,14 +347,20 @@ async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext)
         pass
         
     user_id = int(callback.data.split(':')[1])
+    
+    # Сохраняем ID оригинального сообщения для последующего удаления
+    if callback.message:
+        await state.update_data(original_verification_message_id=callback.message.message_id)
+        
     await state.update_data(
         target_user_id=user_id,
         rejection_context="gmail_account"
     )
     await state.set_state(AdminState.PROVIDE_REJECTION_REASON)
     if callback.message:
-        await callback.message.edit_text(
-            f"{callback.message.text}\n\n❌ АККАУНТ ОТКЛОНЕН (админ @{callback.from_user.username}).\n\n"
+        prompt_msg = await callback.message.edit_text(
+            f"{callback.message.text}\n\n"
             f"✍️ <i>Теперь, пожалуйста, введите причину отказа следующим сообщением.</i>",
             reply_markup=None
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)

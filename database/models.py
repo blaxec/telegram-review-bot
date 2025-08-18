@@ -1,3 +1,5 @@
+# file: database/models.py
+
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger,
                         DateTime, ForeignKey, Float, Enum, Boolean)
@@ -20,7 +22,10 @@ class User(Base):
 
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
-    yandex_cooldown_until = Column(DateTime, nullable=True)
+    # ИЗМЕНЕНИЕ: Раздельные кулдауны для Yandex
+    yandex_with_text_cooldown_until = Column(DateTime, nullable=True)
+    yandex_without_text_cooldown_until = Column(DateTime, nullable=True)
+    # -----------------------------------------
     gmail_cooldown_until = Column(DateTime, nullable=True)
     blocked_until = Column(DateTime, nullable=True)
     
