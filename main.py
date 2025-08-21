@@ -6,15 +6,14 @@ import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
-# ИЗМЕНЕНИЕ: Импортируем Durations
 from config import REDIS_HOST, REDIS_PORT, Durations
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
-# ИСПРАВЛЕНИЕ: Возвращаем недостающий импорт
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, ADMIN_IDS
-from handlers import start, profile, support, earning, admin, gmail, stats, promo
+# ИЗМЕНЕНИЕ: Добавлен импорт нового роутера 'other'
+from handlers import start, profile, support, earning, admin, gmail, stats, promo, other
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -55,35 +54,8 @@ async def handle_telegram_bad_request(event: ErrorEvent):
     logger.error(f"Unhandled exception in error handler: {event.exception.__class__.__name__}: {event.exception}")
     return False
 
-async def handle_unknown_messages(message: Message):
-    """Ловит все сообщения, которые не были обработаны другими хэндлерами."""
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
-    
-    response_msg = await message.answer(
-        "😕 Не могу распознать вашу команду. Пожалуйста, используйте кнопки меню или команду /start для перезапуска."
-    )
-    async def delete_after_delay():
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
-        await asyncio.sleep(Durations.DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY)
-        try:
-            await response_msg.delete()
-        except TelegramBadRequest:
-            pass
-    asyncio.create_task(delete_after_delay())
-
-async def handle_unknown_callbacks(callback: CallbackQuery):
-    """Ловит все колбэки от устаревших или неработающих кнопок."""
-    try:
-        await callback.answer(
-            "Эта кнопка больше не активна. Пожалуйста, воспользуйтесь меню.",
-            show_alert=True
-        )
-    except TelegramBadRequest:
-        pass
-
+# ИЗМЕНЕНИЕ: Удалены функции handle_unknown_messages и handle_unknown_callbacks, 
+# так как они перенесены в handlers/other.py
 
 async def main():
     if not BOT_TOKEN:
@@ -93,7 +65,7 @@ async def main():
     await db_manager.init_db()
     
     storage = RedisStorage.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
-    logger.info("Using MemoryStorage for FSM.")
+    logger.info("Using RedisStorage for FSM.")
     
     scheduler = AsyncIOScheduler(timezone="UTC")
     
@@ -103,6 +75,7 @@ async def main():
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
     # --- РЕГИСТРАЦИЯ РОУТЕРОВ ---
+    # Сначала регистрируем все роутеры с конкретными командами
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
@@ -112,9 +85,12 @@ async def main():
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # --- РЕГИСТРАЦИЯ УНИВЕРСАЛЬНЫХ ОБРАБОТЧИКОВ ---
-    dp.message.register(handle_unknown_messages)
-    dp.callback_query.register(handle_unknown_callbacks)
+    # ИЗМЕНЕНИЕ: Удалена прямая регистрация универсальных обработчиков
+    # dp.message.register(handle_unknown_messages)
+    # dp.callback_query.register(handle_unknown_callbacks)
+    
+    # ИЗМЕНЕНИЕ: Роутер для "всего остального" регистрируется ПОСЛЕДНИМ
+    dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
 
