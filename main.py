@@ -5,7 +5,8 @@ import logging
 import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
+from config import REDIS_HOST, REDIS_PORT
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 # ИСПРАВЛЕНИЕ: Возвращаем недостающий импорт
@@ -89,7 +90,7 @@ async def main():
 
     await db_manager.init_db()
     
-    storage = MemoryStorage()
+    storage = RedisStorage.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
     logger.info("Using MemoryStorage for FSM.")
     
     scheduler = AsyncIOScheduler(timezone="UTC")
