@@ -10,7 +10,8 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
-from config import WITHDRAWAL_CHANNEL_ID
+# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
+from config import WITHDRAWAL_CHANNEL_ID, Limits, Rewards
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -105,8 +106,9 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
         await callback.answer("Ваш баланс отрицательный. Передача звезд невозможна, пока вы не погасите долг.", show_alert=True)
         return
         
-    if balance < 1.0:
-        await callback.answer("Недостаточно звезд на балансе для выполнения этой операции (минимум 1 ⭐).", show_alert=True)
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    if balance < Limits.MIN_TRANSFER_AMOUNT:
+        await callback.answer(f"Недостаточно звезд на балансе для выполнения этой операции (минимум {Limits.MIN_TRANSFER_AMOUNT} ⭐).", show_alert=True)
         return
 
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
@@ -138,9 +140,11 @@ async def transfer_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
         amount = float(message.text)
-        if amount < 1.0: raise ValueError
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        if amount < Limits.MIN_TRANSFER_AMOUNT: raise ValueError
     except (ValueError, TypeError):
-        prompt_msg = await message.answer("Неверный формат. Пожалуйста, введите положительное число (минимум 1).")
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        prompt_msg = await message.answer(f"Неверный формат. Пожалуйста, введите положительное число (минимум {Limits.MIN_TRANSFER_AMOUNT}).")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     await process_transfer_amount(amount, message, state)
@@ -242,8 +246,9 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         await callback.answer("Ваш баланс отрицательный. Вывод невозможен, пока вы не погасите долг.", show_alert=True)
         return
 
-    if balance < 15.0:
-        await callback.answer(f"Минимальная сумма для вывода 15 звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    if balance < Limits.MIN_WITHDRAWAL_AMOUNT:
+        await callback.answer(f"Минимальная сумма для вывода {Limits.MIN_WITHDRAWAL_AMOUNT} звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
     
     if not WITHDRAWAL_CHANNEL_ID:
@@ -267,7 +272,8 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
     if amount_str == 'other':
         await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
         if callback.message:
-            await callback.message.edit_text("Введите сумму для вывода (минимум 15):", reply_markup=inline.get_cancel_inline_keyboard())
+            # ИЗМЕНЕНИЕ: Используем константу из конфига
+            await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT}):", reply_markup=inline.get_cancel_inline_keyboard())
             await state.update_data(prompt_message_id=callback.message.message_id)
         return
 
@@ -293,8 +299,9 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
         amount = float(message.text)
-        if amount < 15.0:
-            prompt_msg = await message.answer("Минимальная сумма для вывода - 15 звезд.")
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        if amount < Limits.MIN_WITHDRAWAL_AMOUNT:
+            prompt_msg = await message.answer(f"Минимальная сумма для вывода - {Limits.MIN_WITHDRAWAL_AMOUNT} звезд.")
             await state.update_data(prompt_message_id=prompt_msg.message_id)
             return
     except (ValueError, TypeError):
@@ -436,9 +443,10 @@ async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bo
         
     referral_earnings = await db_manager.get_referral_earnings(user_id)
     
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
     ref_text = (
-        "🚀 **Ваша реферальная система**\n\n"
-        "Приглашайте друзей и получайте **0.45 ⭐** за каждый одобренный ими отзыв в Google Картах!\n\n"
+        f"🚀 **Ваша реферальная система**\n\n"
+        f"Приглашайте друзей и получайте **{Rewards.REFERRAL_EARNING} ⭐** за каждый одобренный ими отзыв в Google Картах!\n\n"
         "🔗 **Ваша ссылка для приглашений:**\n"
         f"`{referral_link}`\n"
         "(Нажмите на ссылку выше, чтобы скопировать её)\n\n"

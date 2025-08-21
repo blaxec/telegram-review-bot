@@ -9,7 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from typing import Union, List, Tuple
 
 from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation, SupportTicket
-from config import DATABASE_URL
+# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
+from config import DATABASE_URL, Durations, Limits
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,8 @@ async def set_platform_cooldown(user_id: int, platform: str, hours: int):
                 cooldown_field = f"{platform}_cooldown_until"
                 setattr(user, cooldown_field, datetime.datetime.utcnow() + datetime.timedelta(hours=hours))
 
-async def add_user_warning(user_id: int, platform: str, hours_block: int = 24) -> int:
+# ИЗМЕНЕНИЕ: Используем константы из config.py
+async def add_user_warning(user_id: int, platform: str, hours_block: int = Durations.COOLDOWN_WARNING_BLOCK_HOURS) -> int:
     current_warnings = 0
     async with async_session() as session:
         async with session.begin():
@@ -173,7 +175,7 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = 24) -
                 return 0
             user.warnings += 1
             current_warnings = user.warnings
-            if user.warnings >= 3:
+            if user.warnings >= Limits.WARNINGS_THRESHOLD_FOR_BAN:
                 cooldown_field = f"{platform}_cooldown_until"
                 setattr(user, cooldown_field, datetime.datetime.utcnow() + datetime.timedelta(hours=hours_block))
                 user.warnings = 0

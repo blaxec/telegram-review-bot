@@ -6,7 +6,8 @@ import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
-from config import REDIS_HOST, REDIS_PORT
+# ИЗМЕНЕНИЕ: Импортируем Durations
+from config import REDIS_HOST, REDIS_PORT, Durations
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 # ИСПРАВЛЕНИЕ: Возвращаем недостающий импорт
@@ -65,7 +66,8 @@ async def handle_unknown_messages(message: Message):
         "😕 Не могу распознать вашу команду. Пожалуйста, используйте кнопки меню или команду /start для перезапуска."
     )
     async def delete_after_delay():
-        await asyncio.sleep(10)
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await asyncio.sleep(Durations.DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY)
         try:
             await response_msg.delete()
         except TelegramBadRequest:

@@ -12,7 +12,8 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
-from config import FINAL_CHECK_ADMIN
+# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
+from config import FINAL_CHECK_ADMIN, Rewards, Durations
 from logic.user_notifications import format_timedelta
 from logic.promo_logic import check_and_apply_promo_reward
 
@@ -70,8 +71,9 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     if callback.message:
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
         prompt_msg = await callback.message.edit_text(
-            "За создание аккаунта выдается <i>5 звезд</i>.\n\n"
+            f"За создание аккаунта выдается <i>{Rewards.GMAIL_ACCOUNT} звезд</i>.\n\n"
             "Пожалуйста, укажите <i>модель вашего устройства</i> (например, iPhone 13 Pro или Samsung Galaxy S22), "
             "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.\n\n"
             "Отправьте модель следующим сообщением.",
@@ -107,7 +109,8 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         "Запомните ее, администратор может ее уточнить.\n\n"
         "Ваш запрос отправлен администратору на проверку. Ожидайте..."
     )
-    await schedule_message_deletion(response_msg, 25)
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     
     # Обновляем данные и состояние в FSM
     await state.update_data(device_model=device_model)
@@ -165,7 +168,8 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     
     if callback.message:
         response_msg = await callback.message.edit_text("Ваш аккаунт отправлен на проверку. Ожидайте.")
-        await schedule_message_deletion(response_msg, 25)
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
 
     user_data = await state.get_data()
     gmail_details = user_data.get('gmail_details')
@@ -321,14 +325,16 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
         pass
         
     user_id = int(callback.data.split(':')[1])
-    await db_manager.update_balance(user_id, 5.0)
-    await db_manager.set_platform_cooldown(user_id, "gmail", 24)
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    await db_manager.update_balance(user_id, Rewards.GMAIL_ACCOUNT)
+    await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
     
     await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
     try:
-        msg = await bot.send_message(user_id, "✅ Ваш аккаунт успешно прошел проверку. +5 звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
-        await schedule_message_deletion(msg, 25)
+        # ИЗМЕНЕНИЕ: Используем константы из конфига
+        msg = await bot.send_message(user_id, f"✅ Ваш аккаунт успешно прошел проверку. +{Rewards.GMAIL_ACCOUNT} звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
+        await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
     if callback.message:

@@ -1,44 +1,46 @@
+# file: handlers/earning.py
 
+import datetime
 import logging
+import asyncio
 from aiogram import Router, F, Bot, Dispatcher
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import any_state
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN
 from database import db_manager
 from references import reference_manager
-from logic.admin_logic import (
-    process_add_links_logic,
-    process_rejection_reason_logic,
-    process_warning_reason_logic,
-    send_review_text_to_user_logic,
-    approve_review_to_hold_logic,
-    reject_initial_review_logic,
-    get_user_hold_info_logic,
-    approve_hold_review_logic,
-    reject_hold_review_logic,
-    approve_withdrawal_logic,
-    reject_withdrawal_logic,
-    apply_fine_to_user
+# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Rewards, Durations
+from logic.user_notifications import (
+    format_timedelta,
+    send_liking_confirmation_button,
+    send_yandex_liking_confirmation_button,
+    handle_task_timeout
 )
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
-# Хранилище для временной задачи добавления ссылок
-temp_admin_tasks = {}  # Хранит {user_id: platform}
+async def schedule_message_deletion(message: Message, delay: int):
+    """Планирует удаление сообщения через заданную задержку."""
+    async def delete_after_delay():
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    asyncio.create_task(delete_after_delay())
 
-async def delete_previous_messages(message: Message, state: FSMContext):
-    """Вспомогательная функция для удаления старых сообщений."""
+async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
+    """Удаляет сообщение пользователя и предыдущее сообщение-приглашение от бота."""
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     if prompt_message_id:
@@ -52,559 +54,588 @@ async def delete_previous_messages(message: Message, state: FSMContext):
         pass
 
 
-@router.message(Command("addstars"), F.from_user.id.in_(ADMINS))
-async def admin_add_stars(message: Message, state: FSMContext):
+# --- Основное меню Заработка ---
+
+@router.message(F.text == '💰 Заработок', UserState.MAIN_MENU)
+async def earning_handler_message(message: Message, state: FSMContext):
     try:
         await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    await db_manager.update_balance(message.from_user.id, 999.0)
-    await message.answer("✅ На ваш баланс зачислено 999 ⭐.")
+    except TelegramBadRequest:
+        pass
+    await message.answer("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
-
-@router.message(Command("admin_refs"), F.from_user.id.in_(ADMINS))
-async def admin_refs_menu(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    temp_admin_tasks.pop(message.from_user.id, None)
-    await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-
-@router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
-async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await state.clear()
-    temp_admin_tasks.pop(callback.from_user.id, None)
-    
-    data = await state.get_data()
-    message_ids_to_delete = data.get("link_message_ids", [])
+async def earning_menu_logic(callback: CallbackQuery):
     if callback.message:
-        message_ids_to_delete.append(callback.message.message_id)
-    
-    for msg_id in set(message_ids_to_delete):
-        try: 
-            await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
-        except TelegramBadRequest: 
-            pass
+        await callback.message.edit_text("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
 
-    await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    await callback.answer()
+@router.callback_query(F.data == 'earning_menu')
+async def earning_handler_callback(callback: CallbackQuery, state: FSMContext):
+    await earning_menu_logic(callback)
 
-@router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
-async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    platform = callback.data.split(':')[2]
-    temp_admin_tasks[callback.from_user.id] = platform
-    logger.info(f"[NO_FSM_ADD_LINK] Task started for user {callback.from_user.id}. Platform: {platform}")
+
+@router.callback_query(F.data == 'earning_write_review')
+async def initiate_write_review(callback: CallbackQuery, state: FSMContext):
     if callback.message:
         await callback.message.edit_text(
-            f"Выбрана платформа: <i>{platform}</i>.\n\nОтправьте ссылки следующим сообщением.",
-            reply_markup=inline.get_back_to_admin_refs_keyboard()
+            "✍️ Выберите платформу для написания отзыва:",
+            reply_markup=inline.get_write_review_platform_keyboard()
         )
-    await callback.answer()
+    
+@router.callback_query(F.data == 'earning_menu_back')
+async def earning_menu_back(callback: CallbackQuery, state: FSMContext):
+    await earning_menu_logic(callback)
 
-@router.message(
-    lambda message: message.from_user.id in temp_admin_tasks, 
-    F.text, 
-    F.from_user.id.in_(ADMINS)
-)
-async def admin_add_links_handler(message: Message):
-    user_id = message.from_user.id
-    platform = temp_admin_tasks.pop(user_id)
-    logger.info(f"[NO_FSM_ADD_LINK] Processing link submission for user {user_id}. Platform: {platform}")
+# --- Логика для Google Карт ---
+
+@router.callback_query(F.data == 'review_google_maps')
+async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    cooldown = await db_manager.check_platform_cooldown(user_id, "google")
+    if cooldown:
+        await callback.answer(f"Вы сможете написать отзыв в Google через {format_timedelta(cooldown)}.", show_alert=True)
+        return
+
+    if not await reference_manager.has_available_references('google_maps'):
+        await callback.answer("К сожалению, в данный момент задания для Google Карт закончились. Попробуйте позже.", show_alert=True)
+        return
+        
+    await state.set_state(UserState.GOOGLE_REVIEW_INIT)
+    if callback.message:
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        prompt_msg = await callback.message.edit_text(
+            f"⭐ За отзыв в Google.Картах начисляется {Rewards.GOOGLE_REVIEW} звезд.\n\n"
+            "💡 Для повышения проходимости вашего отзыва, пожалуйста, временно отключите "
+            "<i>\"Определение местоположения\"</i> в настройках приложения на вашем телефоне.",
+            reply_markup=inline.get_google_init_keyboard()
+        )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.callback_query(F.data == 'google_review_done', UserState.GOOGLE_REVIEW_INIT)
+async def process_google_review_done(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+    if callback.message:
+        prompt_msg = await callback.message.edit_text(
+            "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
+            "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
+            "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
+            "Отправьте фото следующим сообщением.",
+            reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
+        )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
+    if callback.message:
+        await callback.message.edit_text(
+            "🤔 Как сделать скриншот вашего профиля Google.Карты:\n\n"
+            "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
+            "2. Вас переведет на профиль Google Карты.\n"
+            "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
+            reply_markup=inline.get_google_ask_profile_screenshot_keyboard(),
+            disable_web_page_preview=True
+        )
+
+@router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
+    if not message.photo: return
+    
+    photo_file_id = message.photo[-1].file_id
+    await state.update_data(profile_screenshot_id=photo_file_id)
+    
+    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+    
+    await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
+    caption = f"[Админ: @SHAD0W_F4]\nПроверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
+    try:
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=photo_file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile")
+        )
+    except Exception as e:
+        print(f"Ошибка отправки фото профиля админу: {e}")
+        await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        await state.clear()
+
+@router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
+async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
+    if not message.photo: return
+    
+    response_msg = await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+
+    await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
+    caption = f"[Админ: @SHAD0W_F4]\nПроверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
+    try:
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_last_reviews")
+        )
+    except Exception as e:
+        print(f"Ошибка отправки фото последних отзывов админу: {e}")
+        await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        await state.clear()
+
+@router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
+async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
+    
+    link = await reference_manager.assign_reference_to_user(user_id, 'google_maps')
+    if not link:
+        if callback.message:
+            await callback.message.edit_text("К сожалению, в данный момент доступных ссылок для написания отзывов не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
+        await state.clear()
+        return
+
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    task_text = (
+        "Отлично! Следующий шаг:\n\n"
+        f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
+        "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.\n\n"
+        f"⏳ Для выполнения этого задания у вас есть <i>{Durations.TASK_GOOGLE_LIKING_TIMEOUT} минут</i>. "
+        f"Кнопка для подтверждения появится через {Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS} минут."
+    )
+    if callback.message:
+        await callback.message.edit_text(task_text, disable_web_page_preview=True)
+    await state.set_state(UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
+    await state.update_data(username=callback.from_user.username, active_link_id=link.id)
+    
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
+    await state.update_data(timeout_job_id=timeout_job.id)
+
+@router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
+async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    timeout_job_id = user_data.get('timeout_job_id')
+    if timeout_job_id:
+        try:
+            scheduler.remove_job(timeout_job_id)
+        except Exception as e:
+            print(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+
+    await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
+    if callback.message:
+        response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+            
+    user_info = await bot.get_chat(callback.from_user.id)
+    link_id = user_data.get('active_link_id')
+    link = await db_manager.db_get_link_by_id(link_id)
+    profile_screenshot_id = user_data.get("profile_screenshot_id")
+
+    if not link:
+        if callback.message:
+            await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+        await state.clear()
+        return
+
+    admin_notification_text = (
+        f"Пользователь @{user_info.username} (ID: <code>{callback.from_user.id}</code>) прошел этап 'лайков' и ожидает текст для отзыва Google.\n\n"
+        f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
+    )
     
     try:
-        result_text = await process_add_links_logic(message.text, platform)
-        await message.answer(result_text)
-        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    except Exception as e:
-        logger.exception(f"Критическая ошибка (без FSM) для пользователя {user_id}: {e}")
-        await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
-
-@router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
-async def admin_view_refs_stats(callback: CallbackQuery):
-    try: await callback.answer("Загружаю...", show_alert=False)
-    except: pass
-    platform = callback.data.split(':')[2]
-    all_links = await reference_manager.get_all_references(platform)
-    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
-    text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
-            f"Всего: {len(all_links)}\n"
-            f"🟢 Доступно: {stats.get('available', 0)}\n"
-            f"🟡 В работе: {stats.get('assigned', 0)}\n"
-            f"🔴 Использовано: {stats.get('used', 0)}\n"
-            f"⚫️ Просрочено: {stats.get('expired', 0)}")
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=inline.get_back_to_admin_refs_keyboard())
-
-@router.callback_query(F.data.startswith("admin_refs:list:"), F.from_user.id.in_(ADMINS))
-async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await callback.answer("Загружаю список...")
-    platform = callback.data.split(':')[2]
-    all_links = await reference_manager.get_all_references(platform)
-
-    if callback.message:
-        await callback.message.delete()
-
-    if not all_links:
-        msg = await bot.send_message(callback.from_user.id, f"В базе нет ссылок для платформы <i>{platform}</i>.", reply_markup=inline.get_admin_refs_list_keyboard(platform))
-        await state.update_data(link_message_ids=[msg.message_id])
-        return
-
-    message_ids = []
-    base_text = f"📄 Список ссылок для <i>{platform}</i>:\n\n"
-    chunks = [""]
-    icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
-
-    for link in all_links:
-        user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
-        line = f"{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>\n\n"
-        
-        if len(chunks[-1] + line) > 4000:
-            chunks.append("")
-        chunks[-1] += line
-    
-    for i, chunk in enumerate(chunks):
-        final_text = (base_text + chunk) if i == 0 else chunk
-        keyboard = inline.get_admin_refs_list_keyboard(platform) if i == len(chunks) - 1 else None
-        msg = await bot.send_message(callback.from_user.id, final_text, reply_markup=keyboard, disable_web_page_preview=True)
-        message_ids.append(msg.message_id)
-
-    await state.update_data(link_message_ids=message_ids)
-
-@router.callback_query(F.data.startswith("admin_refs:delete_start:"), F.from_user.id.in_(ADMINS))
-async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
-    platform = callback.data.split(':')[2]
-    await state.set_state(AdminState.DELETE_LINK_ID)
-    await state.update_data(platform_for_deletion=platform)
-    if callback.message:
-        prompt_msg = await callback.message.edit_text("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_back_to_admin_refs_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-    await callback.answer()
-
-@router.message(AdminState.DELETE_LINK_ID, F.from_user.id.in_(ADMINS))
-async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
-    await delete_previous_messages(message, state)
-
-    if not message.text or not message.text.isdigit():
-        await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
-        return
-    
-    link_id = int(message.text)
-    data = await state.get_data()
-    platform = data.get("platform_for_deletion")
-    
-    success, assigned_user_id = await reference_manager.delete_reference(link_id)
-    
-    if not success:
-        await message.answer(f"❌ Ссылка с ID {link_id} не найдена.")
-    else:
-        await message.answer(f"✅ Ссылка ID {link_id} удалена.")
-    
-        if assigned_user_id:
-            try:
-                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
-                await user_state.clear()
-                await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
-                await user_state.set_state(UserState.MAIN_MENU)
-            except Exception as e: 
-                logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
-
-    await state.clear()
-    
-    temp_message = await message.answer("Обновляю список...")
-    dummy_callback_query = CallbackQuery(
-        id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
-        message=temp_message,
-        data=f"admin_refs:list:{platform}"
-    )
-    await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
-    await temp_message.delete()
-
-
-@router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
-async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    try: await callback.answer()
-    except: pass
-    _, action, context, user_id_str = callback.data.split(':')
-    user_id = int(user_id_str)
-    admin_state = state
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    original_text = ""
-    if callback.message:
-        original_text = callback.message.text or callback.message.caption or ""
-    
-    action_text = ""
-    if action == "confirm":
-        action_text = f"✅ ПОДТВЕРЖДЕНО (@{callback.from_user.username})"
-        if context == "google_profile":
-            await user_state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
-            await bot.send_message(user_id, "Профиль прошел проверку. Пришлите скриншот последних отзывов.", reply_markup=inline.get_google_last_reviews_check_keyboard())
-        elif context == "google_last_reviews":
-            await user_state.set_state(UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
-            await bot.send_message(user_id, "Отзывы прошли проверку. Можете продолжить.", reply_markup=inline.get_google_continue_writing_keyboard())
-        elif "yandex_profile" in context:
-            await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
-            await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
-        elif context == "gmail_device_model":
-            prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.\nВведите данные для аккаунта:\nИмя\nФамилия\nПароль\nПочта (без @gmail.com)")
-            await admin_state.set_state(AdminState.ENTER_GMAIL_DATA)
-            await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
-    
-    elif action == "warn":
-        action_text = f"⚠️ ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ (@{callback.from_user.username})"
-        platform = "gmail" if "gmail" in context else context.split('_')[0]
-        prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
-        await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
-        await admin_state.update_data(
-            target_user_id=user_id, 
-            platform=platform, 
-            context=context, 
-            prompt_message_id=prompt_msg.message_id,
-            original_verification_message_id=callback.message.message_id
-        )
-
-    elif action == "reject":
-        action_text = f"❌ ОТКЛОНЕН (@{callback.from_user.username})"
-        context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_device_model"}
-        rejection_context = context_map.get(context)
-        if rejection_context:
-            prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину отклонения для {user_id_str}.")
-            await admin_state.set_state(AdminState.PROVIDE_REJECTION_REASON)
-            await admin_state.update_data(
-                target_user_id=user_id, 
-                rejection_context=rejection_context, 
-                prompt_message_id=prompt_msg.message_id,
-                original_verification_message_id=callback.message.message_id
+        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
+        if profile_screenshot_id:
+            await bot.send_photo(
+                chat_id=TEXT_ADMIN,
+                photo=profile_screenshot_id,
+                caption=admin_notification_text,
+                reply_markup=keyboard
             )
         else:
-            await bot.send_message(callback.from_user.id, "Ошибка: неизвестный контекст.")
+            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
+        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
+        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
+async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    timeout_job_id = user_data.get('timeout_job_id')
+    if timeout_job_id:
+        try:
+            scheduler.remove_job(timeout_job_id)
+        except Exception as e:
+            print(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+    
+    await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
+    if callback.message:
+        prompt_msg = await callback.message.edit_text(
+            "Отлично! Теперь, пожалуйста, отправьте <i>скриншот вашего опубликованного отзыва</i>."
+        )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
+async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
+    if not message.photo: return
+    user_data = await state.get_data()
+    user_id = message.from_user.id
+    review_text = user_data.get('review_text', 'Текст не был сохранен.')
+    
+    active_link_id = await reference_manager.get_user_active_link_id(user_id)
+    if not active_link_id:
+        await message.answer("Произошла критическая ошибка: не найдена активная задача. Начните заново.")
+        await state.clear()
+        return
+    
+    link_object = await db_manager.db_get_link_by_id(active_link_id)
+    link_url = link_object.url if link_object else "Ссылка не найдена"
+
+    caption = (
+        f"🚨 Финальная проверка отзыва Google 🚨\n\n"
+        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)\n"
+        f"Ссылка: <code>{link_url}</code>\n\n"
+        f"Текст отзыва: «<i>{review_text}</i>»\n\n"
+        "Скриншот прикреплен. Проверьте отзыв и примите решение."
+    )
+    
+    try:
+        sent_message = await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_final_verdict_keyboard(0)
+        )
+        
+        review_id = await db_manager.create_review_draft(
+            user_id=user_id,
+            link_id=active_link_id,
+            platform='google',
+            text=review_text,
+            admin_message_id=sent_message.message_id
+        )
+
+        await bot.edit_message_reply_markup(
+            chat_id=FINAL_CHECK_ADMIN,
+            message_id=sent_message.message_id,
+            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
+        )
+
+        response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+
+    except Exception as e:
+        print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
+        await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
+    
+    await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
+
+# --- Логика для Yandex Карт ---
+
+@router.callback_query(F.data == 'review_yandex_maps')
+async def choose_yandex_review_type(callback: CallbackQuery, state: FSMContext):
+    if callback.message:
+        await callback.message.edit_text(
+            "Выберите тип отзыва для Yandex.Карт:",
+            reply_markup=inline.get_yandex_review_type_keyboard()
+        )
+
+@router.callback_query(F.data.startswith('yandex_review_type:'))
+async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
+    review_type = callback.data.split(':')[1]
+    user_id = callback.from_user.id
+    
+    platform = f"yandex_{review_type}"
+    
+    # ИСПРАВЛЕНИЕ: Проверяем кулдаун для конкретного типа отзыва Yandex
+    cooldown = await db_manager.check_platform_cooldown(user_id, platform)
+    if cooldown:
+        await callback.answer(f"Вы сможете написать отзыв в Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'}) через {format_timedelta(cooldown)}.", show_alert=True)
+        return
+        
+    if not await reference_manager.has_available_references(platform):
+        await callback.answer(f"К сожалению, задания для 'Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'})' закончились.", show_alert=True)
+        return
+    
+    await state.update_data(yandex_review_type=review_type)
+    await state.set_state(UserState.YANDEX_REVIEW_INIT)
+
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    reward = Rewards.YANDEX_WITH_TEXT if review_type == "with_text" else Rewards.YANDEX_WITHOUT_TEXT
     
     if callback.message:
-        try:
-            if callback.message.photo: await callback.message.edit_caption(caption=f"{original_text}\n\n{action_text}", reply_markup=None)
-            else: await callback.message.edit_text(f"{original_text}\n\n{action_text}", reply_markup=None)
-        except TelegramBadRequest: pass
-
-@router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
-async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
-    try:
-        _, platform, user_id_str, link_id_str = callback.data.split(':')
-        state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
-        if platform not in state_map: await callback.answer("Ошибка платформы."); return
-        
-        edit_text = f"✍️ Введите текст отзыва для ID: {user_id_str}"
-        new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
-        
-        prompt_msg = None
-        if callback.message:
-            if callback.message.photo: 
-                await callback.message.edit_caption(caption=new_content, reply_markup=None)
-            else: 
-                prompt_msg = await callback.message.edit_text(new_content, reply_markup=None)
-
-        await state.set_state(state_map[platform])
-        await state.update_data(
-            target_user_id=int(user_id_str), 
-            target_link_id=int(link_id_str), 
-            platform=platform,
-            prompt_message_id=prompt_msg.message_id if prompt_msg else None
+        await callback.message.edit_text(
+            f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward} звезд.\n\n"
+            "💡 Для проверки нам понадобится скриншот вашего профиля.\n"
+            "💡 Также выключите <i>\"Определение местоположения\"</i> для приложения в настройках телефона.\n"
+            "💡 Аккаунты принимаются не ниже <i>\"Знатока города\"</i>.",
+            reply_markup=inline.get_yandex_init_keyboard()
         )
-    except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
-async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
-    review_id = int(callback.data.split(':')[1])
-    success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В ХОЛДЕ (@{callback.from_user.username})", reply_markup=None)
+@router.callback_query(F.data == 'yandex_how_to_be_expert', UserState.YANDEX_REVIEW_INIT)
+async def show_yandex_instructions(callback: CallbackQuery):
+    text = ("💡 Чтобы повысить уровень \"Знатока города\", достаточно выполнять достижения.\n"
+            "Где их взять? В вашем профиле, нажав на <i>\"Знатока города\"</i>.")
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
-@router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
-async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
-    review_id = int(callback.data.split(':')[1])
-    success, message_text = await reject_initial_review_logic(review_id, bot, scheduler)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})", reply_markup=None)
+@router.callback_query(F.data == 'yandex_ready_to_screenshot', UserState.YANDEX_REVIEW_INIT)
+async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
+    if callback.message:
+        prompt_msg = await callback.message.edit_text(
+            "Хорошо. Пожалуйста, сделайте и пришлите <i>скриншот вашего профиля</i> в Яндекс.Картах.\n\n"
+            "❗️<i>Требования к скриншоту:</i>\n"
+            "1. Скриншот должен быть <i>полным</i>, без обрезаний и замазывания.\n"
+            "2. На нем должен быть хорошо виден ваш уровень <i>\"Знатока города\"</i>.\n"
+            "3. Должна быть видна <i>дата вашего последнего отзыва</i>.\n\n"
+            "Отправьте фото следующим сообщением.",
+            reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
+        )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
-async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
+
+@router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
+async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
+    if not message.photo: return
+    photo_file_id = message.photo[-1].file_id
+    await state.update_data(profile_screenshot_id=photo_file_id)
+    
+    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+    
+    await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
+    
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
+    caption = (f"[Админ: @SHAD0W_F4]\n"
+               f"Проверьте скриншот профиля Yandex. Убедитесь, что виден уровень знатока и дата последнего отзыва.\n"
+               f"{user_info_text}")
     try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    await message.answer("⏳ Загружаю отзывы в холде...")
-    hold_reviews = await db_manager.get_all_hold_reviews()
-    if not hold_reviews:
-        await message.answer("В холде нет отзывов."); return
-    await message.answer(f"Найдено отзывов: {len(hold_reviews)}")
-    for review in hold_reviews:
-        link_url = review.link.url if review.link else "Ссылка удалена"
-        info_text = (f"ID: <code>{review.id}</code> | User: <code>{review.user_id}</code>\nПлатформа: <code>{review.platform}</code> | Сумма: <code>{review.amount}</code> ⭐\n"
-                     f"Ссылка: <code>{link_url}</code>\nТекст: «<i>{review.review_text}</i>»")
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=photo_file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "yandex_profile_screenshot")
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
+        await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        await state.clear()
+
+@router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
+async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
+    user_data = await state.get_data()
+    review_type = user_data.get("yandex_review_type", "with_text")
+    platform = f"yandex_{review_type}"
+
+    link = await reference_manager.assign_reference_to_user(user_id, platform)
+    if not link:
+        if callback.message:
+            await callback.message.edit_text(f"К сожалению, в данный момент доступных ссылок для Yandex.Карт ({'с текстом' if review_type == 'with_text' else 'без текста'}) не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
+        await state.clear()
+        return
+
+    await state.set_state(UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
+    await state.update_data(username=callback.from_user.username, active_link_id=link.id)
+    
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    task_text = (
+        "Отлично! Ваш профиль одобрен. Теперь следующий шаг:\n\n"
+        f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
+        "👀 <i>Действия</i>: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
+        "Это нужно для имитации активности перед написанием отзыва.\n\n"
+        f"⏳ На это задание у вас есть <i>{Durations.TASK_YANDEX_LIKING_TIMEOUT} минут</i>. "
+        f"Кнопка для подтверждения появится через {Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS} минут."
+    )
+    if callback.message:
+        await callback.message.edit_text(task_text, disable_web_page_preview=True)
+    
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
+    await state.update_data(timeout_job_id=timeout_job.id)
+
+@router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
+async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    timeout_job_id = user_data.get('timeout_job_id')
+    if timeout_job_id:
+        try: scheduler.remove_job(timeout_job_id)
+        except Exception as e: logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+
+    review_type = user_data.get("yandex_review_type", "with_text")
+
+    if review_type == "with_text":
+        await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
+        if callback.message:
+            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            # ИЗМЕНЕНИЕ: Используем константу из конфига
+            await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+        
+        user_id = callback.from_user.id
+        user_info = await bot.get_chat(user_id)
+        link_id = user_data.get('active_link_id')
+        link = await db_manager.db_get_link_by_id(link_id)
+        profile_screenshot_id = user_data.get("profile_screenshot_id")
+
+        if not link:
+            if callback.message:
+                await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+            await state.clear()
+            return
+
+        admin_notification_text = (
+            f"Пользователь @{user_info.username} (ID: <code>{user_id}</code>) прошел этап 'прогрева' и ожидает текст для отзыва Yandex (С ТЕКСТОМ).\n\n"
+            f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
+        )
+
         try:
-            if review.admin_message_id:
-                await bot.copy_message(message.chat.id, FINAL_CHECK_ADMIN, review.admin_message_id, caption=info_text, reply_markup=inline.get_admin_hold_review_keyboard(review.id))
+            keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
+            if profile_screenshot_id:
+                await bot.send_photo(chat_id=TEXT_ADMIN, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
             else:
-                await message.answer(info_text, reply_markup=inline.get_admin_hold_review_keyboard(review.id))
+                await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
         except Exception as e:
-            await message.answer(f"Ошибка обработки отзыва {review.id}: {e}\n\n{info_text}", reply_markup=inline.get_admin_hold_review_keyboard(review.id))
-
-@router.callback_query(F.data.startswith('admin_hold_approve:'), F.from_user.id.in_(ADMINS))
-async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
-    review_id = int(callback.data.split(':')[1])
-    success, message_text = await approve_hold_review_logic(review_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН (@{callback.from_user.username})"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
-
-@router.callback_query(F.data.startswith('admin_hold_reject:'), F.from_user.id.in_(ADMINS))
-async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
-    review_id = int(callback.data.split(':')[1])
-    success, message_text = await reject_hold_review_logic(review_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
-
-@router.callback_query(F.data.startswith("admin_withdraw_approve:"), F.from_user.id.in_(ADMINS))
-async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    success, message_text, _ = await approve_withdrawal_logic(request_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ✅ ВЫПЛАЧЕНО Администратором ]</i>"
-            await callback.message.edit_text(new_text, reply_markup=None)
-        except TelegramBadRequest as e:
-            logger.warning(f"Could not edit withdrawal message in channel: {e}")
-
-@router.callback_query(F.data.startswith("admin_withdraw_reject:"), F.from_user.id.in_(ADMINS))
-async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    success, message_text, _ = await reject_withdrawal_logic(request_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ❌ ОТКЛОНЕНО Администратором ]</i>"
-            await callback.message.edit_text(new_text, reply_markup=None)
-        except TelegramBadRequest as e:
-            logger.warning(f"Could not edit withdrawal message in channel: {e}")
-
-@router.message(Command("reset_cooldown"), F.from_user.id.in_(ADMINS))
-async def reset_cooldown_handler(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("Используйте: <code>/reset_cooldown ID_или_@username</code>"); return
-    user_id = await db_manager.find_user_by_identifier(args[1])
-    if not user_id:
-        await message.answer(f"❌ Пользователь <code>{args[1]}</code> не найден."); return
-    if await db_manager.reset_user_cooldowns(user_id):
-        user = await db_manager.get_user(user_id)
-        username = f"@{user.username}" if user.username else f"ID: {user_id}"
-        await message.answer(f"✅ Кулдауны для <i>{username}</i> сброшены.")
-    else: await message.answer(f"❌ Ошибка при сбросе кулдаунов для <code>{args[1]}</code>.")
-
-@router.message(Command("viewhold"), F.from_user.id.in_(ADMINS))
-async def viewhold_handler(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("Использование: /viewhold ID_пользователя_или_@username")
-        return
-    identifier = args[1]
-    response_text = await get_user_hold_info_logic(identifier)
-    await message.answer(response_text)
-
-@router.message(Command("fine"), F.from_user.id.in_(ADMINS))
-async def fine_user_start(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    prompt_msg = await message.answer("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.FINE_USER_ID)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(Command("create_promo"), F.from_user.id.in_(ADMINS))
-async def create_promo_start(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    prompt_msg = await message.answer("Введите название для нового промокода (например, <code>NEWYEAR2025</code>). Оно должно быть уникальным.",
-                         reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.PROMO_CODE_NAME)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-# --- Обработчики состояний (FSM) ---
-
-@router.message(AdminState.PROVIDE_WARN_REASON, F.from_user.id.in_(ADMINS))
-async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    admin_data = await state.get_data()
-    user_id, platform, context = admin_data.get("target_user_id"), admin_data.get("platform"), admin_data.get("context")
-    if not all([user_id, platform, context]):
-        await message.answer("Ошибка: не найдены данные. Состояние сброшено."); await state.clear(); return
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
-    await message.answer(response)
+            logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN} for Yandex: {e}")
+            keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
+            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
     
-    # Удаляем исходное сообщение для проверки
-    original_message_id = admin_data.get("original_verification_message_id")
-    if original_message_id:
-        try:
-            await bot.delete_message(chat_id=message.from_user.id, message_id=original_message_id)
-        except TelegramBadRequest:
+    else: # review_type == "without_text"
+        link_id = user_data.get('active_link_id')
+        link = await db_manager.db_get_link_by_id(link_id)
+        
+        if not link:
+            if callback.message:
+                await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+            await state.clear()
+            return
+
+        task_text = (
+            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+            f"1. Перейдите по <a href='{link.url}'>ССЫЛКЕ</a>.\n"
+            "2. Поставьте <b>5 звезд</b>.\n"
+            "3. <b>Текст писать НЕ НУЖНО.</b>\n\n"
+            "После этого сделайте скриншот опубликованного отзыва и отправьте его сюда."
+        )
+        if callback.message:
+            prompt_msg = await callback.message.edit_text(task_text, disable_web_page_preview=True)
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
+        await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
+
+@router.callback_query(F.data == 'yandex_with_text_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
+async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+    if callback.message:
+        await callback.message.delete()
+    user_data = await state.get_data()
+    timeout_job_id = user_data.get('timeout_job_id')
+    if timeout_job_id:
+        try: 
+            scheduler.remove_job(timeout_job_id)
+        except Exception: 
             pass
+    await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
+    prompt_msg = await callback.message.answer(
+        "Отлично! Теперь отправьте <i>скриншот опубликованного отзыва</i>."
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
     
-    await state.clear()
+@router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
+async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    await delete_user_and_prompt_messages(message, state)
+    if not message.photo: return
+    user_data = await state.get_data()
+    user_id = message.from_user.id
+    review_type = user_data.get("yandex_review_type", "with_text")
+    platform = f"yandex_{review_type}"
 
-@router.message(AdminState.PROVIDE_REJECTION_REASON, F.from_user.id.in_(ADMINS))
-async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    admin_data = await state.get_data()
-    user_id, context = admin_data.get("target_user_id"), admin_data.get("rejection_context")
-    if not user_id:
-        await message.answer("Ошибка: не найден ID. Состояние сброшено."); await state.clear(); return
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
-    await message.answer(response)
-
-    # Удаляем исходное сообщение для проверки
-    original_message_id = admin_data.get("original_verification_message_id")
-    if original_message_id:
-        try:
-            await bot.delete_message(chat_id=message.from_user.id, message_id=original_message_id)
-        except TelegramBadRequest:
-            pass
-
-    await state.clear()
-
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
-@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
-async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    data = await state.get_data()
-    dp_dummy = Dispatcher(storage=state.storage)
-    success, response_text = await send_review_text_to_user_logic(
-        bot=bot, dp=dp_dummy, scheduler=scheduler,
-        user_id=data['target_user_id'], link_id=data['target_link_id'],
-        platform=data['platform'], review_text=message.text
+    review_text = user_data.get('review_text', '')
+    
+    active_link_id = await reference_manager.get_user_active_link_id(user_id)
+    if not active_link_id:
+        await message.answer("Произошла критическая ошибка: не найдена активная задача. Начните заново.")
+        await state.clear()
+        return
+        
+    link_object = await db_manager.db_get_link_by_id(active_link_id)
+    link_url = link_object.url if link_object else "Ссылка не найдена"
+    
+    caption = (
+        f"🚨 Финальная проверка отзыва Yandex ({'С ТЕКСТОМ' if review_type == 'with_text' else 'БЕЗ ТЕКСТА'}) 🚨\n\n"
+        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)\n"
+        f"Ссылка: <code>{link_url}</code>\n\n"
     )
-    await message.answer(response_text)
-    if success: await state.clear()
-
-@router.message(AdminState.FINE_USER_ID, F.from_user.id.in_(ADMINS))
-async def fine_user_get_id(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    user_id = await db_manager.find_user_by_identifier(message.text)
-    if not user_id:
-        prompt_msg = await message.answer(f"❌ Пользователь <code>{message.text}</code> не найден.", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(target_user_id=user_id)
-    prompt_msg = await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.FINE_AMOUNT)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.FINE_AMOUNT, F.from_user.id.in_(ADMINS))
-async def fine_user_get_amount(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
+    if review_text:
+        caption += f"Текст отзыва: «<i>{review_text}</i>»\n\n"
+    else:
+        caption += "Тип: Без текста (проверьте наличие 5 звезд).\n\n"
+        
+    caption += "Скриншот прикреплен. Проверьте отзыв и примите решение."
+    
     try:
-        amount = float(message.text)
-        if amount <= 0: raise ValueError
-    except (ValueError, TypeError):
-        prompt_msg = await message.answer("❌ Введите положительное число.", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(fine_amount=amount)
-    prompt_msg = await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.FINE_REASON)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
+        sent_message = await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_final_verdict_keyboard(0)
+        )
 
-@router.message(AdminState.FINE_REASON, F.from_user.id.in_(ADMINS))
-async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    data = await state.get_data()
-    result_text = await apply_fine_to_user(data.get("target_user_id"), message.from_user.id, data.get("fine_amount"), message.text, bot)
-    await message.answer(result_text)
+        review_id = await db_manager.create_review_draft(
+            user_id=user_id,
+            link_id=active_link_id,
+            platform=platform,
+            text=review_text,
+            admin_message_id=sent_message.message_id
+        )
+
+        await bot.edit_message_reply_markup(
+            chat_id=FINAL_CHECK_ADMIN,
+            message_id=sent_message.message_id,
+            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
+        )
+
+        response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(response_msg, Durations.DELETE_INFO_MESSAGE_DELAY)
+
+    except Exception as e:
+        print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
+        await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
+        await state.clear()
+        return
+
     await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
 
-@router.message(AdminState.PROMO_CODE_NAME, F.from_user.id.in_(ADMINS))
-async def promo_name_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    promo_name = message.text.strip().upper()
-    existing_promo = await db_manager.get_promo_by_code(promo_name)
-    if existing_promo:
-        prompt_msg = await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_name=promo_name)
-    prompt_msg = await message.answer("Отлично. Теперь введите количество активаций.", reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.PROMO_USES)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
+@router.callback_query(F.data.in_({'review_zoon', 'review_avito', 'review_yandex_services'}))
+async def handle_unsupported_services(callback: CallbackQuery):
+    platform_map = {
+        'review_zoon': 'Zoon',
+        'review_avito': 'Avito',
+        'review_yandex_services': 'Yandex.Услуги'
+    }
+    platform_name = platform_map.get(callback.data)
+    await callback.answer(f"К сожалению, в данный момент сервис {platform_name} не поддерживается.", show_alert=True)
 
-@router.message(AdminState.PROMO_USES, F.from_user.id.in_(ADMINS))
-async def promo_uses_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    if not message.text.isdigit():
-        prompt_msg = await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    uses = int(message.text)
-    if uses <= 0:
-        prompt_msg = await message.answer("❌ Количество активаций должно быть больше нуля.", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_uses=uses)
-    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
-    await state.set_state(AdminState.PROMO_REWARD)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.PROMO_REWARD, F.from_user.id.in_(ADMINS))
-async def promo_reward_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    try:
-        reward = float(message.text.replace(',', '.'))
-        if reward <= 0: raise ValueError
-    except (ValueError, TypeError):
-        prompt_msg = await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например <code>10.5</code>).", reply_markup=inline.get_cancel_inline_keyboard())
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_reward=reward)
-    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
-    await state.set_state(AdminState.PROMO_CONDITION)
-
-@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
-async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
-    condition = callback.data.split(":")[1]
-    data = await state.get_data()
-    new_promo = await db_manager.create_promo_code(
-        code=data['promo_name'], total_uses=data['promo_uses'],
-        reward=data['promo_reward'], condition=condition
-    )
-    if new_promo and callback.message:
-        await callback.message.edit_text(f"✅ Промокод <code>{new_promo.code}</code> успешно создан!")
-    elif callback.message:
-        await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
+@router.callback_query(F.data == 'cancel_to_earning')
+async def cancel_to_earning_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
+    await callback.answer("Действие отменено")
+    await earning_menu_logic(callback)

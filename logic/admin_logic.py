@@ -18,6 +18,8 @@ from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
 from logic.user_notifications import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
+# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
+from config import Rewards, Durations, Limits
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +81,9 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
     warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
     user_message_text = f"⚠️ **Администратор выдал вам предупреждение.**\n\n**Причина:** {reason}\n"
 
-    if warnings_count >= 3:
-        user_message_text += f"\n❗️ **Это ваше 3-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на 24 часа.**"
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    if warnings_count >= Limits.WARNINGS_THRESHOLD_FOR_BAN:
+        user_message_text += f"\n❗️ **Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.**"
         await user_state.clear()
         await user_state.set_state(UserState.MAIN_MENU)
     else:
@@ -122,6 +125,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     task_state, task_message, run_date_confirm, run_date_timeout = None, None, None, None
 
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
     if platform == "google":
         task_state = UserState.GOOGLE_REVIEW_TASK_ACTIVE
         task_message = (
@@ -132,10 +136,11 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
             "<b>Текст для отзыва:</b>\n"
             f"{review_text}\n\n"
             f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
-            "⏳ На выполнение задания у вас есть <b>15 минут</b>. Кнопка для подтверждения появится через <b>7 минут</b>."
+            f"⏳ На выполнение задания у вас есть <b>{Durations.TASK_GOOGLE_REVIEW_TIMEOUT} минут</b>. "
+            f"Кнопка для подтверждения появится через <b>{Durations.TASK_GOOGLE_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
-        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=7)
-        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=15)
+        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_GOOGLE_REVIEW_CONFIRM_APPEARS)
+        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_GOOGLE_REVIEW_TIMEOUT)
 
     elif platform == "yandex_with_text":
         task_state = UserState.YANDEX_REVIEW_TASK_ACTIVE
@@ -146,10 +151,11 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
             "<b>Текст для отзыва:</b>\n"
             f"{review_text}\n\n"
             f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
-            "⏳ На выполнение задания у вас есть <b>25 минут</b>. Кнопка для подтверждения появится через <b>10 минут</b>."
+            f"⏳ На выполнение задания у вас есть <b>{Durations.TASK_YANDEX_REVIEW_TIMEOUT} минут</b>. "
+            f"Кнопка для подтверждения появится через <b>{Durations.TASK_YANDEX_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
-        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
-        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=25)
+        run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_YANDEX_REVIEW_CONFIRM_APPEARS)
+        run_date_timeout = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_YANDEX_REVIEW_TIMEOUT)
     
     if not task_state:
         return False, f"Неизвестная платформа: {platform}"
@@ -212,17 +218,26 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     if not review or review.status != 'pending':
         return False, "Ошибка: отзыв не найден или уже обработан."
 
-    amount_map = {'google': 15.0, 'yandex_with_text': 50.0, 'yandex_without_text': 15.0}
-    hold_minutes_map = {'google': 5, 'yandex_with_text': 24 * 60, 'yandex_without_text': 72 * 60}
+    # ИЗМЕНЕНИЕ: Используем константы из конфига
+    amount_map = {
+        'google': Rewards.GOOGLE_REVIEW,
+        'yandex_with_text': Rewards.YANDEX_WITH_TEXT,
+        'yandex_without_text': Rewards.YANDEX_WITHOUT_TEXT
+    }
+    hold_minutes_map = {
+        'google': Durations.HOLD_GOOGLE_MINUTES,
+        'yandex_with_text': Durations.HOLD_YANDEX_WITH_TEXT_MINUTES,
+        'yandex_without_text': Durations.HOLD_YANDEX_WITHOUT_TEXT_MINUTES
+    }
     
     amount = amount_map.get(review.platform, 0.0)
-    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
+    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60) # fallback
     
     success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
     if not success:
         return False, "Не удалось одобрить отзыв (ошибка БД)."
 
-    cooldown_hours = 72
+    cooldown_hours = Durations.COOLDOWN_REVIEW_HOURS
     platform_for_cooldown = review.platform
     await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
     
@@ -233,7 +248,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     
     try:
         msg = await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) прошел проверку и отправлен в холд. +{amount} ⭐ в холд.")
-        asyncio.create_task(schedule_message_deletion(msg, 25))
+        await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
     
@@ -250,7 +265,8 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     if not rejected_review:
         return False, "Не удалось отклонить отзыв (возможно, уже обработан)."
 
-    cooldown_hours = 72
+    # ИЗМЕНЕНИЕ: Используем константу из конфига
+    cooldown_hours = Durations.COOLDOWN_REVIEW_HOURS
     platform_for_cooldown = rejected_review.platform
     await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
     cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
@@ -258,7 +274,7 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
     try:
-        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен. Кулдаун на 3 дня."
+        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен. Кулдаун на {cooldown_hours / 24} дня."
         await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
@@ -277,7 +293,8 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     if approved_review.platform == 'google':
         user = await db_manager.get_user(user_id)
         if user and user.referrer_id:
-            amount = 0.45
+            # ИЗМЕНЕНИЕ: Используем константу из конфига
+            amount = Rewards.REFERRAL_EARNING
             await db_manager.add_referral_earning(user_id=user_id, amount=amount)
             try:
                 await bot.send_message(user.referrer_id, f"🎉 Ваш реферал @{user.username} успешно написал отзыв! Вам начислено {amount} ⭐.")
@@ -291,7 +308,8 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     
     try:
         msg = await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
-        asyncio.create_task(schedule_message_deletion(msg, 25))
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении: {e}")
         

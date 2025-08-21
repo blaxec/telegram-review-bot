@@ -11,6 +11,8 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import reply, inline
 from database import db_manager
+# ИЗМЕНЕНИЕ: Импортируем Durations для задержек
+from config import Durations
 
 router = Router()
 
@@ -76,7 +78,8 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
         if callback.message:
             await callback.message.edit_text("Вы приняли соглашение.")
             # Планируем удаление этого сообщения
-            await schedule_message_deletion(callback.message, 15)
+            # ИЗМЕНЕНИЕ: Используем константу из конфига
+            await schedule_message_deletion(callback.message, Durations.DELETE_WELCOME_MESSAGE_DELAY)
     except TelegramBadRequest:
         pass
 
@@ -87,7 +90,8 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
             reply_markup=reply.get_main_menu_keyboard()
         )
         # Планируем удаление и этого сообщения
-        await schedule_message_deletion(welcome_msg, 15)
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(welcome_msg, Durations.DELETE_WELCOME_MESSAGE_DELAY)
 
 
 # --- Универсальные обработчики отмены и возврата ---
@@ -156,4 +160,5 @@ async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
             reply_markup=reply.get_main_menu_keyboard()
         )
         # Планируем удаление сообщения "Главное меню"
-        await schedule_message_deletion(menu_msg, 15)
+        # ИЗМЕНЕНИЕ: Используем константу из конфига
+        await schedule_message_deletion(menu_msg, Durations.DELETE_WELCOME_MESSAGE_DELAY)
