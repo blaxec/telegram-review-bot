@@ -11,8 +11,8 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, 
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, ADMIN_IDS
-# ИЗМЕНЕНИЕ: Добавлен импорт нового роутера 'other'
+# ИЗМЕНЕНИЕ: Импортируем ADMIN_ID_1 напрямую для явного указания главного админа
+from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_IDS
 from handlers import start, profile, support, earning, admin, gmail, stats, promo, other
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -26,13 +26,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ИЗМЕНЕНИЕ: Логика функции полностью переписана для разделения команд
 async def set_bot_commands(bot: Bot):
+    # 1. Определяем базовый набор команд для всех пользователей (и для "Шадоу")
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="stars", description="✨ Мой профиль и баланс"),
         BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
-    await bot.set_my_commands(user_commands)
+    
+    # 2. Определяем полный набор команд для главного админа ("Адам")
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд пользователя"),
@@ -41,11 +44,23 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="fine", description="💸 Выписать штраф пользователю"),
         BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
-    for admin_id in ADMIN_IDS:
+
+    # 3. Устанавливаем команды по умолчанию для ВСЕХ пользователей.
+    # Это гарантирует, что у "Шадоу" (ADMIN_ID_2) и обычных пользователей будет этот список.
+    await bot.set_my_commands(user_commands)
+    logger.info("Default user commands have been set.")
+
+    # 4. Устанавливаем РАСШИРЕННЫЙ набор команд только для главного администратора ("Адам")
+    # Эта настройка переопределит дефолтную только для его ID.
+    if ADMIN_ID_1 != 0:
         try:
-            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID_1))
+            logger.info(f"Full admin commands have been set for the main admin (ID: {ADMIN_ID_1}).")
         except Exception as e:
-            logger.error(f"Failed to set admin commands for {admin_id}: {e}")
+            logger.error(f"Failed to set admin commands for main admin {ADMIN_ID_1}: {e}")
+    else:
+        logger.warning("Main admin ID (ADMIN_ID_1) is not set. Admin commands menu will not be displayed.")
+
 
 async def handle_telegram_bad_request(event: ErrorEvent):
     if isinstance(event.exception, TelegramBadRequest) and ("query is too old" in event.exception.message or "query ID is invalid" in event.exception.message):
@@ -53,9 +68,6 @@ async def handle_telegram_bad_request(event: ErrorEvent):
         return True
     logger.error(f"Unhandled exception in error handler: {event.exception.__class__.__name__}: {event.exception}")
     return False
-
-# ИЗМЕНЕНИЕ: Удалены функции handle_unknown_messages и handle_unknown_callbacks, 
-# так как они перенесены в handlers/other.py
 
 async def main():
     if not BOT_TOKEN:
@@ -75,7 +87,6 @@ async def main():
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
     # --- РЕГИСТРАЦИЯ РОУТЕРОВ ---
-    # Сначала регистрируем все роутеры с конкретными командами
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
@@ -85,11 +96,7 @@ async def main():
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # ИЗМЕНЕНИЕ: Удалена прямая регистрация универсальных обработчиков
-    # dp.message.register(handle_unknown_messages)
-    # dp.callback_query.register(handle_unknown_callbacks)
-    
-    # ИЗМЕНЕНИЕ: Роутер для "всего остального" регистрируется ПОСЛЕДНИМ
+    # Роутер для "всего остального" регистрируется ПОСЛЕДНИМ
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
