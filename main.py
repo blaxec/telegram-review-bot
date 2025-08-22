@@ -11,9 +11,9 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, 
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# Импортируем ADMIN_ID_1 для явного указания главного админа
-from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_IDS
-# Импортируем ВСЕ роутеры, включая созданный нами 'other'
+# ИЗМЕНЕНИЕ: Добавлен ADMIN_ID_2 в явный импорт для устранения ошибки Pylance/UndefinedVariable
+from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS
+# Импортируем ВСЕ роутеры, включая 'other'
 from handlers import start, profile, support, earning, admin, gmail, stats, promo, other
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -31,14 +31,12 @@ async def set_bot_commands(bot: Bot):
     """
     Устанавливает разные списки команд для главного админа и для всех остальных пользователей.
     """
-    # 1. Базовый набор команд для всех пользователей (и для "Шадоу")
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="stars", description="✨ Мой профиль и баланс"),
         BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
     
-    # 2. Полный набор команд для главного админа ("Адам")
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд пользователя"),
@@ -48,12 +46,9 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
 
-    # 3. Устанавливаем команды по умолчанию для ВСЕХ.
     await bot.set_my_commands(user_commands)
     logger.info("Default user commands have been set for all users.")
 
-    # 4. Устанавливаем РАСШИРЕННЫЙ набор команд только для главного администратора ("Адам").
-    # Эта настройка переопределит дефолтную только для его ID.
     if ADMIN_ID_1 != 0:
         try:
             await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID_1))
@@ -72,6 +67,15 @@ async def handle_telegram_bad_request(event: ErrorEvent):
     return False
 
 async def main():
+    # ================================================================================= #
+    # ===================== НАДЕЖНАЯ ДИАГНОСТИКА ПЕРЕМЕННЫХ ===================== #
+    logger.warning("--- STARTING BOT: CHECKING ADMIN IDs ---")
+    logger.warning(f"Value for ADMIN_ID_1 loaded from environment: {ADMIN_ID_1}")
+    logger.warning(f"Value for ADMIN_ID_2 loaded from environment: {ADMIN_ID_2}")
+    logger.warning(f"Final ADMIN_IDS list used by the bot: {ADMIN_IDS}")
+    logger.warning("-------------------------------------------")
+    # ================================================================================= #
+
     if not BOT_TOKEN:
         logger.critical("Bot token is not found! Please check your .env file.")
         return
@@ -89,8 +93,6 @@ async def main():
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
     # --- ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
-    # Сначала регистрируем все роутеры с конкретными командами и логикой.
-    # Aiogram будет проверять их по порядку.
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
@@ -100,10 +102,7 @@ async def main():
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
-    # Роутер для "всего остального" (`other.router`) регистрируется САМЫМ ПОСЛЕДНИМ.
-    # Он сработает, только если ни один из вышеперечисленных роутеров не смог
-    # обработать входящее сообщение или нажатие на кнопку.
+    # Роутер для "всего остального" регистрируется ПОСЛЕДНИМ.
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
