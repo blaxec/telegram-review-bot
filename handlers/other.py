@@ -6,10 +6,15 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from config import Durations
 
+# Создаем новый роутер специально для "прочих" обработчиков
 router = Router()
 
+@router.message()
 async def handle_unknown_messages(message: Message):
-    """Ловит все сообщения, которые не были обработаны другими хэндлерами."""
+    """
+    Этот обработчик ловит ЛЮБЫЕ сообщения, которые не были пойманы
+    другими, более специфичными обработчиками в других роутерах.
+    """
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -27,8 +32,12 @@ async def handle_unknown_messages(message: Message):
             pass
     asyncio.create_task(delete_after_delay())
 
+@router.callback_query()
 async def handle_unknown_callbacks(callback: CallbackQuery):
-    """Ловит все колбэки от устаревших или неработающих кнопок."""
+    """
+    Этот обработчик ловит ЛЮБЫЕ нажатия на инлайн-кнопки, которые
+    не были пойманы другими обработчиками.
+    """
     try:
         await callback.answer(
             "Эта кнопка больше не активна. Пожалуйста, воспользуйтесь меню.",
@@ -36,7 +45,3 @@ async def handle_unknown_callbacks(callback: CallbackQuery):
         )
     except TelegramBadRequest:
         pass
-
-# РЕГИСТРАЦИЯ УНИВЕРСАЛЬНЫХ ОБРАБОТЧИКОВ В ЛОКАЛЬНОМ РОУТЕРЕ
-router.message.register(handle_unknown_messages)
-router.callback_query.register(handle_unknown_callbacks)

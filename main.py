@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Импортируем ADMIN_ID_1 для явного указания главного админа
 from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_IDS
-# Импортируем ВСЕ роутеры, включая 'other'
+# Импортируем ВСЕ роутеры, включая созданный нами 'other'
 from handlers import start, profile, support, earning, admin, gmail, stats, promo, other
 from database import db_manager
 from utils.antiflood import AntiFloodMiddleware
@@ -89,7 +89,8 @@ async def main():
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
     # --- ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
-    # Сначала регистрируем все роутеры с конкретными командами
+    # Сначала регистрируем все роутеры с конкретными командами и логикой.
+    # Aiogram будет проверять их по порядку.
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
@@ -99,8 +100,10 @@ async def main():
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # Роутер для "всего остального" регистрируется ПОСЛЕДНИМ.
-    # Он сработает, только если ни один из вышеперечисленных роутеров не обработал апдейт.
+    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
+    # Роутер для "всего остального" (`other.router`) регистрируется САМЫМ ПОСЛЕДНИМ.
+    # Он сработает, только если ни один из вышеперечисленных роутеров не смог
+    # обработать входящее сообщение или нажатие на кнопку.
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
