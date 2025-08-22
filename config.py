@@ -18,6 +18,9 @@ ADMIN_IDS = [ADMIN_ID_1, ADMIN_ID_2]
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 FINAL_CHECK_ADMIN = ADMIN_ID_2 # Админ для финальной проверки
 
+print("!!! DEBUG: Loaded ADMIN_ID_1 =", ADMIN_ID_1)
+print("!!! DEBUG: Loaded ADMIN_ID_2 =", ADMIN_ID_2)
+
 if WITHDRAWAL_CHANNEL_ID > 0:
     logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")
     logger.warning("!!! Для приватных каналов ID должен быть отрицательным и начинаться с -100.")
