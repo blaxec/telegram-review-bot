@@ -22,14 +22,15 @@ class User(Base):
 
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
-    # ИЗМЕНЕНИЕ: Раздельные кулдауны для Yandex
     yandex_with_text_cooldown_until = Column(DateTime, nullable=True)
     yandex_without_text_cooldown_until = Column(DateTime, nullable=True)
-    # -----------------------------------------
     gmail_cooldown_until = Column(DateTime, nullable=True)
     blocked_until = Column(DateTime, nullable=True)
     
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
+    
+    # ИЗМЕНЕНИЕ: Добавлено поле для перманентного бана
+    is_banned = Column(Boolean, default=False, nullable=False)
     
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")

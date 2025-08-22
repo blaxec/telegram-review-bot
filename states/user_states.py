@@ -83,5 +83,8 @@ class AdminState(StatesGroup):
     # Состояния для поддержки
     SUPPORT_AWAITING_ANSWER = State()
 
-    # Новое состояние для удаления ссылок
+    # Состояние для удаления ссылок
     DELETE_LINK_ID = State()
+
+    # ИЗМЕНЕНИЕ: Новые состояния для процесса бана
+    BAN_REASON = State()

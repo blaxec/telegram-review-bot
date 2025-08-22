@@ -32,7 +32,6 @@ from logic.admin_logic import (
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Этот список используется для проверки прав доступа ко всем админским командам
 ADMINS = set(ADMIN_IDS)
 TEXT_ADMIN = ADMIN_ID_1
 
@@ -73,6 +72,19 @@ async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
     temp_admin_tasks.pop(message.from_user.id, None)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+
+# ИЗМЕНЕНИЕ: Новая команда для сброса просроченных ссылок
+@router.callback_query(F.data == "admin_refs:reset_expired", F.from_user.id.in_(ADMINS))
+async def admin_reset_expired(callback: CallbackQuery):
+    await callback.answer("⚙️ Сбрасываю просроченные ссылки...")
+    count = await db_manager.reset_all_expired_links()
+    if callback.message:
+        await callback.message.answer(f"✅ Готово. {count} просроченных ссылок возвращены в статус 'available'.")
+        await callback.message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+    try:
+        await callback.message.delete()
+    except:
+        pass
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -130,13 +142,13 @@ async def admin_view_refs_stats(callback: CallbackQuery):
     except: pass
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
-    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
+    # ИЗМЕНЕНИЕ: Убран подсчет и отображение 'expired'
+    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used']}
     text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
             f"Всего: {len(all_links)}\n"
             f"🟢 Доступно: {stats.get('available', 0)}\n"
             f"🟡 В работе: {stats.get('assigned', 0)}\n"
-            f"🔴 Использовано: {stats.get('used', 0)}\n"
-            f"⚫️ Просрочено: {stats.get('expired', 0)}")
+            f"🔴 Использовано: {stats.get('used', 0)}")
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_admin_refs_keyboard())
 
@@ -448,6 +460,71 @@ async def create_promo_start(message: Message, state: FSMContext):
                          reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.PROMO_CODE_NAME)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+# --- ИЗМЕНЕНИЕ: Новые обработчики для команды /ban ---
+
+@router.message(Command("ban"), F.from_user.id.in_(ADMINS))
+async def ban_user_start(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    await state.clear()
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Использование: <code>/ban ID_пользователя_или_@username</code>")
+        return
+    
+    identifier = args[1]
+    user_id_to_ban = await db_manager.find_user_by_identifier(identifier)
+
+    if not user_id_to_ban:
+        await message.answer(f"❌ Пользователь <code>{identifier}</code> не найден.")
+        return
+        
+    user_to_ban = await db_manager.get_user(user_id_to_ban)
+    if user_to_ban.is_banned:
+        await message.answer(f"Пользователь @{user_to_ban.username} (<code>{user_id_to_ban}</code>) уже забанен.")
+        return
+
+    await state.set_state(AdminState.BAN_REASON)
+    await state.update_data(user_id_to_ban=user_id_to_ban)
+    
+    prompt_msg = await message.answer(f"Введите причину бана для пользователя @{user_to_ban.username} (<code>{user_id_to_ban}</code>).", reply_markup=inline.get_cancel_inline_keyboard())
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+@router.message(AdminState.BAN_REASON, F.from_user.id.in_(ADMINS))
+async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("Причина не может быть пустой. Введите причину текстом.")
+        return
+        
+    await delete_previous_messages(message, state)
+    data = await state.get_data()
+    user_id_to_ban = data.get("user_id_to_ban")
+    ban_reason = message.text
+
+    success = await db_manager.ban_user(user_id_to_ban)
+
+    if not success:
+        await message.answer("❌ Произошла ошибка при бане пользователя.")
+        await state.clear()
+        return
+
+    try:
+        user_notification = (
+            f"❗️ **Ваш аккаунт был заблокирован администратором.**\n\n"
+            f"<b>Причина:</b> {ban_reason}\n\n"
+            "Вам закрыт доступ ко всем функциям бота. "
+            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
+        )
+        await bot.send_message(user_id_to_ban, user_notification)
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
+
+    await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
+    await state.clear()
 
 # --- Обработчики состояний (FSM) ---
 
