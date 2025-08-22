@@ -40,7 +40,11 @@ class Durations:
     HOLD_YANDEX_WITHOUT_TEXT_MINUTES = 72 * 60 # 3 дня
 
     # Длительность кулдаунов (в часах)
-    COOLDOWN_REVIEW_HOURS = 72
+    # ИЗМЕНЕНИЕ: Заменена одна переменная на три раздельные для гибкой настройки
+    COOLDOWN_GOOGLE_REVIEW_HOURS = 5 / 60  # 5 минут
+    COOLDOWN_YANDEX_WITH_TEXT_HOURS = 5 / 60  # 5 минут
+    COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS = 5 / 60 # 5 минут
+    
     COOLDOWN_GMAIL_HOURS = 24
     COOLDOWN_WARNING_BLOCK_HOURS = 24
 
