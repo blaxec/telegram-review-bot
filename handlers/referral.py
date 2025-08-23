@@ -2,6 +2,9 @@
 
 import logging
 from aiogram import Router, F, Bot
+# --- ДОБАВЬТЕ ЭТОТ ИМПОРТ ---
+from aiogram.filters import StateFilter
+# ----------------------------
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -94,7 +97,8 @@ async def back_to_main_selection(callback: CallbackQuery, state: FSMContext):
     await show_referral_path_selection(callback, state)
 
 
-@router.callback_query(F.data.startswith('confirm_ref_path:'), UserState.in_({UserState.REFERRAL_PATH_SELECTION, UserState.REFERRAL_YANDEX_SUBPATH_SELECTION}))
+# --- ВОТ ИСПРАВЛЕННАЯ СТРОКА ---
+@router.callback_query(F.data.startswith('confirm_ref_path:'), StateFilter(UserState.REFERRAL_PATH_SELECTION, UserState.REFERRAL_YANDEX_SUBPATH_SELECTION))
 async def confirm_referral_path(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Сохраняет выбор пользователя в БД и показывает финальное сообщение."""
     await callback.answer("Ваш выбор сохранен!")
