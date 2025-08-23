@@ -525,7 +525,7 @@ async def close_support_ticket(ticket_id: int) -> bool:
             ticket.status = 'closed'
             return True
 
-# --- ИЗМЕНЕНИЕ: Новые функции для системы бана и просроченных ссылок ---
+# --- Функции для системы бана и просроченных ссылок ---
 
 async def reset_all_expired_links() -> int:
     """Сбрасывает статус всех 'expired' ссылок на 'available'."""
@@ -554,3 +554,11 @@ async def unban_user(user_id: int) -> bool:
                 return False
             user.is_banned = False
             return True
+
+async def update_last_unban_request_time(user_id: int):
+    """Обновляет время последнего запроса на разбан для пользователя."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if user:
+                user.last_unban_request_at = datetime.datetime.utcnow()

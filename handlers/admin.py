@@ -1,6 +1,7 @@
 # file: handlers/admin.py
 
 import logging
+import asyncio
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -11,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, Rewards
+from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, Rewards, Durations
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import (
@@ -38,6 +39,14 @@ TEXT_ADMIN = ADMIN_ID_1
 # Хранилище для временной задачи добавления ссылок
 temp_admin_tasks = {}  # Хранит {user_id: platform}
 
+async def schedule_message_deletion(message: Message, delay: int):
+    """Вспомогательная функция для планирования удаления сообщения."""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
 async def delete_previous_messages(message: Message, state: FSMContext):
     """Вспомогательная функция для удаления старых сообщений."""
     data = await state.get_data()
@@ -60,7 +69,8 @@ async def admin_add_stars(message: Message, state: FSMContext):
     except TelegramBadRequest: pass
     await state.clear()
     await db_manager.update_balance(message.from_user.id, Rewards.ADMIN_ADD_STARS)
-    await message.answer(f"✅ На ваш баланс зачислено {Rewards.ADMIN_ADD_STARS} ⭐.")
+    msg = await message.answer(f"✅ На ваш баланс зачислено {Rewards.ADMIN_ADD_STARS} ⭐.")
+    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
@@ -73,7 +83,6 @@ async def admin_refs_menu(message: Message, state: FSMContext):
     temp_admin_tasks.pop(message.from_user.id, None)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
-# ИЗМЕНЕНИЕ: Новая команда для сброса просроченных ссылок
 @router.callback_query(F.data == "admin_refs:reset_expired", F.from_user.id.in_(ADMINS))
 async def admin_reset_expired(callback: CallbackQuery):
     await callback.answer("⚙️ Сбрасываю просроченные ссылки...")
@@ -82,7 +91,8 @@ async def admin_reset_expired(callback: CallbackQuery):
         await callback.message.answer(f"✅ Готово. {count} просроченных ссылок возвращены в статус 'available'.")
         await callback.message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     try:
-        await callback.message.delete()
+        if callback.message:
+            await callback.message.delete()
     except:
         pass
 
@@ -142,7 +152,6 @@ async def admin_view_refs_stats(callback: CallbackQuery):
     except: pass
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
-    # ИЗМЕНЕНИЕ: Убран подсчет и отображение 'expired'
     stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used']}
     text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
             f"Всего: {len(all_links)}\n"
@@ -461,8 +470,6 @@ async def create_promo_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_CODE_NAME)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-# --- ИЗМЕНЕНИЕ: Новые обработчики для команды /ban ---
-
 @router.message(Command("ban"), F.from_user.id.in_(ADMINS))
 async def ban_user_start(message: Message, state: FSMContext):
     try:
@@ -473,19 +480,22 @@ async def ban_user_start(message: Message, state: FSMContext):
     
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("Использование: <code>/ban ID_пользователя_или_@username</code>")
+        msg = await message.answer("Использование: <code>/ban ID_пользователя_или_@username</code>")
+        asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
         return
     
     identifier = args[1]
     user_id_to_ban = await db_manager.find_user_by_identifier(identifier)
 
     if not user_id_to_ban:
-        await message.answer(f"❌ Пользователь <code>{identifier}</code> не найден.")
+        msg = await message.answer(f"❌ Пользователь <code>{identifier}</code> не найден.")
+        asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
         return
         
     user_to_ban = await db_manager.get_user(user_id_to_ban)
     if user_to_ban.is_banned:
-        await message.answer(f"Пользователь @{user_to_ban.username} (<code>{user_id_to_ban}</code>) уже забанен.")
+        msg = await message.answer(f"Пользователь @{user_to_ban.username} (<code>{user_id_to_ban}</code>) уже забанен.")
+        asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
         return
 
     await state.set_state(AdminState.BAN_REASON)
@@ -523,7 +533,8 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
 
-    await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
+    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
+    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     await state.clear()
 
 # --- Обработчики состояний (FSM) ---

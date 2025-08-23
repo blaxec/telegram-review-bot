@@ -47,6 +47,9 @@ class Durations:
     COOLDOWN_GMAIL_HOURS = 24
     COOLDOWN_WARNING_BLOCK_HOURS = 24
 
+    # Кулдаун для запроса на разбан (в минутах)
+    COOLDOWN_UNBAN_REQUEST_MINUTES = 30
+
     # Тайминги для FSM-задач (в минутах)
     TASK_GOOGLE_LIKING_TIMEOUT = 10
     TASK_GOOGLE_LIKING_CONFIRM_APPEARS = 5
@@ -61,6 +64,8 @@ class Durations:
     DELETE_WELCOME_MESSAGE_DELAY = 15
     DELETE_INFO_MESSAGE_DELAY = 25
     DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY = 10
+    # Задержка для удаления ответов на админские команды и информационных сообщений для пользователя
+    DELETE_ADMIN_REPLY_DELAY = 10
 
 # --- Лимиты и пороги ---
 class Limits:

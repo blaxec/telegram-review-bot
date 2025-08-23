@@ -34,9 +34,9 @@ class BanMiddleware(BaseMiddleware):
         # Проверяем, существует ли пользователь в базе и забанен ли он
         if db_user and db_user.is_banned:
             
-            # Проверяем, является ли событие сообщением с командой /unban_request
-            # Если да, то РАЗРЕШАЕМ его обработку, чтобы пользователь мог подать апелляцию
-            if isinstance(event, Message) and event.text == "/unban_request":
+            # Проверяем, является ли событие сообщением, которое НАЧИНАЕТСЯ с команды /unban_request
+            # Это позволяет команде проходить, даже если пользователь добавил лишний текст.
+            if isinstance(event, Message) and event.text and event.text.startswith("/unban_request"):
                 return await handler(event, data)
             
             # Если это любое другое действие от забаненного пользователя, БЛОКИРУЕМ его

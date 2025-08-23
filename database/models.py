@@ -28,10 +28,10 @@ class User(Base):
     blocked_until = Column(DateTime, nullable=True)
     
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
-    
-    # ИЗМЕНЕНИЕ: Добавлено поле для перманентного бана
     is_banned = Column(Boolean, default=False, nullable=False)
     
+    last_unban_request_at = Column(DateTime, nullable=True)
+
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
@@ -118,14 +118,12 @@ class SupportTicket(Base):
     username = Column(String, nullable=True)
     question = Column(String, nullable=False)
     
-    # Сохраняем ID сообщений у обоих админов, чтобы их можно было отредактировать
     admin_message_id_1 = Column(BigInteger, nullable=True)
     admin_message_id_2 = Column(BigInteger, nullable=True)
     
     status = Column(Enum('open', 'claimed', 'closed', name='ticket_status_enum'), default='open', nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    # Кто из админов ответил
     admin_id = Column(BigInteger, nullable=True)
 
     user = relationship("User", back_populates="support_tickets")
