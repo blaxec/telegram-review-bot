@@ -1,6 +1,11 @@
+# file: references/reference_manager.py
+
 import datetime
 from database import db_manager
 from database.models import Link
+import logging
+
+logger = logging.getLogger(__name__)
 
 active_assignments = {}
 
@@ -64,6 +69,26 @@ async def delete_reference(link_id: int) -> tuple[bool, int | None]:
             
     await db_manager.db_delete_reference(link_id)
     return True, assigned_user_id
+
+async def force_release_reference(link_id: int) -> tuple[bool, int | None]:
+    """Принудительно возвращает ссылку в статус 'available'."""
+    link = await db_manager.db_get_link_by_id(link_id)
+    if not link or link.status != 'assigned':
+        logger.warning(f"Admin tried to force-release link {link_id}, but its status was not 'assigned'.")
+        return False, None
+    
+    assigned_user_id = link.assigned_to_user_id
+    
+    # Удаляем из кэша активных заданий, если есть
+    if assigned_user_id and assigned_user_id in active_assignments:
+        if active_assignments[assigned_user_id] == link_id:
+            active_assignments.pop(assigned_user_id)
+    
+    # Обновляем статус в БД
+    await db_manager.db_update_link_status(link.id, 'available', user_id=None)
+    logger.info(f"Admin force-released link {link_id} from user {assigned_user_id}.")
+    return True, assigned_user_id
+
 
 async def has_available_references(platform: str) -> bool:
     link = await db_manager.db_get_available_reference(platform)

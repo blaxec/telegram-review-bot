@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS
-from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system
+from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system, referral
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -35,7 +35,6 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
     
-    # ИЗМЕНЕНИЕ: Добавлены новые команды /ban и /unban в меню админа
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд пользователя"),
@@ -93,6 +92,8 @@ async def main():
 
     # --- ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
     dp.include_router(start.router)
+    # Роутер реферальной системы должен идти перед profile, чтобы перехватывать callback 'profile_referral'
+    dp.include_router(referral.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
     dp.include_router(earning.router)
@@ -102,6 +103,7 @@ async def main():
     dp.include_router(stats.router)
     dp.include_router(ban_system.router)
     
+    # Роутер для "прочих" сообщений всегда должен быть последним
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)

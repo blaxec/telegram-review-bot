@@ -19,8 +19,8 @@ async def activate_promo_code_logic(user_id: int, code: str) -> tuple[str, model
         )
         return message, None
 
-    # 1. Найти промокод в базе
-    promo = await db_manager.get_promo_by_code(code)
+    # 1. Найти промокод в базе с блокировкой строки для предотвращения гонки состояний
+    promo = await db_manager.get_promo_by_code(code, for_update=True)
     if not promo:
         return "❌ Промокод не найден. Проверьте правильность ввода.", None
 
@@ -36,14 +36,14 @@ async def activate_promo_code_logic(user_id: int, code: str) -> tuple[str, model
     # 4. Обработка условий
     # Если условие не требуется
     if promo.condition == "no_condition":
-        await db_manager.update_balance(user_id, promo.reward)
+        # Создаем активацию и обновляем баланс в одной транзакции
         await db_manager.create_promo_activation(user_id, promo, status='completed')
+        await db_manager.update_balance(user_id, promo.reward)
         logger.info(f"User {user_id} activated promo '{promo.code}' with no condition. Rewarded {promo.reward} stars.")
         return f"✅ Промокод успешно активирован! Вам начислено {promo.reward} ⭐.", promo
     
     # Если условие требуется
     else:
-        # Просто создаем запись, но не отправляем сообщение. Это сделает хендлер.
         await db_manager.create_promo_activation(user_id, promo, status='pending_condition')
         logger.info(f"User {user_id} activated promo '{promo.code}'. Pending condition: {promo.condition}.")
         
@@ -69,10 +69,12 @@ async def check_and_apply_promo_reward(user_id: int, condition_completed: str, b
     activation = await db_manager.find_pending_promo_activation(user_id, condition_completed)
     
     if activation:
-        promo = await db_manager.get_promo_by_code(activation.promo_code.code)
-        if promo and promo.current_uses < promo.total_uses:
+        # Пытаемся завершить активацию. Эта функция вернет False, если лимит исчерпан.
+        success = await db_manager.complete_promo_activation(activation.id)
+        
+        if success:
+            promo = activation.promo_code
             await db_manager.update_balance(user_id, promo.reward)
-            await db_manager.complete_promo_activation(activation.id)
             
             try:
                 await bot.send_message(
@@ -83,5 +85,5 @@ async def check_and_apply_promo_reward(user_id: int, condition_completed: str, b
                 logger.info(f"User {user_id} completed promo '{promo.code}' condition. Rewarded {promo.reward} stars.")
             except Exception as e:
                 logger.error(f"Failed to notify user {user_id} about completed promo: {e}")
-        elif promo:
-             logger.warning(f"User {user_id} completed condition for promo '{promo.code}', but it has no uses left.")
+        else:
+             logger.warning(f"User {user_id} completed condition for promo '{activation.promo_code.code}', but it has no uses left.")

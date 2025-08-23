@@ -25,13 +25,12 @@ async def schedule_message_deletion(message: Message, delay: int):
     except TelegramBadRequest:
         pass
 
+# ИЗМЕНЕНИЕ: Теперь фильтр Command("unban_request", prefix="/!") будет ловить команду, даже если есть другой текст.
+# Но BanMiddleware уже пропускает сообщения, начинающиеся с /unban_request, так что этого достаточно.
 @router.message(Command("unban_request"))
 async def request_unban(message: Message, bot: Bot):
-    # Удаляем команду пользователя
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
+    # Планируем удаление команды пользователя для чистоты чата
+    asyncio.create_task(schedule_message_deletion(message, Durations.DELETE_UNBAN_REQUEST_DELAY))
 
     user = await db_manager.get_user(message.from_user.id)
 

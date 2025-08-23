@@ -25,12 +25,23 @@ if WITHDRAWAL_CHANNEL_ID > 0:
 
 # --- Награды (в звездах) ---
 class Rewards:
+    # Стандартные награды
     GOOGLE_REVIEW = 15.0
     YANDEX_WITH_TEXT = 50.0
     YANDEX_WITHOUT_TEXT = 15.0
-    GMAIL_ACCOUNT = 5.0
-    REFERRAL_EARNING = 0.45
+    GMAIL_ACCOUNT = 5.0 # Стандартная награда
     ADMIN_ADD_STARS = 999.0 # Награда для админ-команды /addstars
+
+    # Награды для реферальной системы
+    # ПУТЬ 1: Google
+    REFERRAL_GOOGLE_REVIEW = 0.45
+    # ПУТЬ 2: Gmail
+    GMAIL_FOR_REFERRAL_USER = 3.5 # Сколько получает сам реферал
+    REFERRAL_GMAIL_ACCOUNT = 0.5 # Сколько получает реферер
+    # ПУТЬ 3: Yandex
+    REFERRAL_YANDEX_WITH_TEXT = 1.2
+    REFERRAL_YANDEX_WITHOUT_TEXT = 0.6
+
 
 # --- Длительности и тайминги ---
 class Durations:
@@ -59,6 +70,7 @@ class Durations:
     TASK_YANDEX_LIKING_CONFIRM_APPEARS = 5
     TASK_YANDEX_REVIEW_TIMEOUT = 25
     TASK_YANDEX_REVIEW_CONFIRM_APPEARS = 10
+    TASK_GMAIL_VERIFICATION_TIMEOUT = 5 # Таймер на отправку созданного Gmail на проверку
 
     # Время жизни информационных сообщений (в секундах)
     DELETE_WELCOME_MESSAGE_DELAY = 15
@@ -66,6 +78,9 @@ class Durations:
     DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY = 10
     # Задержка для удаления ответов на админские команды и информационных сообщений для пользователя
     DELETE_ADMIN_REPLY_DELAY = 10
+    # Задержка для удаления команды /unban_request
+    DELETE_UNBAN_REQUEST_DELAY = 15
+
 
 # --- Лимиты и пороги ---
 class Limits:

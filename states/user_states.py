@@ -1,3 +1,5 @@
+# file: states/user_states.py
+
 from aiogram.fsm.state import State, StatesGroup
 
 class UserState(StatesGroup):
@@ -51,10 +53,14 @@ class UserState(StatesGroup):
 
     # Состояния для промокодов
     PROMO_ENTER_CODE = State()
-    PROMO_AWAITING_CHOICE = State() # Ожидание выбора (начать/отказаться)
+    PROMO_AWAITING_CHOICE = State()
 
     # Состояния для поддержки
     SUPPORT_AWAITING_QUESTION = State()
+
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+    REFERRAL_PATH_SELECTION = State()
+    REFERRAL_YANDEX_SUBPATH_SELECTION = State()
 
 
 class AdminState(StatesGroup):
@@ -83,8 +89,9 @@ class AdminState(StatesGroup):
     # Состояния для поддержки
     SUPPORT_AWAITING_ANSWER = State()
 
-    # Состояние для удаления ссылок
+    # Состояния для управления ссылками
     DELETE_LINK_ID = State()
+    RETURN_LINK_ID = State() # Новое состояние для возврата ссылки
 
-    # ИЗМЕНЕНИЕ: Новые состояния для процесса бана
+    # Состояния для процесса бана
     BAN_REASON = State()

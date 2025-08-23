@@ -2,10 +2,8 @@
 
 import logging
 import datetime
-# ИСПРАВЛЕНИЕ: Добавлены недостающие импорты
 import asyncio
 from aiogram.types import Message
-# -----------------------------------------
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -18,7 +16,6 @@ from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
 from logic.user_notifications import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
-# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
 from config import Rewards, Durations, Limits
 
 logger = logging.getLogger(__name__)
@@ -81,7 +78,6 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
     warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
     user_message_text = f"⚠️ **Администратор выдал вам предупреждение.**\n\n**Причина:** {reason}\n"
 
-    # ИЗМЕНЕНИЕ: Используем константу из конфига
     if warnings_count >= Limits.WARNINGS_THRESHOLD_FOR_BAN:
         user_message_text += f"\n❗️ **Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.**"
         await user_state.clear()
@@ -125,7 +121,6 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     task_state, task_message, run_date_confirm, run_date_timeout = None, None, None, None
 
-    # ИЗМЕНЕНИЕ: Используем константы из конфига
     if platform == "google":
         task_state = UserState.GOOGLE_REVIEW_TASK_ACTIVE
         task_message = (
@@ -161,10 +156,9 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
-        # Редактируем последнее сообщение бота, чтобы не спамить
-        last_message = (await user_state.get_data()).get('last_bot_message')
-        if last_message:
-            await bot.edit_message_text(task_message, user_id, last_message, parse_mode='HTML', disable_web_page_preview=True)
+        last_message_data = (await user_state.get_data()).get('last_bot_message')
+        if last_message_data:
+            await bot.edit_message_text(task_message, user_id, last_message_data, parse_mode='HTML', disable_web_page_preview=True)
         else:
             sent_msg = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
             await user_state.update_data(last_bot_message=sent_msg.message_id)
@@ -216,9 +210,9 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     """Логика для одобрения начального отзыва и перевода его в холд."""
     review = await db_manager.get_review_by_id(review_id)
     if not review or review.status != 'pending':
+        logger.error(f"Attempted to approve review {review_id}, but it was not found or status was not 'pending'.")
         return False, "Ошибка: отзыв не найден или уже обработан."
 
-    # ИЗМЕНЕНИЕ: Используем константы из конфига
     amount_map = {
         'google': Rewards.GOOGLE_REVIEW,
         'yandex_with_text': Rewards.YANDEX_WITH_TEXT,
@@ -231,14 +225,19 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     }
     
     amount = amount_map.get(review.platform, 0.0)
-    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60) # fallback
+    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
     
     success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
     if not success:
         return False, "Не удалось одобрить отзыв (ошибка БД)."
 
-    cooldown_hours = Durations.COOLDOWN_REVIEW_HOURS
-    platform_for_cooldown = review.platform
+    cooldown_hours_map = {
+        'google': Durations.COOLDOWN_GOOGLE_REVIEW_HOURS,
+        'yandex_with_text': Durations.COOLDOWN_YANDEX_WITH_TEXT_HOURS,
+        'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
+    }
+    cooldown_hours = cooldown_hours_map.get(review.platform)
+    platform_for_cooldown = review.platform # e.g. "google" or "yandex_with_text"
     await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
     
     cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
@@ -265,8 +264,13 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     if not rejected_review:
         return False, "Не удалось отклонить отзыв (возможно, уже обработан)."
 
-    # ИЗМЕНЕНИЕ: Используем константу из конфига
-    cooldown_hours = Durations.COOLDOWN_REVIEW_HOURS
+    # Используем те же кулдауны, что и при одобрении
+    cooldown_hours_map = {
+        'google': Durations.COOLDOWN_GOOGLE_REVIEW_HOURS,
+        'yandex_with_text': Durations.COOLDOWN_YANDEX_WITH_TEXT_HOURS,
+        'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
+    }
+    cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24) # 24 часа по умолчанию
     platform_for_cooldown = rejected_review.platform
     await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
     cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
@@ -274,7 +278,7 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
     try:
-        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен. Кулдаун на {cooldown_hours / 24} дня."
+        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен. Вы сможете попробовать снова после окончания кулдауна."
         await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
@@ -283,24 +287,43 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
 
 
 async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
-    """Логика для окончательного одобрения отзыва из холда."""
+    """Логика для окончательного одобрения отзыва из холда и начисления реферальных наград."""
     approved_review = await db_manager.admin_approve_review(review_id)
     if not approved_review:
         return False, "❌ Ошибка: отзыв не найден или уже обработан."
     
     user_id = approved_review.user_id
+    user = await db_manager.get_user(user_id)
     
-    if approved_review.platform == 'google':
-        user = await db_manager.get_user(user_id)
-        if user and user.referrer_id:
-            # ИЗМЕНЕНИЕ: Используем константу из конфига
-            amount = Rewards.REFERRAL_EARNING
-            await db_manager.add_referral_earning(user_id=user_id, amount=amount)
-            try:
-                await bot.send_message(user.referrer_id, f"🎉 Ваш реферал @{user.username} успешно написал отзыв! Вам начислено {amount} ⭐.")
-            except Exception as e:
-                logger.error(f"Не удалось уведомить реферера {user.referrer_id}: {e}")
-    
+    # --- НОВАЯ ЛОГИКА РЕФЕРАЛЬНЫХ НАЧИСЛЕНИЙ ---
+    if user and user.referrer_id:
+        referrer = await db_manager.get_user(user.referrer_id)
+        if referrer and referrer.referral_path:
+            referral_reward = 0
+            
+            # Путь 1: Google
+            if referrer.referral_path == 'google' and approved_review.platform == 'google':
+                referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
+            
+            # Путь 3: Yandex
+            elif referrer.referral_path == 'yandex':
+                if referrer.referral_subpath == 'with_text' and approved_review.platform == 'yandex_with_text':
+                    referral_reward = Rewards.REFERRAL_YANDEX_WITH_TEXT
+                elif referrer.referral_subpath == 'without_text' and approved_review.platform == 'yandex_without_text':
+                    referral_reward = Rewards.REFERRAL_YANDEX_WITHOUT_TEXT
+            
+            if referral_reward > 0:
+                await db_manager.add_referral_earning(user_id, referral_reward)
+                try:
+                    await bot.send_message(
+                        referrer.id,
+                        f"🎉 Ваш реферал @{user.username} успешно завершил отзыв! "
+                        f"Вам начислено {referral_reward} ⭐ в копилку."
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
+    # -----------------------------------------------
+
     if approved_review.platform == 'google':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
     elif 'yandex' in approved_review.platform:
@@ -308,7 +331,6 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     
     try:
         msg = await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении: {e}")

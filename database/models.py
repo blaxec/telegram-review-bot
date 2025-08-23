@@ -20,6 +20,11 @@ class User(Base):
     referrer_id = Column(BigInteger, ForeignKey('users.id'), nullable=True)
     referrer = relationship("User", remote_side=[id])
 
+    # --- НОВЫЕ ПОЛЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+    referral_path = Column(String, nullable=True) # e.g., 'google', 'gmail', 'yandex'
+    referral_subpath = Column(String, nullable=True) # e.g., 'with_text', 'without_text' for yandex
+    # -------------------------------------------
+
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
     yandex_with_text_cooldown_until = Column(DateTime, nullable=True)

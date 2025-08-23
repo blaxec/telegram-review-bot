@@ -2,6 +2,7 @@
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from config import Rewards
 
 # --- /start и навигация ---
 
@@ -23,7 +24,7 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='🎁 Вывод звезд', callback_data='profile_withdraw')],
         [InlineKeyboardButton(text='💸 Передача звезд', callback_data='profile_transfer')],
-        [InlineKeyboardButton(text='🔗 Реферальная ссылка', callback_data='profile_referral')],
+        [InlineKeyboardButton(text='🔗 Реферальная система', callback_data='profile_referral')],
         [InlineKeyboardButton(text='⏳ Холд', callback_data='profile_hold')],
         [InlineKeyboardButton(text='⬅️ Назад', callback_data='go_main_menu')]
     ]
@@ -90,8 +91,8 @@ def get_withdraw_recipient_keyboard() -> InlineKeyboardMarkup:
 def get_referral_info_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='👥 Мои рефералы', callback_data='profile_referrals_list')],
-        [InlineKeyboardButton(text='💰 Забрать звезды', callback_data='profile_claim_referral_stars')],
-        [InlineKeyboardButton(text='⬅️ Назад', callback_data='go_profile')]
+        [InlineKeyboardButton(text='💰 Забрать из копилки', callback_data='profile_claim_referral_stars')],
+        [InlineKeyboardButton(text='⬅️ Назад в профиль', callback_data='go_profile')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -99,6 +100,26 @@ def get_back_to_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='go_profile')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_back_to_referral_menu_keyboard() -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='profile_referral')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_referral_path_selection_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"🌍 Google-Отзывы ({Rewards.REFERRAL_GOOGLE_REVIEW}⭐/отзыв)", callback_data="confirm_ref_path:google")
+    builder.button(text=f"📧 Gmail-Аккаунты ({Rewards.REFERRAL_GMAIL_ACCOUNT}⭐/аккаунт)", callback_data="confirm_ref_path:gmail")
+    builder.button(text="🗺️ Яндекс-Отзывы (выбрать)", callback_data="ref_path:yandex")
+    builder.button(text="⬅️ Назад в профиль", callback_data="go_profile")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_yandex_subpath_selection_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"С текстом ({Rewards.REFERRAL_YANDEX_WITH_TEXT}⭐/отзыв)", callback_data="confirm_ref_path:yandex:with_text")
+    builder.button(text=f"Без текста ({Rewards.REFERRAL_YANDEX_WITHOUT_TEXT}⭐/отзыв)", callback_data="confirm_ref_path:yandex:without_text")
+    builder.button(text="⬅️ Назад к выбору пути", callback_data="back_to_ref_path_selection")
+    builder.adjust(2,1)
+    return builder.as_markup()
 
 # --- Раздел "Заработок" ---
 
@@ -207,7 +228,7 @@ def get_gmail_init_keyboard() -> InlineKeyboardMarkup:
     
 def get_gmail_cooldown_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text='📱 У меня есть другой телефон', callback_data='gmail_another_phone')],
+        [InlineKeyboardButton(text='📱 У меня есть другое устройство', callback_data='gmail_another_phone')],
         [InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -267,6 +288,7 @@ def get_back_to_admin_refs_keyboard() -> InlineKeyboardMarkup:
 def get_admin_refs_list_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='🗑️ Удалить ссылку из базы', callback_data=f'admin_refs:delete_start:{platform}')
+    builder.button(text='↪️ Вернуть ссылку в доступные', callback_data=f'admin_refs:return_start:{platform}')
     builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
     builder.adjust(1)
     return builder.as_markup()
@@ -320,6 +342,16 @@ def get_support_admin_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     buttons = [[
         InlineKeyboardButton(text='✍️ Ответить на вопрос', callback_data=f'support_answer:{ticket_id}')
     ]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_unban_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для админа с запросом на разбан."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="✅ Разбанить", callback_data=f"unban_approve:{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"unban_reject:{user_id}")
+        ]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Клавиатуры для промокодов ---

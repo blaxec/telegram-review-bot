@@ -10,7 +10,6 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
-# ИЗМЕНЕНИЕ: Импортируем классы констант из конфига
 from config import WITHDRAWAL_CHANNEL_ID, Limits, Rewards
 
 router = Router()
@@ -60,7 +59,8 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
         await message_or_callback.answer(profile_text, reply_markup=keyboard)
     else: 
         try:
-            await message_or_callback.message.edit_text(profile_text, reply_markup=keyboard)
+            if message_or_callback.message:
+                await message_or_callback.message.edit_text(profile_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
                 try:
@@ -106,18 +106,18 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
         await callback.answer("Ваш баланс отрицательный. Передача звезд невозможна, пока вы не погасите долг.", show_alert=True)
         return
         
-    # ИЗМЕНЕНИЕ: Используем константу из конфига
     if balance < Limits.MIN_TRANSFER_AMOUNT:
         await callback.answer(f"Недостаточно звезд на балансе для выполнения этой операции (минимум {Limits.MIN_TRANSFER_AMOUNT} ⭐).", show_alert=True)
         return
 
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Сколько звезд вы хотите передать?",
             reply_markup=inline.get_cancel_inline_keyboard()
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 async def process_transfer_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
@@ -140,10 +140,8 @@ async def transfer_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
         amount = float(message.text)
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         if amount < Limits.MIN_TRANSFER_AMOUNT: raise ValueError
     except (ValueError, TypeError):
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         prompt_msg = await message.answer(f"Неверный формат. Пожалуйста, введите положительное число (минимум {Limits.MIN_TRANSFER_AMOUNT}).")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
@@ -172,11 +170,12 @@ async def process_transfer_show_nick(callback: CallbackQuery, state: FSMContext)
     await state.update_data(show_nick=show_nick)
     await state.set_state(UserState.TRANSFER_ASK_COMMENT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Хотите оставить комментарий к передаче?",
             reply_markup=inline.get_ask_comment_keyboard(prefix='transfer')
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.callback_query(F.data == 'transfer_ask_comment_no', UserState.TRANSFER_ASK_COMMENT)
 async def process_transfer_no_comment(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -188,8 +187,9 @@ async def process_transfer_no_comment(callback: CallbackQuery, state: FSMContext
 async def process_transfer_yes_comment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
     if callback.message:
-        await callback.message.edit_text("Введите ваш комментарий:")
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        prompt_msg = await callback.message.edit_text("Введите ваш комментарий:")
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.TRANSFER_COMMENT_INPUT)
 async def process_transfer_comment_input(message: Message, state: FSMContext, bot: Bot):
@@ -246,7 +246,6 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         await callback.answer("Ваш баланс отрицательный. Вывод невозможен, пока вы не погасите долг.", show_alert=True)
         return
 
-    # ИЗМЕНЕНИЕ: Используем константу из конфига
     if balance < Limits.MIN_WITHDRAWAL_AMOUNT:
         await callback.answer(f"Минимальная сумма для вывода {Limits.MIN_WITHDRAWAL_AMOUNT} звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
         return
@@ -258,11 +257,12 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
 
     await state.set_state(UserState.WITHDRAW_AMOUNT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Сколько звезд вы хотите вывести?",
             reply_markup=inline.get_withdraw_amount_keyboard()
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
 async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
@@ -272,9 +272,9 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
     if amount_str == 'other':
         await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
         if callback.message:
-            # ИЗМЕНЕНИЕ: Используем константу из конфига
-            await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT}):", reply_markup=inline.get_cancel_inline_keyboard())
-            await state.update_data(prompt_message_id=callback.message.message_id)
+            prompt_msg = await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT}):", reply_markup=inline.get_cancel_inline_keyboard())
+            if prompt_msg:
+                await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
     amount = float(amount_str)
@@ -287,11 +287,12 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
     await state.update_data(withdraw_amount=amount)
     await state.set_state(UserState.WITHDRAW_RECIPIENT)
     if callback.message:
-        await callback.message.edit_text(
+        prompt_msg = await callback.message.edit_text(
             "Кому вы хотите отправить подарок?",
             reply_markup=inline.get_withdraw_recipient_keyboard()
         )
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.WITHDRAW_AMOUNT_OTHER)
 async def withdraw_other_amount_input(message: Message, state: FSMContext):
@@ -299,7 +300,6 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
     if not message.text: return
     try:
         amount = float(message.text)
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         if amount < Limits.MIN_WITHDRAWAL_AMOUNT:
             prompt_msg = await message.answer(f"Минимальная сумма для вывода - {Limits.MIN_WITHDRAWAL_AMOUNT} звезд.")
             await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -378,7 +378,8 @@ async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext,
             "Укажите никнейм или ID пользователя, которому нужно отправить подарок.",
             reply_markup=inline.get_cancel_inline_keyboard()
         )
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.WITHDRAW_USER_ID)
 async def process_withdraw_user_id(message: Message, state: FSMContext):
@@ -408,8 +409,9 @@ async def process_withdraw_no_comment(callback: CallbackQuery, state: FSMContext
 async def process_withdraw_yes_comment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.WITHDRAW_COMMENT_INPUT)
     if callback.message:
-        await callback.message.edit_text("Введите ваш комментарий к подарку:")
-        await state.update_data(prompt_message_id=callback.message.message_id)
+        prompt_msg = await callback.message.edit_text("Введите ваш комментарий к подарку:")
+        if prompt_msg:
+            await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.WITHDRAW_COMMENT_INPUT)
 async def process_withdraw_comment_input(message: Message, state: FSMContext, bot: Bot):
@@ -430,40 +432,27 @@ async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str 
 
 # --- Подмодуль: "Реф. ссылка" и "Холд" ---
 
+# ИЗМЕНЕНИЕ: Этот обработчик теперь проверяет, выбрал ли пользователь путь.
+# Если нет, он не будет показан. Логика выбора находится в handlers/referral.py
 @router.callback_query(F.data == 'profile_referral')
 async def show_referral_info(callback: CallbackQuery, state: FSMContext, bot: Bot, **kwargs):
     user_id = callback.from_user.id
-    bot_info = await bot.get_me()
+    user = await db_manager.get_user(user_id)
 
-    if bot_info.username:
-        referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
-    else:
-        # Fallback for bots without a username
-        referral_link = f"tg://resolve?domain={bot.id}&start={user_id}"
-        
-    referral_earnings = await db_manager.get_referral_earnings(user_id)
-    
-    # ИЗМЕНЕНИЕ: Используем константу из конфига
-    ref_text = (
-        f"🚀 **Ваша реферальная система**\n\n"
-        f"Приглашайте друзей и получайте **{Rewards.REFERRAL_EARNING} ⭐** за каждый одобренный ими отзыв в Google Картах!\n\n"
-        "🔗 **Ваша ссылка для приглашений:**\n"
-        f"`{referral_link}`\n"
-        "(Нажмите на ссылку выше, чтобы скопировать её)\n\n"
-        f"💰 Заработано всего: {referral_earnings} ⭐"
-    )
-    
-    if callback.message:
-        try:
-            await callback.message.edit_text(ref_text, reply_markup=inline.get_referral_info_keyboard(), parse_mode="Markdown")
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                logger.warning(f"Error editing referral message: {e}")
-            try:
-                await callback.answer()
-            except TelegramBadRequest:
-                pass
+    # Если пользователь еще не выбрал путь, отправляем его в меню выбора.
+    # Этот callback теперь будет обработан в handlers.referral
+    if not user or not user.referral_path:
+        # Мы не можем просто вызвать другой обработчик, поэтому дублируем его логику или отправляем команду
+        # В данном случае, мы просто перенаправляем на callback, который будет обработан в referral.py
+        # Чтобы избежать дублирования, мы просто вызываем callback.answer() и ничего не делаем,
+        # так как router в main.py передаст этот callback дальше в referral.router
+        logger.info(f"User {user_id} has no referral path. Passing callback to referral handler.")
+        # Чтобы этот callback обработался в другом роутере, нужно чтобы этот хендлер его не поймал.
+        # Поэтому мы его просто удаляем отсюда, а в referral.py создаем новый с таким же фильтром.
+        # Этот код здесь больше не нужен.
+        pass
 
+# Новая, более простая версия для отображения списка рефералов
 @router.callback_query(F.data == 'profile_referrals_list')
 async def show_referrals_list(callback: CallbackQuery, state: FSMContext, **kwargs):
     referrals = await db_manager.get_referrals(callback.from_user.id)
@@ -474,18 +463,24 @@ async def show_referrals_list(callback: CallbackQuery, state: FSMContext, **kwar
     
     if callback.message:
         try:
-            await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
+            await callback.message.edit_text(text, reply_markup=inline.get_back_to_referral_menu_keyboard())
         except TelegramBadRequest:
             pass
 
 
 @router.callback_query(F.data == 'profile_claim_referral_stars')
 async def claim_referral_stars(callback: CallbackQuery, state: FSMContext, bot: Bot, **kwargs):
-    earnings = await db_manager.get_referral_earnings(callback.from_user.id)
+    user_id = callback.from_user.id
+    earnings = await db_manager.get_referral_earnings(user_id)
     if earnings > 0:
-        await db_manager.claim_referral_earnings(callback.from_user.id)
+        await db_manager.claim_referral_earnings(user_id)
         await callback.answer(f"{earnings} ⭐ зачислены на ваш основной баланс!", show_alert=True)
-        await show_referral_info(callback, state, bot)
+        
+        # После сбора показываем обновленное меню реферальной системы
+        # Этот callback теперь будет обработан в handlers.referral
+        from handlers.referral import show_selected_referral_path 
+        await show_selected_referral_path(callback, bot)
+
     else:
         await callback.answer("У вас нет начислений для сбора.", show_alert=True)
 

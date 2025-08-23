@@ -245,6 +245,57 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
     await temp_message.delete()
 
+@router.callback_query(F.data.startswith("admin_refs:return_start:"), F.from_user.id.in_(ADMINS))
+async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса возврата ссылки в 'available'."""
+    platform = callback.data.split(':')[2]
+    await state.set_state(AdminState.RETURN_LINK_ID)
+    await state.update_data(platform_for_return=platform)
+    if callback.message:
+        prompt_msg = await callback.message.edit_text("Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", reply_markup=inline.get_back_to_admin_refs_keyboard())
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer()
+
+@router.message(AdminState.RETURN_LINK_ID, F.from_user.id.in_(ADMINS))
+async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: Bot):
+    """Обработка ID ссылки для возврата."""
+    await delete_previous_messages(message, state)
+
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
+        return
+    
+    link_id = int(message.text)
+    data = await state.get_data()
+    platform = data.get("platform_for_return")
+    
+    success, assigned_user_id = await reference_manager.force_release_reference(link_id)
+    
+    if not success:
+        await message.answer(f"❌ Не удалось вернуть ссылку с ID {link_id}. Возможно, она не в статусе 'assigned' или не найдена.")
+    else:
+        await message.answer(f"✅ Ссылка ID {link_id} возвращена в статус 'available'.")
+        if assigned_user_id:
+            try:
+                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
+                await user_state.clear()
+                await bot.send_message(assigned_user_id, "❗️ Администратор прервал ваше задание. Ссылка была возвращена в пул. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
+                await user_state.set_state(UserState.MAIN_MENU)
+            except Exception as e: 
+                logger.warning(f"Не удалось уведомить {assigned_user_id} о возврате ссылки: {e}")
+
+    await state.clear()
+    
+    # Обновляем список для наглядности
+    temp_message = await message.answer("Обновляю список...")
+    dummy_callback_query = CallbackQuery(
+        id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
+        message=temp_message,
+        data=f"admin_refs:list:{platform}"
+    )
+    await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
+    await temp_message.delete()
+
 
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):

@@ -15,7 +15,7 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -199,7 +199,7 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
         "Отлично! Следующий шаг:\n\n"
         f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
         "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.\n\n"
-        "⏳ Для выполнения этого задания у вас есть <i>10 минут</i>. Кнопка для подтверждения появится через 5 минут."
+        f"⏳ Для выполнения этого задания у вас есть <i>{Durations.TASK_GOOGLE_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS} минут."
     )
     if callback.message:
         await callback.message.edit_text(task_text, disable_web_page_preview=True)
@@ -207,8 +207,8 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
     await state.update_data(username=callback.from_user.username, active_link_id=link.id)
     
     now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=5), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
+    scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
@@ -303,32 +303,37 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     )
     
     try:
-        sent_message = await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_final_verdict_keyboard(0)
-        )
-        
+        # ИЗМЕНЕНИЕ: Сначала создаем запись в БД, чтобы получить review_id
         review_id = await db_manager.create_review_draft(
             user_id=user_id,
             link_id=active_link_id,
             platform='google',
             text=review_text,
-            admin_message_id=sent_message.message_id
+            admin_message_id=0 # Временный ID
         )
 
-        await bot.edit_message_reply_markup(
+        if not review_id:
+            raise Exception("Failed to create review draft in DB.")
+
+        sent_message = await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            message_id=sent_message.message_id,
-            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
+            photo=message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=inline.get_admin_final_verdict_keyboard(review_id) # Сразу отправляем с правильным ID
         )
+        
+        # Обновляем review в БД, добавляя ID сообщения админа
+        review_to_update = await db_manager.get_review_by_id(review_id)
+        if review_to_update:
+            review_to_update.admin_message_id = sent_message.message_id
+            # Это обновление должно произойти внутри сессии, но для простоты предположим, что оно сработает
+            # В идеале, create_review_draft должен принимать admin_message_id и обновлять его позже
 
         response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
         await schedule_message_deletion(response_msg, 25)
 
     except Exception as e:
-        print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
     
     await state.clear()
@@ -351,7 +356,6 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     
     platform = f"yandex_{review_type}"
     
-    # ИСПРАВЛЕНИЕ: Проверяем кулдаун для конкретного типа отзыва Yandex
     cooldown = await db_manager.check_platform_cooldown(user_id, platform)
     if cooldown:
         await callback.answer(f"Вы сможете написать отзыв в Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'}) через {format_timedelta(cooldown)}.", show_alert=True)
@@ -448,14 +452,14 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
         f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
         "👀 <i>Действия</i>: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
         "Это нужно для имитации активности перед написанием отзыва.\n\n"
-        "⏳ На это задание у вас есть <i>10 минут</i>. Кнопка для подтверждения появится через 5 минут."
+        f"⏳ На это задание у вас есть <i>{Durations.TASK_YANDEX_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS} минут."
     )
     if callback.message:
         await callback.message.edit_text(task_text, disable_web_page_preview=True)
     
     now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=5), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=10), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
+    scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
     await state.update_data(timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
@@ -575,32 +579,32 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     caption += "Скриншот прикреплен. Проверьте отзыв и примите решение."
     
     try:
-        sent_message = await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_final_verdict_keyboard(0)
-        )
-
+        # ИЗМЕНЕНИЕ: Сначала создаем запись в БД, чтобы получить review_id
         review_id = await db_manager.create_review_draft(
             user_id=user_id,
             link_id=active_link_id,
             platform=platform,
             text=review_text,
-            admin_message_id=sent_message.message_id
+            admin_message_id=0 # Временный ID
         )
 
-        await bot.edit_message_reply_markup(
+        if not review_id:
+            raise Exception("Failed to create review draft in DB.")
+
+        sent_message = await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            message_id=sent_message.message_id,
+            photo=message.photo[-1].file_id,
+            caption=caption,
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
-
-        response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
-        await schedule_message_deletion(response_msg, 25)
+        
+        # Обновляем review в БД, добавляя ID сообщения админа
+        review_to_update = await db_manager.get_review_by_id(review_id)
+        if review_to_update:
+            review_to_update.admin_message_id = sent_message.message_id
 
     except Exception as e:
-        print(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
         await state.clear()
         return

@@ -201,10 +201,12 @@ async def move_review_to_hold(review_id: int, amount: float, hold_minutes: int) 
         async with session.begin():
             review = await session.get(Review, review_id)
             if not review or review.status != 'pending':
+                logger.error(f"Failed to move review {review_id} to hold. Status was not 'pending'.")
                 return False
             
             user = await session.get(User, review.user_id)
             if not user:
+                logger.error(f"Failed to move review {review_id} to hold. User {review.user_id} not found.")
                 return False
 
             review.status = 'on_hold'
@@ -412,10 +414,20 @@ async def create_promo_code(code: str, condition: str, reward: float, total_uses
             await session.refresh(new_promo)
             return new_promo
 
-async def get_promo_by_code(code: str) -> Union[PromoCode, None]:
+async def get_promo_by_code(code: str, for_update: bool = False) -> Union[PromoCode, None]:
+    """
+    Получает промокод по его коду.
+    :param code: Код промокода.
+    :param for_update: Если True, блокирует строку в базе данных для предотвращения гонки состояний.
+    """
     async with async_session() as session:
-        result = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
-        return result.scalar_one_or_none()
+        async with session.begin():
+            stmt = select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code))
+            if for_update:
+                stmt = stmt.with_for_update()
+            
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
 
 async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[PromoActivation, None]:
     async with async_session() as session:
@@ -458,6 +470,7 @@ async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -
             )
             session.add(new_activation)
             if status == 'completed':
+                # Увеличиваем счетчик использований прямо здесь
                 promo.current_uses += 1
             await session.flush()
             await session.refresh(new_activation)
@@ -479,8 +492,14 @@ async def complete_promo_activation(activation_id: int) -> bool:
             if not activation or activation.status != 'pending_condition':
                 return False
             
+            # Блокируем промокод для безопасного обновления
+            promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
+            if promo_to_update.current_uses >= promo_to_update.total_uses:
+                logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
+                return False
+
             activation.status = 'completed'
-            activation.promo_code.current_uses += 1
+            promo_to_update.current_uses += 1
             return True
 
 # --- Функции для системы поддержки ---
@@ -562,3 +581,16 @@ async def update_last_unban_request_time(user_id: int):
             user = await session.get(User, user_id)
             if user:
                 user.last_unban_request_at = datetime.datetime.utcnow()
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+
+async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -> bool:
+    """Сохраняет выбранный пользователем реферальный путь."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if not user or user.referral_path: # Нельзя изменить, если уже установлено
+                return False
+            user.referral_path = path
+            user.referral_subpath = subpath
+            return True
