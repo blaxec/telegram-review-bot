@@ -47,7 +47,6 @@ async def delete_previous_messages(message: Message, state: FSMContext):
 async def cancel_gmail_verification_timeout(bot: Bot, user_id: int, state: FSMContext):
     """Отменяет задачу создания Gmail, если пользователь не отправил на проверку вовремя."""
     current_state = await state.get_state()
-    # Проверяем, что пользователь все еще в том же состоянии, чтобы не отменить уже выполненную задачу
     if current_state == UserState.GMAIL_AWAITING_VERIFICATION:
         logger.info(f"Gmail verification timeout for user {user_id}. Clearing state.")
         await state.clear()
@@ -88,10 +87,19 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
             )
         return
 
+    # --- ИЗМЕНЕНИЕ: Динамически определяем награду ---
+    reward_amount = Rewards.GMAIL_ACCOUNT # Стандартная награда по умолчанию
+    if user.referrer_id:
+        referrer = await db_manager.get_user(user.referrer_id)
+        if referrer and referrer.referral_path == 'gmail':
+            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER # Особая награда для реферала
+    # -----------------------------------------------
+
     await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     if callback.message:
+        # --- ИЗМЕНЕНИЕ: Используем переменную reward_amount в тексте ---
         prompt_msg = await callback.message.edit_text(
-            f"За создание аккаунта выдается <i>{Rewards.GMAIL_ACCOUNT} звезд</i>.\n\n"
+            f"За создание аккаунта выдается <i>{reward_amount} звезд</i>.\n\n"
             "Пожалуйста, укажите <i>модель вашего устройства</i> (например, iPhone 13 Pro или Samsung Galaxy S22), "
             "с которого вы будете создавать аккаунт. Эту информацию увидит администратор.\n\n"
             "Отправьте модель следующим сообщением.",
@@ -339,7 +347,6 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
         
     user_id = int(callback.data.split(':')[1])
     
-    # Проверяем, является ли пользователь рефералом и какой путь у его реферера
     user = await db_manager.get_user(user_id)
     reward_amount = Rewards.GMAIL_ACCOUNT # Стандартная награда
 

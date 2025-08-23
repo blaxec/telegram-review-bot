@@ -36,7 +36,9 @@ class Rewards:
     # ПУТЬ 1: Google
     REFERRAL_GOOGLE_REVIEW = 0.45
     # ПУТЬ 2: Gmail
-    GMAIL_FOR_REFERRAL_USER = 3.5 # Сколько получает сам реферал
+    # --- ИЗМЕНЕНИЕ: Теперь реферал получает 4.5 звезды ---
+    GMAIL_FOR_REFERRAL_USER = 4.5 # Сколько получает сам реферал
+    # ---------------------------------------------------
     REFERRAL_GMAIL_ACCOUNT = 0.5 # Сколько получает реферер
     # ПУТЬ 3: Yandex
     REFERRAL_YANDEX_WITH_TEXT = 1.2
