@@ -11,12 +11,10 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, 
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ИЗМЕНЕНИЕ: Добавлен ADMIN_ID_2 в явный импорт для устранения ошибки Pylance/UndefinedVariable
 from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS
-# Импортируем ВСЕ роутеры, включая 'other'
-from handlers import start, profile, support, earning, admin, gmail, stats, promo, other
+from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system
 from database import db_manager
-from utils.antiflood import AntiFloodMiddleware
+from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 
 logging.basicConfig(
@@ -37,12 +35,15 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
     
+    # ИЗМЕНЕНИЕ: Добавлены новые команды /ban и /unban в меню админа
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="viewhold", description="⏳ Посмотреть холд пользователя"),
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны пользователю"),
         BotCommand(command="fine", description="💸 Выписать штраф пользователю"),
+        BotCommand(command="ban", description="🚫 Забанить пользователя"),
+        BotCommand(command="unban", description="✅ Разбанить пользователя"),
         BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
 
@@ -67,14 +68,11 @@ async def handle_telegram_bad_request(event: ErrorEvent):
     return False
 
 async def main():
-    # ================================================================================= #
-    # ===================== НАДЕЖНАЯ ДИАГНОСТИКА ПЕРЕМЕННЫХ ===================== #
     logger.warning("--- STARTING BOT: CHECKING ADMIN IDs ---")
     logger.warning(f"Value for ADMIN_ID_1 loaded from environment: {ADMIN_ID_1}")
     logger.warning(f"Value for ADMIN_ID_2 loaded from environment: {ADMIN_ID_2}")
     logger.warning(f"Final ADMIN_IDS list used by the bot: {ADMIN_IDS}")
     logger.warning("-------------------------------------------")
-    # ================================================================================= #
 
     if not BOT_TOKEN:
         logger.critical("Bot token is not found! Please check your .env file.")
@@ -90,6 +88,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
+    dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
     # --- ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
@@ -101,8 +100,8 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
+    dp.include_router(ban_system.router)
     
-    # Роутер для "всего остального" регистрируется ПОСЛЕДНИМ.
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
