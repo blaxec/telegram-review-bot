@@ -29,8 +29,8 @@ class User(Base):
     
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
     is_banned = Column(Boolean, default=False, nullable=False)
-    
     last_unban_request_at = Column(DateTime, nullable=True)
+    age = Column(Integer, nullable=True)
 
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
