@@ -13,6 +13,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    # --- ВОТ ИЗМЕНЕНИЕ: ДОБАВЛЕНА ПРОВЕРКА ГОТОВНОСТИ ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-telegram_bot_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # ----------------------------------------------------
 
   redis_db:
     image: redis:7-alpine
@@ -24,20 +31,16 @@ services:
   bot:
     build: .
     container_name: my_telegram_bot_app
+    # --- ВОТ ИЗМЕНЕНИЕ: БОТ ТЕПЕРЬ ЖДЕТ, ПОКА БАЗА НЕ СТАНЕТ "ЗДОРОВОЙ" ---
     depends_on:
-      - postgres_db
-      - redis_db
+      postgres_db:
+        condition: service_healthy
+    # -----------------------------------------------------------------------
     env_file:
       - .env
     volumes:
       - .:/app
-    # --- ВОТ ПОСТОЯННОЕ РЕШЕНИЕ ---
-    # Эта строка — ваш "автоматический сборщик".
-    # Она говорит Docker: "Каждый раз, когда запускаешь этот контейнер,
-    # сначала выполни `alembic upgrade head`, а потом, если все хорошо (`&&`),
-    # запускай бота `python main.py`".
     command: sh -c "alembic upgrade head && python main.py"
-    # ---------------------------------
 
 volumes:
   postgres_data:
