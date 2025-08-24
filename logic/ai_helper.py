@@ -1,12 +1,14 @@
 # file: logic/ai_helper.py
 
 import os
-import json
 import httpx
+import logging
 
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
-# --- ИЗМЕНЕНИЕ: Используем новую, более мощную модель ---
-API_URL = "https://api-inference.huggingface.co/models/deepseek-ai/DeepSeek-V2-Lite-Chat"
+API_URL = "https://api-inference.huggingface.co/models/deepseek-ai/deepseek-llm-7b-chat"
+
+logger = logging.getLogger(__name__)
+
 
 async def generate_review_text(
     company_info: str,
@@ -15,10 +17,10 @@ async def generate_review_text(
     details: list[str] = None
 ) -> str | None:
     """
-    Генерирует текст отзыва с помощью бесплатного API Hugging Face (модель Deepseek-V2).
+    Генерирует текст отзыва с помощью бесплатного API Hugging Face (модель Deepseek).
     """
     if not HUGGINGFACE_TOKEN:
-        print("ОШИБКА: Токен Hugging Face не найден в .env файле!")
+        logger.error("ОШИБКА: Токен Hugging Face не найден в .env файле!")
         return "Ошибка: AI не настроен."
 
     details_text = ""
@@ -26,23 +28,26 @@ async def generate_review_text(
         details_list = "\n".join([f"- {detail}" for detail in details])
         details_text = f"\nЧто нужно упомянуть в тексте:\n{details_list}"
 
-    # --- ИЗМЕНЕНИЕ: Промпт в формате чата, без тегов [INST] ---
-    # Этот формат лучше подходит для Deepseek-v2
-    system_prompt = "Ты — талантливый копирайтер, который пишет короткие, живые и абсолютно естественные отзывы для Google и Яндекс Карт от лица разных людей. Твоя главная задача — избегать любых клише, роботизированных фраз и чрезмерного восторга. Текст должен звучать так, как будто его написал реальный человек."
-    user_prompt = f"""
+    # --- ИЗМЕНЕНИЕ: Формируем единую инструкцию для пользователя, т.к. системный промпт не поддерживается ---
+    user_instruction = f"""
+Ты — талантливый копирайтер. Твоя задача — написать короткий, живой и естественный отзыв для Google/Яндекс Карт.
+
 Вот сценарий: "{scenario}".
 
 Напиши короткий положительный отзыв на 5 звезд от лица этого человека о заведении: "{company_info}".
 
-Требования:
-- Тон отзыва: {tone}.
+Требования к отзыву:
+- Тон: {tone}.
 - Длина: 2-4 предложения.
-- НЕ используй шаблонные фразы вроде "рекомендую это место", "обязательно вернусь", "лучший в городе", "высокий уровень сервиса".
-- Пиши просто и по-человечески.
+- Стиль: Простой и человечный.
+- ЗАПРЕЩЕНО использовать шаблонные фразы вроде "рекомендую это место", "обязательно вернусь", "лучший в городе", "высокий уровень сервиса".
 {details_text}
+
+Ответь ТОЛЬКО текстом отзыва и ничем больше.
 """
-    # Собираем промпт в формате "разговора"
-    full_prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant"
+    # --- ИЗМЕНЕНИЕ: Собираем промпт в формате, который указан в документации ---
+    # Формат: "User: {инструкция}\n\nAssistant:"
+    full_prompt = f"User: {user_instruction}\n\nAssistant:"
 
 
     headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
@@ -64,17 +69,17 @@ async def generate_review_text(
             result = response.json()
             generated_text = result[0]['generated_text']
             
-            # Иногда модель может закончить ответ специальным токеном <|im_end|>, его нужно убрать
-            if generated_text.endswith("<|im_end|>"):
-                generated_text = generated_text[:-len("<|im_end|>")]
+            # Убираем возможный лишний токен в конце ответа
+            if generated_text.endswith("<｜end of sentence｜>"):
+                generated_text = generated_text[:-len("<｜end of sentence｜>")]
 
             return generated_text.strip()
             
     except httpx.ReadTimeout:
-        print("Ошибка: Hugging Face API не ответил вовремя.")
+        logger.error("Ошибка: Hugging Face API не ответил вовремя.")
         return "AI-сервер перегружен, попробуйте через минуту."
     except Exception as e:
-        print(f"Ошибка при обращении к Hugging Face API: {e}")
+        logger.exception(f"Ошибка при обращении к Hugging Face API: {e}")
         error_text = str(e)
         if "is currently loading" in error_text:
              return "AI-модель сейчас загружается. Пожалуйста, подождите 1-2 минуты и попробуйте снова."
