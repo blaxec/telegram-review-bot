@@ -8,7 +8,7 @@ HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 # --- ИЗМЕНЕНИЕ: Используем новую, более мощную модель ---
 API_URL = "https://api-inference.huggingface.co/models/deepseek-ai/DeepSeek-V2-Lite-Chat"
 
-async def generate_review_text_with_ai(
+async def generate_review_text(
     company_info: str,
     scenario: str,
     tone: str = "спокойный и довольный",

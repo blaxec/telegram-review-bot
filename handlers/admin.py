@@ -429,11 +429,9 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
         await message.answer("Сценарий не может быть пустым. Пожалуйста, отправьте текст.")
         return
         
-    # Удаляем сообщение со сценарием и предыдущее приглашение
     await delete_previous_messages(message, state)
     data = await state.get_data()
     
-    # Удаляем исходное сообщение с кнопками
     original_message_id = data.get("original_message_id")
     if original_message_id:
         try:
@@ -444,16 +442,22 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
     status_msg = await message.answer("🤖 Получил сценарий. Генерирую текст, пожалуйста, подождите...")
     
     scenario = message.text
-    generated_text = await generate_review_text(scenario)
+    
+    link_id = data.get('target_link_id')
+    link = await db_manager.db_get_link_by_id(link_id)
+    company_info = link.url if link else "Неизвестная компания"
+    
+    generated_text = await generate_review_text(
+        company_info=company_info,
+        scenario=scenario
+    )
 
     await status_msg.delete()
 
-    if not generated_text:
-        await message.answer("❌ Не удалось сгенерировать текст. Попробуйте снова или напишите вручную.", reply_markup=inline.get_cancel_inline_keyboard())
-        # Не сбрасываем состояние, даем админу шанс отменить
+    if "ошибка" in generated_text.lower() or "ai-сервер" in generated_text.lower() or "ai-модель" in generated_text.lower():
+        await message.answer(f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", reply_markup=inline.get_cancel_inline_keyboard())
         return
 
-    # Шаг 4 и 5: Отправляем сгенерированный текст админу с клавиатурой модерации
     moderation_text = (
         "📄 **Сгенерированный текст отзыва:**\n\n"
         f"<i>{generated_text}</i>\n\n"
@@ -463,7 +467,6 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
     await message.answer(moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
     
     await state.set_state(AdminState.AI_AWAITING_MODERATION)
-    # Сохраняем сценарий и сгенерированный текст для возможных перегенераций или отправки
     await state.update_data(ai_scenario=scenario, ai_generated_text=generated_text)
 
 
@@ -477,7 +480,6 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await callback.answer("✅ Отправляю пользователю...", show_alert=False)
         review_text = data.get('ai_generated_text')
         
-        # Используем уже существующую логику для отправки текста пользователю
         dp_dummy = Dispatcher(storage=state.storage)
         success, response_text = await send_review_text_to_user_logic(
             bot=bot, dp=dp_dummy, scheduler=scheduler,
@@ -491,12 +493,19 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await callback.answer("🔄 Генерирую новый вариант...", show_alert=False)
         scenario = data.get('ai_scenario')
         
+        link_id = data.get('target_link_id')
+        link = await db_manager.db_get_link_by_id(link_id)
+        company_info = link.url if link else "Неизвестная компания"
+
         status_msg = await callback.message.answer("🤖 Повторная генерация...")
-        generated_text = await generate_review_text(scenario)
+        generated_text = await generate_review_text(
+            company_info=company_info,
+            scenario=scenario,
+        )
         await status_msg.delete()
 
-        if not generated_text:
-            await callback.message.answer("❌ Не удалось сгенерировать текст. Попробуйте снова или напишите вручную.")
+        if "ошибка" in generated_text.lower() or "ai-сервер" in generated_text.lower() or "ai-модель" in generated_text.lower():
+            await callback.message.answer(f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", reply_markup=inline.get_cancel_inline_keyboard())
             return
 
         new_moderation_text = (
@@ -505,7 +514,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
             "Выберите следующее действие:"
         )
         await callback.message.edit_text(new_moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
-        await state.update_data(ai_generated_text=generated_text) # Обновляем текст в состоянии
+        await state.update_data(ai_generated_text=generated_text)
     
     elif action == 'manual':
         await callback.answer("✍️ Переключаю на ручной ввод...", show_alert=False)
@@ -517,7 +526,6 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
             reply_markup=inline.get_cancel_inline_keyboard()
         )
         await state.set_state(state_map[platform])
-        # Важно обновить prompt_message_id, чтобы он удалился при вводе текста
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 # --- КОНЕЦ БЛОКА ИИ ---
