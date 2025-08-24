@@ -256,9 +256,24 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder.adjust(2, 1)
     return builder.as_markup()
 
+# --- ИЗМЕНЕНИЕ: Добавлена кнопка "Сгенерировать с ИИ" ---
 def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='✍️ Написать текст отзыва', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    builder = InlineKeyboardBuilder()
+    builder.button(text='✍️ Написать текст вручную', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')
+    builder.button(text='🤖 Сгенерировать с ИИ', callback_data=f'admin_ai_generate_start:{platform}:{user_id}:{link_id}')
+    builder.adjust(1)
+    return builder.as_markup()
+
+# --- НОВАЯ КЛАВИАТУРА: Меню модерации для сгенерированного текста ---
+def get_ai_moderation_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text='✅ Отправить пользователю', callback_data='ai_moderation:send')
+    builder.button(text='🔄 Сгенерировать заново', callback_data='ai_moderation:regenerate')
+    builder.button(text='✍️ Написать вручную', callback_data='ai_moderation:manual')
+    builder.button(text='❌ Отмена', callback_data='cancel_action')
+    builder.adjust(1)
+    return builder.as_markup()
+
 
 def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

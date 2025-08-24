@@ -29,6 +29,8 @@ from logic.admin_logic import (
     reject_withdrawal_logic,
     apply_fine_to_user
 )
+# --- НОВЫЙ ИМПОРТ ---
+from logic.ai_helper import generate_review_text
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -386,6 +388,140 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
             prompt_message_id=prompt_msg.message_id if prompt_msg else None
         )
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
+
+# --- НОВЫЙ БЛОК: ИНТЕГРАЦИЯ С ИИ ---
+
+@router.callback_query(F.data.startswith('admin_ai_generate_start:'), F.from_user.id == TEXT_ADMIN)
+async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
+    """Шаг 1: Админ нажимает кнопку 'Сгенерировать с ИИ'."""
+    try:
+        _, platform, user_id_str, link_id_str = callback.data.split(':')
+        
+        edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
+        new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
+        
+        prompt_msg = None
+        if callback.message:
+            # Удаляем старую клавиатуру и добавляем текст-приглашение
+            if callback.message.photo: 
+                await callback.message.edit_caption(caption=new_content, reply_markup=None)
+            else: 
+                prompt_msg = await callback.message.edit_text(new_content, reply_markup=None)
+
+        await state.set_state(AdminState.AI_AWAITING_SCENARIO)
+        # Сохраняем все необходимые данные для последующих шагов
+        await state.update_data(
+            target_user_id=int(user_id_str), 
+            target_link_id=int(link_id_str), 
+            platform=platform,
+            prompt_message_id=prompt_msg.message_id if prompt_msg else None,
+            original_message_id=callback.message.message_id # Сохраняем ID исходного сообщения
+        )
+        await callback.answer("Ожидаю сценарий...")
+    except Exception as e: 
+        logger.exception(f"Ошибка на старте AI генерации: {e}")
+        await callback.answer("Произошла ошибка.", show_alert=True)
+
+@router.message(AdminState.AI_AWAITING_SCENARIO, F.from_user.id == TEXT_ADMIN)
+async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
+    """Шаг 2 и 3: Админ отправляет сценарий, бот генерирует текст."""
+    if not message.text:
+        await message.answer("Сценарий не может быть пустым. Пожалуйста, отправьте текст.")
+        return
+        
+    # Удаляем сообщение со сценарием и предыдущее приглашение
+    await delete_previous_messages(message, state)
+    data = await state.get_data()
+    
+    # Удаляем исходное сообщение с кнопками
+    original_message_id = data.get("original_message_id")
+    if original_message_id:
+        try:
+            await bot.delete_message(chat_id=message.from_user.id, message_id=original_message_id)
+        except TelegramBadRequest:
+            pass
+
+    status_msg = await message.answer("🤖 Получил сценарий. Генерирую текст, пожалуйста, подождите...")
+    
+    scenario = message.text
+    generated_text = await generate_review_text(scenario)
+
+    await status_msg.delete()
+
+    if not generated_text:
+        await message.answer("❌ Не удалось сгенерировать текст. Попробуйте снова или напишите вручную.", reply_markup=inline.get_cancel_inline_keyboard())
+        # Не сбрасываем состояние, даем админу шанс отменить
+        return
+
+    # Шаг 4 и 5: Отправляем сгенерированный текст админу с клавиатурой модерации
+    moderation_text = (
+        "📄 **Сгенерированный текст отзыва:**\n\n"
+        f"<i>{generated_text}</i>\n\n"
+        "Выберите следующее действие:"
+    )
+    
+    await message.answer(moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
+    
+    await state.set_state(AdminState.AI_AWAITING_MODERATION)
+    # Сохраняем сценарий и сгенерированный текст для возможных перегенераций или отправки
+    await state.update_data(ai_scenario=scenario, ai_generated_text=generated_text)
+
+
+@router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, F.from_user.id == TEXT_ADMIN)
+async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """Шаг 6: Обработка кнопок модерации."""
+    action = callback.data.split(':')[1]
+    data = await state.get_data()
+    
+    if action == 'send':
+        await callback.answer("✅ Отправляю пользователю...", show_alert=False)
+        review_text = data.get('ai_generated_text')
+        
+        # Используем уже существующую логику для отправки текста пользователю
+        dp_dummy = Dispatcher(storage=state.storage)
+        success, response_text = await send_review_text_to_user_logic(
+            bot=bot, dp=dp_dummy, scheduler=scheduler,
+            user_id=data['target_user_id'], link_id=data['target_link_id'],
+            platform=data['platform'], review_text=review_text
+        )
+        await callback.message.edit_text(f"Текст отправлен пользователю.\nСтатус: {response_text}", reply_markup=None)
+        await state.clear()
+
+    elif action == 'regenerate':
+        await callback.answer("🔄 Генерирую новый вариант...", show_alert=False)
+        scenario = data.get('ai_scenario')
+        
+        status_msg = await callback.message.answer("🤖 Повторная генерация...")
+        generated_text = await generate_review_text(scenario)
+        await status_msg.delete()
+
+        if not generated_text:
+            await callback.message.answer("❌ Не удалось сгенерировать текст. Попробуйте снова или напишите вручную.")
+            return
+
+        new_moderation_text = (
+            "📄 **Новый сгенерированный текст отзыва:**\n\n"
+            f"<i>{generated_text}</i>\n\n"
+            "Выберите следующее действие:"
+        )
+        await callback.message.edit_text(new_moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
+        await state.update_data(ai_generated_text=generated_text) # Обновляем текст в состоянии
+    
+    elif action == 'manual':
+        await callback.answer("✍️ Переключаю на ручной ввод...", show_alert=False)
+        platform = data['platform']
+        state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
+        
+        prompt_msg = await callback.message.edit_text(
+            "Введите текст отзыва вручную. Вы можете скопировать и отредактировать сгенерированный текст выше.",
+            reply_markup=inline.get_cancel_inline_keyboard()
+        )
+        await state.set_state(state_map[platform])
+        # Важно обновить prompt_message_id, чтобы он удалился при вводе текста
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+# --- КОНЕЦ БЛОКА ИИ ---
+
 
 @router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):

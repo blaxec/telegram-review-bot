@@ -58,7 +58,7 @@ class UserState(StatesGroup):
     # Состояния для поддержки
     SUPPORT_AWAITING_QUESTION = State()
 
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+    # --- НОВЫE СОСТОЯНИЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
     REFERRAL_PATH_SELECTION = State()
     REFERRAL_YANDEX_SUBPATH_SELECTION = State()
 
@@ -71,6 +71,11 @@ class AdminState(StatesGroup):
     # Состояния для предоставления текста отзыва
     PROVIDE_GOOGLE_REVIEW_TEXT = State()
     PROVIDE_YANDEX_REVIEW_TEXT = State()
+    
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ГЕНЕРАЦИИ С ИИ ---
+    AI_AWAITING_SCENARIO = State()
+    AI_AWAITING_MODERATION = State()
+    # ----------------------------------------
     
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
