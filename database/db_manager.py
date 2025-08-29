@@ -525,7 +525,7 @@ async def complete_promo_activation(activation_id: int) -> bool:
 
 # --- Функции для системы поддержки ---
 
-async def create_support_ticket(user_id: int, username: str, question: str, admin_message_ids: dict) -> SupportTicket:
+async def create_support_ticket(user_id: int, username: str, question: str, admin_message_ids: dict, photo_file_id: str = None) -> SupportTicket:
     async with async_session() as session:
         async with session.begin():
             new_ticket = SupportTicket(
@@ -533,7 +533,8 @@ async def create_support_ticket(user_id: int, username: str, question: str, admi
                 username=username,
                 question=question,
                 admin_message_id_1=admin_message_ids.get(0),
-                admin_message_id_2=admin_message_ids.get(1)
+                admin_message_id_2=admin_message_ids.get(1),
+                photo_file_id=photo_file_id
             )
             session.add(new_ticket)
             await session.flush()
@@ -564,6 +565,23 @@ async def close_support_ticket(ticket_id: int) -> bool:
             
             ticket.status = 'closed'
             return True
+
+# --- НОВАЯ ФУНКЦИЯ для предупреждений в поддержке ---
+async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> int:
+    """Добавляет предупреждение и, если нужно, кулдаун для системы поддержки."""
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            if not user:
+                return 0
+            
+            user.support_warnings += 1
+            current_warnings = user.support_warnings
+
+            if hours is not None and hours > 0:
+                user.support_cooldown_until = datetime.datetime.utcnow() + datetime.timedelta(hours=hours)
+            
+            return current_warnings
 
 # --- Функции для системы бана и просроченных ссылок ---
 

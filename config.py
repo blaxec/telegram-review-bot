@@ -36,9 +36,7 @@ class Rewards:
     # ПУТЬ 1: Google
     REFERRAL_GOOGLE_REVIEW = 0.45
     # ПУТЬ 2: Gmail
-    # --- ИЗМЕНЕНИЕ: Теперь реферал получает 4.5 звезды ---
     GMAIL_FOR_REFERRAL_USER = 4.5 # Сколько получает сам реферал
-    # ---------------------------------------------------
     REFERRAL_GMAIL_ACCOUNT = 0.5 # Сколько получает реферер
     # ПУТЬ 3: Yandex
     REFERRAL_YANDEX_WITH_TEXT = 1.2
@@ -66,10 +64,8 @@ class Durations:
     # Тайминги для FSM-задач (в минутах)
     TASK_GOOGLE_LIKING_TIMEOUT = 10
     TASK_GOOGLE_LIKING_CONFIRM_APPEARS = 5
-    # --- ИЗМЕНЕНИЕ: Таймеры для Google-отзыва обновлены по запросу ---
     TASK_GOOGLE_REVIEW_TIMEOUT = 17
     TASK_GOOGLE_REVIEW_CONFIRM_APPEARS = 5
-    # -------------------------------------------------------------
     TASK_YANDEX_LIKING_TIMEOUT = 10
     TASK_YANDEX_LIKING_CONFIRM_APPEARS = 5
     TASK_YANDEX_REVIEW_TIMEOUT = 25
@@ -80,9 +76,7 @@ class Durations:
     DELETE_WELCOME_MESSAGE_DELAY = 15
     DELETE_INFO_MESSAGE_DELAY = 25
     DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY = 10
-    # Задержка для удаления ответов на админские команды и информационных сообщений для пользователя
     DELETE_ADMIN_REPLY_DELAY = 10
-    # Задержка для удаления команды /unban_request
     DELETE_UNBAN_REQUEST_DELAY = 15
 
 

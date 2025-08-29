@@ -55,8 +55,11 @@ class UserState(StatesGroup):
     PROMO_ENTER_CODE = State()
     PROMO_AWAITING_CHOICE = State()
 
-    # Состояния для поддержки
+    # --- ИЗМЕНЕНИЕ: Расширенные состояния для поддержки ---
     SUPPORT_AWAITING_QUESTION = State()
+    SUPPORT_AWAITING_PHOTO_CHOICE = State()
+    SUPPORT_AWAITING_PHOTO = State()
+    # --------------------------------------------------
 
     # --- НОВЫE СОСТОЯНИЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
     REFERRAL_PATH_SELECTION = State()
@@ -91,8 +94,11 @@ class AdminState(StatesGroup):
     PROMO_REWARD = State()
     PROMO_USES = State()
     
-    # Состояния для поддержки
+    # --- ИЗМЕНЕНИЕ: Расширенные состояния для поддержки ---
     SUPPORT_AWAITING_ANSWER = State()
+    SUPPORT_AWAITING_WARN_REASON = State()
+    SUPPORT_AWAITING_COOLDOWN_HOURS = State()
+    # ----------------------------------------------------
 
     # Состояния для управления ссылками
     DELETE_LINK_ID = State()

@@ -37,6 +37,11 @@ class User(Base):
     last_unban_request_at = Column(DateTime, nullable=True)
     phone_number = Column(String, nullable=True)
 
+    # --- НОВЫЕ ПОЛЯ ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
+    support_warnings = Column(Integer, default=0, nullable=False)
+    support_cooldown_until = Column(DateTime, nullable=True)
+    # ------------------------------------------
+
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
@@ -116,7 +121,7 @@ class PromoActivation(Base):
     user = relationship("User", back_populates="promo_activations")
     promo_code = relationship("PromoCode", back_populates="activations")
 
-# --- НОВАЯ ТАБЛИЦА ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
+# --- ТАБЛИЦА ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
 
 class SupportTicket(Base):
     __tablename__ = 'support_tickets'
@@ -128,6 +133,10 @@ class SupportTicket(Base):
     
     admin_message_id_1 = Column(BigInteger, nullable=True)
     admin_message_id_2 = Column(BigInteger, nullable=True)
+    
+    # --- НОВОЕ ПОЛЕ ---
+    photo_file_id = Column(String, nullable=True)
+    # ------------------
     
     status = Column(Enum('open', 'claimed', 'closed', name='ticket_status_enum'), default='open', nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

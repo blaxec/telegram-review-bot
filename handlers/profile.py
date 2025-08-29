@@ -345,10 +345,13 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
             parse_mode="Markdown",
             reply_markup=inline.get_admin_withdrawal_keyboard(request_id)
         )
-        await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.")
+        # --- ИЗМЕНЕНИЕ: Добавлена ссылка на канал ---
+        await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.\n\nСледить за статусом можно в нашем <a href='https://t.me/conclusions_starref'>канале выплат</a>.")
     except Exception as e:
-        logger.error(f"Failed to send withdrawal request to channel {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
-        await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Пожалуйста, обратитесь в поддержку.")
+        logger.error(f"Не удалось отправить запрос в канал выплат {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
+        # --- ИЗМЕНЕНИЕ: Улучшенное сообщение об ошибке ---
+        await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат или не имеет нужных прав. Пожалуйста, обратитесь в поддержку. Ваши звезды не были списаны.")
+        # Возвращаем баланс, так как уведомление не было отправлено
         await db_manager.update_balance(user.id, amount)
     
     await state.clear()
