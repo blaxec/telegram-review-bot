@@ -66,8 +66,10 @@ class Durations:
     # Тайминги для FSM-задач (в минутах)
     TASK_GOOGLE_LIKING_TIMEOUT = 10
     TASK_GOOGLE_LIKING_CONFIRM_APPEARS = 5
-    TASK_GOOGLE_REVIEW_TIMEOUT = 15
-    TASK_GOOGLE_REVIEW_CONFIRM_APPEARS = 7
+    # --- ИЗМЕНЕНИЕ: Таймеры для Google-отзыва обновлены по запросу ---
+    TASK_GOOGLE_REVIEW_TIMEOUT = 17
+    TASK_GOOGLE_REVIEW_CONFIRM_APPEARS = 5
+    # -------------------------------------------------------------
     TASK_YANDEX_LIKING_TIMEOUT = 10
     TASK_YANDEX_LIKING_CONFIRM_APPEARS = 5
     TASK_YANDEX_REVIEW_TIMEOUT = 25

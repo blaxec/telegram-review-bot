@@ -161,6 +161,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
+# --- ИЗМЕНЕНИЕ: Этот обработчик теперь тоже использует delete_user_and_prompt_messages ---
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
     await delete_user_and_prompt_messages(message, state)
@@ -284,6 +285,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     user_data = await state.get_data()
     user_id = message.from_user.id
     review_text = user_data.get('review_text', 'Текст не был сохранен.')
+    photo_file_id = message.photo[-1].file_id
     
     active_link_id = await reference_manager.get_user_active_link_id(user_id)
     if not active_link_id:
@@ -303,13 +305,13 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     )
     
     try:
-        # ИЗМЕНЕНИЕ: Сначала создаем запись в БД, чтобы получить review_id
         review_id = await db_manager.create_review_draft(
             user_id=user_id,
             link_id=active_link_id,
             platform='google',
             text=review_text,
-            admin_message_id=0 # Временный ID
+            admin_message_id=0,
+            screenshot_file_id=photo_file_id
         )
 
         if not review_id:
@@ -317,17 +319,13 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
 
         sent_message = await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
+            photo=photo_file_id,
             caption=caption,
-            reply_markup=inline.get_admin_final_verdict_keyboard(review_id) # Сразу отправляем с правильным ID
+            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
         
-        # Обновляем review в БД, добавляя ID сообщения админа
-        review_to_update = await db_manager.get_review_by_id(review_id)
-        if review_to_update:
-            review_to_update.admin_message_id = sent_message.message_id
-            # Это обновление должно произойти внутри сессии, но для простоты предположим, что оно сработает
-            # В идеале, create_review_draft должен принимать admin_message_id и обновлять его позже
+        # --- ИЗМЕНЕНИЕ: Обновляем запись в БД с ID сообщения админа ---
+        await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
 
         response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
         await schedule_message_deletion(response_msg, 25)
@@ -554,6 +552,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     user_id = message.from_user.id
     review_type = user_data.get("yandex_review_type", "with_text")
     platform = f"yandex_{review_type}"
+    photo_file_id = message.photo[-1].file_id
 
     review_text = user_data.get('review_text', '')
     
@@ -579,13 +578,13 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     caption += "Скриншот прикреплен. Проверьте отзыв и примите решение."
     
     try:
-        # ИЗМЕНЕНИЕ: Сначала создаем запись в БД, чтобы получить review_id
         review_id = await db_manager.create_review_draft(
             user_id=user_id,
             link_id=active_link_id,
             platform=platform,
             text=review_text,
-            admin_message_id=0 # Временный ID
+            admin_message_id=0,
+            screenshot_file_id=photo_file_id
         )
 
         if not review_id:
@@ -593,15 +592,13 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
 
         sent_message = await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
+            photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
         
-        # Обновляем review в БД, добавляя ID сообщения админа
-        review_to_update = await db_manager.get_review_by_id(review_id)
-        if review_to_update:
-            review_to_update.admin_message_id = sent_message.message_id
+        # --- ИЗМЕНЕНИЕ: Обновляем запись в БД с ID сообщения админа ---
+        await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
 
     except Exception as e:
         logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)

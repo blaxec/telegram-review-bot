@@ -179,7 +179,7 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = Durat
                 user.warnings = 0
     return current_warnings
 
-async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int) -> int:
+async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int, screenshot_file_id: str = None) -> int:
     review_id = 0
     async with async_session() as session:
         async with session.begin():
@@ -189,12 +189,25 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
                 platform=platform,
                 status='pending',
                 review_text=text,
-                admin_message_id=admin_message_id
+                admin_message_id=admin_message_id,
+                screenshot_file_id=screenshot_file_id
             )
             session.add(new_review)
             await session.flush()
             review_id = new_review.id
     return review_id
+
+async def db_update_review_admin_message_id(review_id: int, admin_message_id: int) -> bool:
+    """Обновляет admin_message_id для существующего отзыва."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id)
+            if not review:
+                logger.error(f"Attempted to update admin_message_id for non-existent review {review_id}")
+                return False
+            review.admin_message_id = admin_message_id
+            return True
+
 
 async def move_review_to_hold(review_id: int, amount: float, hold_minutes: int) -> bool:
     async with async_session() as session:
@@ -460,18 +473,26 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
         )
         return result.scalar_one_or_none()
         
-async def create_promo_activation(user_id: int, promo: PromoCode, status: str) -> PromoActivation:
+async def create_promo_activation(user_id: int, promo_id: int, status: str) -> PromoActivation:
     async with async_session() as session:
         async with session.begin():
             new_activation = PromoActivation(
                 user_id=user_id,
-                promo_code_id=promo.id,
+                promo_code_id=promo_id,
                 status=status
             )
             session.add(new_activation)
             if status == 'completed':
-                # Увеличиваем счетчик использований прямо здесь
-                promo.current_uses += 1
+                # ИЗМЕНЕНИЕ: Безопасно получаем и обновляем промокод внутри одной транзакции
+                promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
+                if promo_to_update:
+                    promo_to_update.current_uses += 1
+                else:
+                    # Обработка редкого случая, когда промокод удален между проверкой и созданием
+                    logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
+                    # Можно вызвать исключение, чтобы откатить транзакцию
+                    raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
+
             await session.flush()
             await session.refresh(new_activation)
             return new_activation

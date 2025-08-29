@@ -6,7 +6,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import StateFilter
 # ----------------------------
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
 
 from states.user_states import UserState
@@ -17,9 +17,9 @@ from config import Rewards
 router = Router()
 logger = logging.getLogger(__name__)
 
-async def show_selected_referral_path(callback: CallbackQuery, bot: Bot):
+async def show_selected_referral_path(message_or_callback: Message | CallbackQuery, bot: Bot):
     """Отображает информацию о уже выбранном реферальном пути."""
-    user_id = callback.from_user.id
+    user_id = message_or_callback.from_user.id
     user = await db_manager.get_user(user_id)
     bot_info = await bot.get_me()
     referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
@@ -45,17 +45,31 @@ async def show_selected_referral_path(callback: CallbackQuery, bot: Bot):
         f"💰 Накоплено в копилке: <b>{referral_earnings:.2f} ⭐</b>"
     )
 
-    if callback.message:
-        try:
-            await callback.message.edit_text(
+    is_message = isinstance(message_or_callback, Message)
+    target_message = message_or_callback if is_message else message_or_callback.message
+
+    if not target_message:
+        return
+
+    try:
+        if is_message:
+             await target_message.answer(
                 ref_text,
                 reply_markup=inline.get_referral_info_keyboard(),
                 disable_web_page_preview=True
             )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                logger.warning(f"Error editing referral message: {e}")
-            await callback.answer()
+        else:
+            await target_message.edit_text(
+                ref_text,
+                reply_markup=inline.get_referral_info_keyboard(),
+                disable_web_page_preview=True
+            )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.warning(f"Error editing referral message: {e}")
+        if not is_message:
+            await message_or_callback.answer()
+
 
 @router.callback_query(F.data == 'profile_referral')
 async def referral_entry_point(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -67,6 +81,38 @@ async def referral_entry_point(callback: CallbackQuery, state: FSMContext, bot: 
         await show_selected_referral_path(callback, bot)
     else:
         await show_referral_path_selection(callback, state)
+
+# --- ИЗМЕНЕНИЕ: Добавлены новые обработчики ---
+
+@router.callback_query(F.data == 'profile_referrals_list')
+async def show_referrals_list(callback: CallbackQuery):
+    """Показывает пользователю список его рефералов."""
+    referrals = await db_manager.get_referrals(callback.from_user.id)
+    
+    if not referrals:
+        text = "У вас пока нет приглашенных пользователей."
+    else:
+        text = "👥 Ваши рефералы:\n\n" + "\n".join([f"- @{username}" for username in referrals if username])
+        
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=inline.get_back_to_referral_menu_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == 'profile_claim_referral_stars')
+async def claim_referral_stars(callback: CallbackQuery, bot: Bot):
+    """Переводит накопленные звезды на основной баланс."""
+    user_id = callback.from_user.id
+    earnings = await db_manager.get_referral_earnings(user_id)
+    
+    if earnings > 0:
+        await db_manager.claim_referral_earnings(user_id)
+        await callback.answer(f"{earnings:.2f} ⭐ переведены на ваш основной баланс!", show_alert=True)
+    else:
+        await callback.answer("Ваша реферальная копилка пуста.", show_alert=True)
+        
+    # Обновляем сообщение с меню
+    await show_selected_referral_path(callback, bot)
+
 
 async def show_referral_path_selection(callback: CallbackQuery, state: FSMContext):
     """Показывает меню выбора реферального пути."""

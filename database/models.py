@@ -56,6 +56,9 @@ class Review(Base):
     
     review_text = Column(String, nullable=True)
     admin_message_id = Column(BigInteger, nullable=True)
+    # --- ИЗМЕНЕНИЕ: Добавлено поле для хранения file_id скриншота ---
+    screenshot_file_id = Column(String, nullable=True)
+    # -----------------------------------------------------------
     
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")

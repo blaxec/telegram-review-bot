@@ -15,7 +15,7 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
-from logic.user_notifications import notify_cooldown_expired, send_confirmation_button, handle_task_timeout
+from logic.user_notifications import send_confirmation_button, handle_task_timeout
 from config import Rewards, Durations, Limits
 
 logger = logging.getLogger(__name__)
@@ -240,8 +240,9 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     platform_for_cooldown = review.platform # e.g. "google" or "yandex_with_text"
     await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
     
-    cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
-    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, review.user_id, platform_for_cooldown], id=f"cooldown_notify_{review.user_id}_{platform_for_cooldown}")
+    # --- ИЗМЕНЕНИЕ: Убрано запланированное уведомление об окончании кулдауна ---
+    # cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
+    # scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, review.user_id, platform_for_cooldown], id=f"cooldown_notify_{review.user_id}_{platform_for_cooldown}")
     
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
@@ -273,8 +274,11 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24) # 24 часа по умолчанию
     platform_for_cooldown = rejected_review.platform
     await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
-    cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
-    scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, platform_for_cooldown], id=f"cooldown_notify_{rejected_review.user_id}_{platform_for_cooldown}")
+    
+    # --- ИЗМЕНЕНИЕ: Убрано запланированное уведомление об окончании кулдауна ---
+    # cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
+    # scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, platform_for_cooldown], id=f"cooldown_notify_{rejected_review.user_id}_{platform_for_cooldown}")
+    
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
     try:

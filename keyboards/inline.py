@@ -274,37 +274,45 @@ def get_ai_moderation_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-
-def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
+# --- НОВАЯ КЛАВИАТУРА: Для обработки ошибок ИИ ---
+def get_ai_error_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    # Google
-    builder.button(text="📊 Google Статистика", callback_data="admin_refs:stats:google_maps")
-    builder.button(text="📄 Google Список", callback_data="admin_refs:list:google_maps")
-    builder.button(text="➕ Google Добавить", callback_data="admin_refs:add:google_maps")
-    # Yandex With Text
-    builder.button(text="📊 Янд. (с текстом) Стат.", callback_data="admin_refs:stats:yandex_with_text")
-    builder.button(text="📄 Янд. (с текстом) Список", callback_data="admin_refs:list:yandex_with_text")
-    builder.button(text="➕ Янд. (с текстом) Добавить", callback_data="admin_refs:add:yandex_with_text")
-    # Yandex Without Text
-    builder.button(text="📊 Янд. (без текста) Стат.", callback_data="admin_refs:stats:yandex_without_text")
-    builder.button(text="📄 Янд. (без текста) Список", callback_data="admin_refs:list:yandex_without_text")
-    builder.button(text="➕ Янд. (без текста) Добавить", callback_data="admin_refs:add:yandex_without_text")
-    # Exit
-    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
-    builder.adjust(2, 1, 2, 1, 2, 1, 1)
+    builder.button(text='🔄 Сгенерировать заново', callback_data='ai_moderation:regenerate')
+    builder.button(text='✍️ Написать вручную', callback_data='ai_moderation:manual')
+    builder.adjust(1)
     return builder.as_markup()
 
 
-def get_back_to_admin_refs_keyboard() -> InlineKeyboardMarkup:
+def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
+    # --- ИЗМЕНЕНИЕ: Улучшенная клавиатура ---
+    builder.button(text="Google Карты", callback_data="admin_refs:select_platform:google_maps")
+    builder.button(text="Яндекс (с текстом)", callback_data="admin_refs:select_platform:yandex_with_text")
+    builder.button(text="Яндекс (без текста)", callback_data="admin_refs:select_platform:yandex_without_text")
+    builder.button(text="🔄 Сбросить 'просроченные'", callback_data="admin_refs:reset_expired")
+    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Статистика", callback_data=f"admin_refs:stats:{platform}")
+    builder.button(text="📄 Показать список", callback_data=f"admin_refs:list:{platform}")
+    builder.button(text="➕ Добавить ссылки", callback_data=f"admin_refs:add:{platform}")
+    builder.button(text="⬅️ Назад к выбору платформ", callback_data="admin_refs:back_to_selection")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_back_to_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text='⬅️ Назад', callback_data=f'admin_refs:select_platform:{platform}')
     return builder.as_markup()
 
 def get_admin_refs_list_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='🗑️ Удалить ссылку из базы', callback_data=f'admin_refs:delete_start:{platform}')
     builder.button(text='↪️ Вернуть ссылку в доступные', callback_data=f'admin_refs:return_start:{platform}')
-    builder.button(text='⬅️ Назад', callback_data='back_to_refs_menu')
+    builder.button(text='⬅️ Назад к меню платформы', callback_data=f'admin_refs:select_platform:{platform}')
     builder.adjust(1)
     return builder.as_markup()
 

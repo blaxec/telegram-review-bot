@@ -1,6 +1,7 @@
 # file: logic/promo_logic.py
 
 from database import db_manager, models
+from sqlalchemy.exc import IntegrityError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,15 +37,21 @@ async def activate_promo_code_logic(user_id: int, code: str) -> tuple[str, model
     # 4. Обработка условий
     # Если условие не требуется
     if promo.condition == "no_condition":
-        # Создаем активацию и обновляем баланс в одной транзакции
-        await db_manager.create_promo_activation(user_id, promo, status='completed')
-        await db_manager.update_balance(user_id, promo.reward)
-        logger.info(f"User {user_id} activated promo '{promo.code}' with no condition. Rewarded {promo.reward} stars.")
-        return f"✅ Промокод успешно активирован! Вам начислено {promo.reward} ⭐.", promo
-    
+        try:
+            # --- ИЗМЕНЕНИЕ: Логика вынесена в db_manager для атомарности ---
+            await db_manager.create_promo_activation(user_id, promo.id, status='completed')
+            await db_manager.update_balance(user_id, promo.reward)
+            logger.info(f"User {user_id} activated promo '{promo.code}' with no condition. Rewarded {promo.reward} stars.")
+            return f"✅ Промокод успешно активирован! Вам начислено {promo.reward} ⭐.", promo
+        except IntegrityError:
+            # Этот блок сработает, если, например, промокод был удален прямо перед активацией
+            logger.error(f"Integrity error on activating no-condition promo for user {user_id} and promo {promo.code}")
+            return "❌ Произошла ошибка базы данных при активации промокода. Попробуйте снова.", None
+
     # Если условие требуется
     else:
-        await db_manager.create_promo_activation(user_id, promo, status='pending_condition')
+        # --- ИЗМЕНЕНИЕ: Передаем promo.id вместо всего объекта ---
+        await db_manager.create_promo_activation(user_id, promo.id, status='pending_condition')
         logger.info(f"User {user_id} activated promo '{promo.code}'. Pending condition: {promo.condition}.")
         
         condition_map = {

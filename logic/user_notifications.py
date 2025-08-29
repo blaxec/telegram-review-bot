@@ -86,19 +86,3 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
         await bot.send_message(FINAL_CHECK_ADMIN, admin_notification)
     except Exception as e:
         logger.error(f"Ошибка при обработке таймаута для {user_id}: {e}")
-
-async def notify_cooldown_expired(bot: Bot, user_id: int, platform: str):
-    """Уведомляет пользователя об окончании кулдауна."""
-    platform_names = {
-        "google": "Google Картам",
-        "yandex": "Yandex Картам"
-    }
-    platform_name = platform_names.get(platform, platform)
-    try:
-        await bot.send_message(
-            user_id,
-            f"🎉 Кулдаун завершен! Теперь вы снова можете писать отзывы в **{platform_name}**."
-        )
-        logger.info(f"Уведомление об окончании кулдауна для {platform} отправлено пользователю {user_id}.")
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление об окончании кулдауна пользователю {user_id}: {e}")
