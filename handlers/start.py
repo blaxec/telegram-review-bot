@@ -3,8 +3,7 @@
 import re
 import asyncio
 from aiogram import Router, F
-# --- ДОБАВЛЕНО: Импорт StateFilter ---
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import CommandStart, StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -12,12 +11,11 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import reply, inline
 from database import db_manager
-from config import Durations
+from config import Durations, TESTER_IDS
 from references import reference_manager
 
 router = Router()
 
-# --- ДОБАВЛЕНО: Список состояний, в которых /start не должен работать ---
 ACTIVE_TASK_STATES = [
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
     UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT,
@@ -39,7 +37,17 @@ async def schedule_message_deletion(message: Message, delay: int):
             pass
     asyncio.create_task(delete_after_delay())
 
-# --- ДОБАВЛЕНО: Новый обработчик, который "ловит" /start во время задания ---
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Добавлена диагностическая команда /getstate ---
+@router.message(Command("getstate"), F.from_user.id.in_(TESTER_IDS))
+async def get_current_state(message: Message, state: FSMContext):
+    """
+    [ТЕСТОВАЯ КОМАНДА] Отправляет в чат текущее состояние FSM.
+    """
+    current_state = await state.get_state()
+    await message.answer(f"Текущее состояние FSM: `{current_state}`")
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
+
 @router.message(CommandStart(), StateFilter(*ACTIVE_TASK_STATES))
 async def start_while_busy_handler(message: Message):
     """Обрабатывает команду /start, когда пользователь выполняет задание."""
@@ -52,11 +60,9 @@ async def start_while_busy_handler(message: Message):
         "❗️ Вы сейчас выполняете задание. Пожалуйста, завершите его.\n\n"
         "Если вы хотите отменить задание, воспользуйтесь кнопкой «❌ Отмена»."
     )
-    # Удаляем это сообщение через 10 секунд
     asyncio.create_task(schedule_message_deletion(response_msg, 10))
 
 
-# --- ИЗМЕНЕНИЕ: Добавлен фильтр, чтобы этот обработчик НЕ срабатывал во время задания ---
 @router.message(CommandStart(), ~StateFilter(*ACTIVE_TASK_STATES))
 async def start_handler(message: Message, state: FSMContext):
     """Обработчик команды /start."""
@@ -64,10 +70,6 @@ async def start_handler(message: Message, state: FSMContext):
         await message.delete()
     except TelegramBadRequest:
         pass
-    
-    # --- ИЗМЕНЕНИЕ: Эта проверка больше не нужна здесь, так как этот хендлер
-    # не будет вызван для активных состояний. Убираем ее для чистоты кода. ---
-    # await reference_manager.release_reference_from_user(message.from_user.id, 'available')
     
     await state.clear()
     
@@ -140,7 +142,6 @@ async def cancel_handler_reply(message: Message, state: FSMContext):
         await message.answer("Нечего отменять. Вы уже в главном меню.")
         return
 
-    # Здесь логика освобождения ссылки остается, т.к. это штатный способ отмены
     await reference_manager.release_reference_from_user(message.from_user.id, 'available')
 
     await state.clear()
@@ -169,7 +170,6 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
     if current_state is None:
         return
 
-    # И здесь логика освобождения ссылки остается
     await reference_manager.release_reference_from_user(callback.from_user.id, 'available')
 
     await state.clear()
