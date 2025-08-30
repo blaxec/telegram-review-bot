@@ -159,7 +159,6 @@ def get_google_ask_profile_screenshot_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- НОВАЯ КЛАВИАТУРА ---
 def get_google_back_from_instructions_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='google_back_to_profile_screenshot')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -171,7 +170,6 @@ def get_google_last_reviews_check_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- НОВАЯ КЛАВИАТУРА ---
 def get_google_back_from_last_reviews_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='google_back_to_last_reviews')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

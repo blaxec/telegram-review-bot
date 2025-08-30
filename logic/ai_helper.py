@@ -57,16 +57,19 @@ async def generate_review_text(
             max_tokens=200,
         )
 
-        # --- НОВАЯ УЛУЧШЕННАЯ ПРОВЕРКА ОТВЕТА ---
+        # --- ФИНАЛЬНАЯ, САМАЯ НАДЕЖНАЯ ПРОВЕРКА ОТВЕТА ---
         if (
-            chat_completion.choices
+            chat_completion
+            and chat_completion.choices
+            and isinstance(chat_completion.choices, list)
+            and len(chat_completion.choices) > 0
             and chat_completion.choices[0].message
             and chat_completion.choices[0].message.content
         ):
             generated_text = chat_completion.choices[0].message.content
             return generated_text.strip()
         else:
-            # Это происходит, если сработал фильтр безопасности Groq
+            # Это происходит, если сработал фильтр безопасности Groq или произошел другой сбой
             print(f"Groq API вернул успешный ответ, но без контента. Вероятная причина - фильтр безопасности. Ответ: {chat_completion}")
             return "Ошибка: AI-модель вернула пустой ответ. Вероятно, сработал фильтр безопасности. Пожалуйста, попробуйте перефразировать ваш сценарий."
         # --- КОНЕЦ ПРОВЕРКИ ---

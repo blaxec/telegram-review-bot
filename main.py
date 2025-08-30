@@ -50,23 +50,21 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="skip", description="⚡️ [ТЕСТ] Пропустить таймер")
     ]
     
-    # Устанавливаем команды для обычных пользователей
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     logger.info("Default user commands have been set for all users.")
 
-    # Устанавливаем команды для админов
     for admin_id in ADMIN_IDS:
         try:
-            # Если админ также является тестером, даем ему полный набор команд
+            commands_to_set = admin_commands
             if admin_id in TESTER_IDS:
-                await bot.set_my_commands(admin_commands + [tester_commands[-1]], scope=BotCommandScopeChat(chat_id=admin_id))
-            else:
-                await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+                # Добавляем команду skip, если админ также является тестером, избегая дубликатов
+                commands_to_set = admin_commands + [cmd for cmd in tester_commands if cmd not in admin_commands]
+            
+            await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
             logger.info(f"Admin commands set for admin ID: {admin_id}")
         except Exception as e:
             logger.error(f"Failed to set commands for admin {admin_id}: {e}")
             
-    # Устанавливаем команды для тестеров, которые не являются админами
     for tester_id in TESTER_IDS:
         if tester_id not in ADMIN_IDS:
             try:
@@ -110,22 +108,27 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
-    # --- ИЗМЕНЕННЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
-    # 1. Сначала роутеры с явными командами (Command)
+    # --- ФИНАЛЬНЫЙ, ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
+    # 1. Сначала регистрируем роутеры, которые ловят КОМАНДЫ.
+    # Это гарантирует, что /skip, /start и другие команды будут пойманы до того,
+    # как сработают обработчики сообщений в состояниях.
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
     
-    # 2. Затем роутеры, которые могут содержать команды, но в основном обрабатывают состояния и колбэки
-    dp.include_router(earning.router) # Здесь лежит /skip
+    # 2. Роутер earning идет следующим, так как в нем есть команда /skip.
+    dp.include_router(earning.router)
+    
+    # 3. Затем все остальные роутеры, которые в основном работают с состояниями (FSM) и колбэками.
+    # Порядок между ними уже не так критичен.
     dp.include_router(referral.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
     
-    # 3. Роутер для "прочих" сообщений всегда должен быть ПОСЛЕДНИМ
+    # 4. Роутер "other" для отлова неизвестных команд ВСЕГДА ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ.
     dp.include_router(other.router)
     
     dp.errors.register(handle_telegram_bad_request)
