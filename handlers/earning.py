@@ -24,6 +24,9 @@ from logic.user_notifications import (
     handle_task_timeout,
     send_confirmation_button
 )
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Импортируем наш новый фильтр ---
+from utils.tester_filter import IsTester
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -55,10 +58,8 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный блок обработки /skip ---
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный блок обработки /skip с новым фильтром ---
 
-# --- ИСПРАВЛЕНИЕ: Добавляем GOOGLE_REVIEW_LIKING_TASK_ACTIVE в список ---
-# Список состояний, в которых команда /skip ДОЛЖНА сработать
 SKIP_ALLOWED_STATES = {
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
     UserState.GOOGLE_REVIEW_TASK_ACTIVE,
@@ -68,7 +69,7 @@ SKIP_ALLOWED_STATES = {
 
 @router.message(
     Command("skip"),
-    F.from_user.id.in_(TESTER_IDS),
+    IsTester(),  # <-- ИСПОЛЬЗУЕМ НАШ НОВЫЙ НАДЁЖНЫЙ ФИЛЬТР
     F.state.in_(SKIP_ALLOWED_STATES)
 )
 async def skip_timer_command_successful(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -80,7 +81,6 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
     current_state = await state.get_state()
     user_data = await state.get_data()
     
-    # Отменяем существующие запланированные задачи
     confirm_job_id = user_data.get("confirm_job_id")
     timeout_job_id = user_data.get("timeout_job_id")
     if confirm_job_id:
@@ -90,9 +90,7 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
         try: scheduler.remove_job(timeout_job_id)
         except Exception: pass
 
-    # Определяем, какую кнопку отправить, и отправляем ее немедленно
     response_msg = None
-    # --- ИСПРАВЛЕНИЕ: Добавляем обработку для состояния "лайков" Google ---
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id)
         response_msg = await message.answer("✅ Таймер лайков пропущен.")
@@ -105,23 +103,23 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
             await send_confirmation_button(bot, user_id, platform)
             response_msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
     
-    # Удаляем и команду, и ответное сообщение через 5 секунд для чистоты чата
     asyncio.create_task(schedule_message_deletion(message, 5))
     if response_msg:
         asyncio.create_task(schedule_message_deletion(response_msg, 5))
     
     logger.info(f"Tester {user_id} successfully skipped timer for state {current_state}.")
 
-@router.message(Command("skip"), F.from_user.id.in_(TESTER_IDS))
+@router.message(
+    Command("skip"),
+    IsTester()  # <-- ИСПОЛЬЗУЕМ НАШ НОВЫЙ НАДЁЖНЫЙ ФИЛЬТР
+)
 async def skip_timer_command_failed(message: Message):
     """
     ЗАПАСНОЙ обработчик /skip. Срабатывает, если тестер ввел команду в НЕПОДХОДЯЩЕМ состоянии.
     Сообщает об ошибке и удаляет команду.
     """
-    # Этот обработчик сработает только если предыдущий (с фильтром по state) не сработал.
     logger.warning(f"Tester {message.from_user.id} tried to use /skip in a wrong state.")
     
-    # Удаляем команду, чтобы не висела
     try:
         await message.delete()
     except TelegramBadRequest:
