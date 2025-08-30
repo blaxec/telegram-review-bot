@@ -57,6 +57,7 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
 
 # --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный блок обработки /skip ---
 
+# --- ИСПРАВЛЕНИЕ: Добавляем GOOGLE_REVIEW_LIKING_TASK_ACTIVE в список ---
 # Список состояний, в которых команда /skip ДОЛЖНА сработать
 SKIP_ALLOWED_STATES = {
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
@@ -91,6 +92,7 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
 
     # Определяем, какую кнопку отправить, и отправляем ее немедленно
     response_msg = None
+    # --- ИСПРАВЛЕНИЕ: Добавляем обработку для состояния "лайков" Google ---
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id)
         response_msg = await message.answer("✅ Таймер лайков пропущен.")
