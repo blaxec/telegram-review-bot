@@ -55,19 +55,26 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный обработчик /skip ---
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный блок обработки /skip ---
+
+# Список состояний, в которых команда /skip ДОЛЖНА сработать
+SKIP_ALLOWED_STATES = {
+    UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.GOOGLE_REVIEW_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_TASK_ACTIVE
+}
+
 @router.message(
     Command("skip"),
     F.from_user.id.in_(TESTER_IDS),
-    F.state.in_({
-        UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
-        UserState.GOOGLE_REVIEW_TASK_ACTIVE,
-        UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
-        UserState.YANDEX_REVIEW_TASK_ACTIVE
-    })
+    F.state.in_(SKIP_ALLOWED_STATES)
 )
-async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    """Пропускает таймер для тестирования."""
+async def skip_timer_command_successful(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """
+    ОСНОВНОЙ обработчик /skip. Срабатывает, когда все условия верны.
+    Пропускает таймер и удаляет за собой сообщения.
+    """
     user_id = message.from_user.id
     current_state = await state.get_state()
     user_data = await state.get_data()
@@ -83,25 +90,47 @@ async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, sche
         except Exception: pass
 
     # Определяем, какую кнопку отправить, и отправляем ее немедленно
-    msg_to_delete = None
+    response_msg = None
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id)
-        msg_to_delete = await message.answer("✅ Таймер лайков пропущен.")
+        response_msg = await message.answer("✅ Таймер лайков пропущен.")
     elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
         await send_yandex_liking_confirmation_button(bot, user_id)
-        msg_to_delete = await message.answer("✅ Таймер прогрева пропущен.")
+        response_msg = await message.answer("✅ Таймер прогрева пропущен.")
     elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
         platform = user_data.get("platform_for_task")
         if platform:
             await send_confirmation_button(bot, user_id, platform)
-            msg_to_delete = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
+            response_msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
     
     # Удаляем и команду, и ответное сообщение через 5 секунд для чистоты чата
     asyncio.create_task(schedule_message_deletion(message, 5))
-    if msg_to_delete:
-        asyncio.create_task(schedule_message_deletion(msg_to_delete, 5))
+    if response_msg:
+        asyncio.create_task(schedule_message_deletion(response_msg, 5))
     
-    logger.info(f"Tester {user_id} skipped timer for state {current_state}.")
+    logger.info(f"Tester {user_id} successfully skipped timer for state {current_state}.")
+
+@router.message(Command("skip"), F.from_user.id.in_(TESTER_IDS))
+async def skip_timer_command_failed(message: Message):
+    """
+    ЗАПАСНОЙ обработчик /skip. Срабатывает, если тестер ввел команду в НЕПОДХОДЯЩЕМ состоянии.
+    Сообщает об ошибке и удаляет команду.
+    """
+    # Этот обработчик сработает только если предыдущий (с фильтром по state) не сработал.
+    logger.warning(f"Tester {message.from_user.id} tried to use /skip in a wrong state.")
+    
+    # Удаляем команду, чтобы не висела
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+        
+    response_msg = await message.answer(
+        "❌ Команда `/skip` работает только на этапах с активным таймером.",
+        parse_mode="Markdown"
+    )
+    asyncio.create_task(schedule_message_deletion(response_msg, 5))
+
 # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
