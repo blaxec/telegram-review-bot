@@ -22,7 +22,7 @@ from logic.user_notifications import (
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
     handle_task_timeout,
-    send_confirmation_button # ИМПОРТИРУЕМ ОБЩУЮ ФУНКЦИЮ
+    send_confirmation_button
 )
 
 router = Router()
@@ -55,12 +55,12 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
-# --- СЕКРЕТНАЯ КОМАНДА ДЛЯ ТЕСТЕРОВ ---
+# --- ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ДЛЯ ТЕСТЕРОВ ---
 @router.message(
     Command("skip"),
     F.from_user.id.in_(TESTER_IDS),
     F.state.in_({
-        UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
+        UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE, # <-- ЭТО СОСТОЯНИЕ БЫЛО ПРОПУЩЕНО
         UserState.GOOGLE_REVIEW_TASK_ACTIVE,
         UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
         UserState.YANDEX_REVIEW_TASK_ACTIVE
@@ -85,18 +85,21 @@ async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, sche
     # Определяем, какую кнопку отправить, и отправляем ее немедленно
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id)
-        await message.answer("✅ Таймер лайков пропущен.")
+        msg = await message.answer("✅ Таймер лайков пропущен.")
     elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
         await send_yandex_liking_confirmation_button(bot, user_id)
-        await message.answer("✅ Таймер прогрева пропущен.")
+        msg = await message.answer("✅ Таймер прогрева пропущен.")
     elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
         platform = user_data.get("platform_for_task")
         if platform:
             await send_confirmation_button(bot, user_id, platform)
-            await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
-
+            msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
+    
+    # Удаляем и команду, и ответное сообщение через 5 секунд
+    await schedule_message_deletion(message, 5)
+    await schedule_message_deletion(msg, 5)
+    
     logger.info(f"Tester {user_id} skipped timer for state {current_state}.")
-    await message.delete()
 
 
 # --- Основное меню Заработка ---
@@ -173,7 +176,6 @@ async def process_google_review_done(callback: CallbackQuery, state: FSMContext)
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-# --- ИЗМЕНЕНИЕ: Исправлена ошибка "message is not modified" ---
 @router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
     if callback.message:
@@ -191,7 +193,6 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
                 logger.warning(f"Error editing instructions message: {e}")
     await callback.answer()
 
-# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Назад" из инструкций ---
 @router.callback_query(F.data == 'google_back_to_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext):
     if callback.message:
@@ -231,7 +232,6 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
-# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Где найти последние отзывы" ---
 @router.callback_query(F.data == 'google_last_reviews_where', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def show_google_last_reviews_instructions(callback: CallbackQuery):
     if callback.message:
@@ -248,7 +248,6 @@ async def show_google_last_reviews_instructions(callback: CallbackQuery):
                 logger.warning(f"Error editing last reviews instructions: {e}")
     await callback.answer()
 
-# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Назад" из инструкций ---
 @router.callback_query(F.data == 'google_back_to_last_reviews', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext):
     if callback.message:
