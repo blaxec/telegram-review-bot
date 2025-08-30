@@ -16,18 +16,29 @@ from database import db_manager
 router = Router()
 logger = logging.getLogger(__name__)
 
-async def delete_previous_messages(message: Message, state: FSMContext, and_self: bool = True):
-    """Вспомогательная функция для удаления старых сообщений."""
+# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ---
+async def delete_previous_messages(message_or_callback: Message | CallbackQuery, state: FSMContext, and_self: bool = True):
+    """Вспомогательная функция для удаления старых сообщений. Работает и с Message, и с CallbackQuery."""
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
+    
+    # Определяем, с чем работаем: с сообщением или с нажатием кнопки
+    is_message = isinstance(message_or_callback, Message)
+    target_message = message_or_callback if is_message else message_or_callback.message
+    
+    if not target_message:
+        return
+
     if prompt_message_id:
         try:
-            await message.bot.delete_message(message.chat.id, prompt_message_id)
+            await target_message.bot.delete_message(target_message.chat.id, prompt_message_id)
         except TelegramBadRequest:
             pass
-    if and_self:
+
+    # Удаляем само сообщение, только если это было Message, а не CallbackQuery
+    if and_self and is_message:
         try:
-            await message.delete()
+            await target_message.delete()
         except TelegramBadRequest:
             pass
 
@@ -41,7 +52,8 @@ async def support_handler(message: Message, state: FSMContext):
     
     user = await db_manager.get_user(message.from_user.id)
     if user and user.support_cooldown_until and user.support_cooldown_until > datetime.datetime.utcnow():
-        await message.answer(f"Вы временно не можете отправлять запросы в поддержку. Ограничение до: {user.support_cooldown_until.strftime('%Y-%m-%d %H:%M')} UTC.")
+        remaining_time = user.support_cooldown_until - datetime.datetime.utcnow()
+        await message.answer(f"Вы временно не можете отправлять запросы в поддержку. Ограничение еще на: {str(remaining_time).split('.')[0]}")
         return
 
     await state.set_state(UserState.SUPPORT_AWAITING_QUESTION)
@@ -129,8 +141,12 @@ async def send_ticket_to_admins(bot: Bot, state: FSMContext, user_id: int, usern
 async def process_no_photo_choice(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Пользователь решил не прикреплять фото."""
     await delete_previous_messages(callback, state, and_self=False)
-    await callback.answer("Отправляем ваш тикет...")
-    await send_ticket_to_admins(bot, state, callback.from_user.id, callback.from_user.username)
+    try:
+        if callback.message:
+            await callback.message.edit_text("Отправляем ваш тикет...")
+    except TelegramBadRequest: pass
+    await callback.answer()
+    await send_ticket_to_admins(bot, state, callback.from_user.id, callback.from_user.username or "N/A")
 
 @router.callback_query(F.data == "support_add_photo:yes", UserState.SUPPORT_AWAITING_PHOTO_CHOICE)
 async def process_yes_photo_choice(callback: CallbackQuery, state: FSMContext):
@@ -150,7 +166,7 @@ async def process_support_photo(message: Message, state: FSMContext, bot: Bot):
     await delete_previous_messages(message, state)
     await state.update_data(support_photo_id=message.photo[-1].file_id)
     await message.answer("Фотография прикреплена. Отправляем ваш тикет...")
-    await send_ticket_to_admins(bot, state, message.from_user.id, message.from_user.username)
+    await send_ticket_to_admins(bot, state, message.from_user.id, message.from_user.username or "N/A")
 
 
 # --- Админские обработчики ---
