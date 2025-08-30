@@ -14,9 +14,17 @@ ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 0))
 ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 0))
 ADMIN_IDS = [ADMIN_ID_1, ADMIN_ID_2]
 
+# --- НОВАЯ НАСТРОЙКА: ID Тестировщиков для команды /skip ---
+TESTER_IDS_STR = os.getenv("TESTER_IDS", "")
+TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if tester_id.strip().isdigit()]
+
+
 # ID канала, куда будут отправляться заявки на вывод.
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 FINAL_CHECK_ADMIN = ADMIN_ID_2 # Админ для финальной проверки
+
+# URL AI-модели
+AI_MODEL_URL = os.getenv("AI_MODEL_URL", "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2")
 
 if WITHDRAWAL_CHANNEL_ID > 0:
     logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")

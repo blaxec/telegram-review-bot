@@ -7,7 +7,7 @@ from config import Rewards
 # --- /start и навигация ---
 
 def get_agreement_keyboard() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='✅ Согласен с прочитанным', callback_data='agree_agreement')]]
+    buttons = [[InlineKeyboardButton(text='✅ Я согласен и принимаю условия', callback_data='agree_agreement')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_back_to_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -158,12 +158,10 @@ def get_google_ask_profile_screenshot_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='❌ Отмена', callback_data='earning_menu')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-def get_invalid_input_keyboard(platform: str) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text='🔄 Повторить', callback_data=f'{platform}_repeat_photo')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_photo_upload')]
-    ]
+
+# --- НОВАЯ КЛАВИАТУРА ---
+def get_google_back_from_instructions_keyboard() -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='google_back_to_profile_screenshot')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_google_last_reviews_check_keyboard() -> InlineKeyboardMarkup:
@@ -171,6 +169,11 @@ def get_google_last_reviews_check_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='❓ Где найти последние отзывы', callback_data='google_last_reviews_where')],
         [InlineKeyboardButton(text='❌ Отмена', callback_data='earning_menu')]
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- НОВАЯ КЛАВИАТУРА ---
+def get_google_back_from_last_reviews_keyboard() -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='⬅️ Назад', callback_data='google_back_to_last_reviews')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_google_continue_writing_keyboard() -> InlineKeyboardMarkup:
@@ -218,14 +221,6 @@ def get_yandex_liking_confirmation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Gmail ---
-def get_gmail_init_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text='📧 Создать аккаунт', callback_data='gmail_request_data')],
-        [InlineKeyboardButton(text='❓ Как создать аккаунт?', callback_data='gmail_how_to_create')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_action')]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-    
 def get_gmail_cooldown_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='📱 У меня есть другое устройство', callback_data='gmail_another_phone')],
@@ -256,7 +251,6 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder.adjust(2, 1)
     return builder.as_markup()
 
-# --- ИЗМЕНЕНИЕ: Добавлена кнопка "Сгенерировать с ИИ" ---
 def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='✍️ Написать текст вручную', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')
@@ -264,7 +258,6 @@ def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -
     builder.adjust(1)
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА: Меню модерации для сгенерированного текста ---
 def get_ai_moderation_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='✅ Отправить пользователю', callback_data='ai_moderation:send')
@@ -274,7 +267,6 @@ def get_ai_moderation_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-# --- НОВАЯ КЛАВИАТУРА: Для обработки ошибок ИИ ---
 def get_ai_error_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='🔄 Сгенерировать заново', callback_data='ai_moderation:regenerate')
@@ -285,7 +277,6 @@ def get_ai_error_keyboard() -> InlineKeyboardMarkup:
 
 def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    # --- ИЗМЕНЕНИЕ: Улучшенная клавиатура ---
     builder.button(text="Google Карты", callback_data="admin_refs:select_platform:google_maps")
     builder.button(text="Яндекс (с текстом)", callback_data="admin_refs:select_platform:yandex_with_text")
     builder.button(text="Яндекс (без текста)", callback_data="admin_refs:select_platform:yandex_without_text")
@@ -361,11 +352,12 @@ def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Клавиатуры для поддержки ---
-def get_support_admin_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
-    buttons = [[
-        InlineKeyboardButton(text='✍️ Ответить на вопрос', callback_data=f'support_answer:{ticket_id}')
-    ]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text='✍️ Ответить на вопрос', callback_data=f'support_answer:{ticket_id}')
+    builder.button(text='⚠️ Выдать предупреждение', callback_data=f'support_warn:{ticket_id}:{user_id}')
+    builder.adjust(1)
+    return builder.as_markup()
 
 def get_unban_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для админа с запросом на разбан."""
@@ -397,7 +389,15 @@ def get_promo_conditional_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ КНОПКИ ОТМЕНЫ В GMAIL ---
 def get_cancel_to_earning_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_earning')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- НОВЫЕ КЛАВИАТУРЫ ДЛЯ ПОДДЕРЖКИ ---
+def get_support_photo_choice_keyboard() -> InlineKeyboardMarkup:
+    """Предлагает пользователю прикрепить фото к тикету."""
+    buttons = [
+        [InlineKeyboardButton(text="🖼️ Да, прикрепить фото", callback_data="support_add_photo:yes")],
+        [InlineKeyboardButton(text="✉️ Нет, отправить как есть", callback_data="support_add_photo:no")]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

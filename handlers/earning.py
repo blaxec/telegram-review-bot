@@ -4,6 +4,7 @@ import datetime
 import logging
 import asyncio
 from aiogram import Router, F, Bot, Dispatcher
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from aiogram.fsm.storage.base import StorageKey
@@ -15,12 +16,13 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
-    handle_task_timeout
+    handle_task_timeout,
+    send_confirmation_button # ИМПОРТИРУЕМ ОБЩУЮ ФУНКЦИЮ
 )
 
 router = Router()
@@ -53,6 +55,50 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
+# --- СЕКРЕТНАЯ КОМАНДА ДЛЯ ТЕСТЕРОВ ---
+@router.message(
+    Command("skip"),
+    F.from_user.id.in_(TESTER_IDS),
+    F.state.in_({
+        UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
+        UserState.GOOGLE_REVIEW_TASK_ACTIVE,
+        UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
+        UserState.YANDEX_REVIEW_TASK_ACTIVE
+    })
+)
+async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """Пропускает таймер для тестирования."""
+    user_id = message.from_user.id
+    current_state = await state.get_state()
+    user_data = await state.get_data()
+    
+    # Отменяем существующие запланированные задачи
+    confirm_job_id = user_data.get("confirm_job_id")
+    timeout_job_id = user_data.get("timeout_job_id")
+    if confirm_job_id:
+        try: scheduler.remove_job(confirm_job_id)
+        except Exception: pass
+    if timeout_job_id:
+        try: scheduler.remove_job(timeout_job_id)
+        except Exception: pass
+
+    # Определяем, какую кнопку отправить, и отправляем ее немедленно
+    if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
+        await send_liking_confirmation_button(bot, user_id)
+        await message.answer("✅ Таймер лайков пропущен.")
+    elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
+        await send_yandex_liking_confirmation_button(bot, user_id)
+        await message.answer("✅ Таймер прогрева пропущен.")
+    elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
+        platform = user_data.get("platform_for_task")
+        if platform:
+            await send_confirmation_button(bot, user_id, platform)
+            await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
+
+    logger.info(f"Tester {user_id} skipped timer for state {current_state}.")
+    await message.delete()
+
+
 # --- Основное меню Заработка ---
 
 @router.message(F.text == '💰 Заработок', UserState.MAIN_MENU)
@@ -65,7 +111,12 @@ async def earning_handler_message(message: Message, state: FSMContext):
 
 async def earning_menu_logic(callback: CallbackQuery):
     if callback.message:
-        await callback.message.edit_text("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
+        try:
+            await callback.message.edit_text("💰 Способы заработка:", reply_markup=inline.get_earning_keyboard())
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                logger.warning(f"Error editing earning menu message: {e}")
+            await callback.answer()
 
 @router.callback_query(F.data == 'earning_menu')
 async def earning_handler_callback(callback: CallbackQuery, state: FSMContext):
@@ -122,18 +173,37 @@ async def process_google_review_done(callback: CallbackQuery, state: FSMContext)
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-
+# --- ИЗМЕНЕНИЕ: Исправлена ошибка "message is not modified" ---
 @router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
     if callback.message:
+        try:
+            await callback.message.edit_text(
+                "🤔 Как сделать скриншот вашего профиля Google.Карты:\n\n"
+                "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
+                "2. Вас переведет на профиль Google Карты.\n"
+                "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
+                reply_markup=inline.get_google_back_from_instructions_keyboard(), # Новая клавиатура
+                disable_web_page_preview=True
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                logger.warning(f"Error editing instructions message: {e}")
+    await callback.answer()
+
+# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Назад" из инструкций ---
+@router.callback_query(F.data == 'google_back_to_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
+async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext):
+    if callback.message:
         await callback.message.edit_text(
-            "🤔 Как сделать скриншот вашего профиля Google.Карты:\n\n"
-            "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
-            "2. Вас переведет на профиль Google Карты.\n"
-            "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
-            reply_markup=inline.get_google_ask_profile_screenshot_keyboard(),
-            disable_web_page_preview=True
+            "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
+            "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
+            "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
+            "Отправьте фото следующим сообщением.",
+            reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
+    await callback.answer()
+
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
@@ -148,7 +218,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     
     await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = f"[Админ: @SHAD0W_F4]\nПроверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
+    caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
@@ -161,7 +231,34 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
-# --- ИЗМЕНЕНИЕ: Этот обработчик теперь тоже использует delete_user_and_prompt_messages ---
+# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Где найти последние отзывы" ---
+@router.callback_query(F.data == 'google_last_reviews_where', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
+async def show_google_last_reviews_instructions(callback: CallbackQuery):
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                "🤔 Как найти последние отзывы:\n\n"
+                "1. Откройте ваш профиль в Google Картах.\n"
+                "2. Перейдите во вкладку 'Отзывы'.\n"
+                "3. Сделайте скриншот, на котором видны даты ваших последних отзывов.",
+                reply_markup=inline.get_google_back_from_last_reviews_keyboard() # Новая клавиатура
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                logger.warning(f"Error editing last reviews instructions: {e}")
+    await callback.answer()
+
+# --- ИЗМЕНЕНИЕ: Новый обработчик для кнопки "Назад" из инструкций ---
+@router.callback_query(F.data == 'google_back_to_last_reviews', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
+async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext):
+    if callback.message:
+        await callback.message.edit_text(
+            "Профиль прошел проверку. Пришлите скриншот последних отзывов.",
+            reply_markup=inline.get_google_last_reviews_check_keyboard()
+        )
+    await callback.answer()
+
+
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
     await delete_user_and_prompt_messages(message, state)
@@ -172,7 +269,7 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
 
     await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = f"[Админ: @SHAD0W_F4]\nПроверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
+    caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
@@ -208,9 +305,9 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
     await state.update_data(username=callback.from_user.username, active_link_id=link.id)
     
     now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
-    await state.update_data(timeout_job_id=timeout_job.id)
+    await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -224,8 +321,10 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
 
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
     if callback.message:
-        response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
-        await schedule_message_deletion(response_msg, 25)
+        try:
+            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            await schedule_message_deletion(response_msg, 25)
+        except TelegramBadRequest: pass
             
     user_info = await bot.get_chat(callback.from_user.id)
     link_id = user_data.get('active_link_id')
@@ -324,7 +423,6 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
         
-        # --- ИЗМЕНЕНИЕ: Обновляем запись в БД с ID сообщения админа ---
         await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
 
         response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
@@ -413,8 +511,7 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
     
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = (f"[Админ: @SHAD0W_F4]\n"
-               f"Проверьте скриншот профиля Yandex. Убедитесь, что виден уровень знатока и дата последнего отзыва.\n"
+    caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что виден уровень знатока и дата последнего отзыва.\n"
                f"{user_info_text}")
     try:
         await bot.send_photo(
@@ -456,9 +553,9 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
         await callback.message.edit_text(task_text, disable_web_page_preview=True)
     
     now = datetime.datetime.now(datetime.timezone.utc)
-    scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+    confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
-    await state.update_data(timeout_job_id=timeout_job.id)
+    await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -597,7 +694,6 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
         )
         
-        # --- ИЗМЕНЕНИЕ: Обновляем запись в БД с ID сообщения админа ---
         await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
 
     except Exception as e:

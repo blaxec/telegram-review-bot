@@ -156,12 +156,8 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
-        last_message_data = (await user_state.get_data()).get('last_bot_message')
-        if last_message_data:
-            await bot.edit_message_text(task_message, user_id, last_message_data, parse_mode='HTML', disable_web_page_preview=True)
-        else:
-            sent_msg = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
-            await user_state.update_data(last_bot_message=sent_msg.message_id)
+        # --- ИЗМЕНЕНИЕ: Всегда отправляем новое сообщение, а не редактируем. Это надежнее. ---
+        await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
     except Exception as e:
         await reference_manager.release_reference_from_user(user_id, 'available')
         await user_state.clear()
@@ -170,9 +166,9 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     await user_state.set_state(task_state)
     await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
 
-    scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
+    confirm_job = scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform, 'основное задание'])
-    await user_state.update_data(timeout_job_id=timeout_job.id)
+    await user_state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
     
     return True, f"Текст успешно отправлен пользователю @{user_info.username} (ID: {user_id})."
 
@@ -237,12 +233,8 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
     }
     cooldown_hours = cooldown_hours_map.get(review.platform)
-    platform_for_cooldown = review.platform # e.g. "google" or "yandex_with_text"
+    platform_for_cooldown = review.platform
     await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
-    
-    # --- ИЗМЕНЕНИЕ: Убрано запланированное уведомление об окончании кулдауна ---
-    # cooldown_end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=cooldown_hours)
-    # scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, review.user_id, platform_for_cooldown], id=f"cooldown_notify_{review.user_id}_{platform_for_cooldown}")
     
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
@@ -265,19 +257,14 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     if not rejected_review:
         return False, "Не удалось отклонить отзыв (возможно, уже обработан)."
 
-    # Используем те же кулдауны, что и при одобрении
     cooldown_hours_map = {
         'google': Durations.COOLDOWN_GOOGLE_REVIEW_HOURS,
         'yandex_with_text': Durations.COOLDOWN_YANDEX_WITH_TEXT_HOURS,
         'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
     }
-    cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24) # 24 часа по умолчанию
+    cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24)
     platform_for_cooldown = rejected_review.platform
     await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
-    
-    # --- ИЗМЕНЕНИЕ: Убрано запланированное уведомление об окончании кулдауна ---
-    # cooldown_end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=cooldown_hours)
-    # scheduler.add_job(notify_cooldown_expired, 'date', run_date=cooldown_end_time, args=[bot, rejected_review.user_id, platform_for_cooldown], id=f"cooldown_notify_{rejected_review.user_id}_{platform_for_cooldown}")
     
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
@@ -299,17 +286,14 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
     user_id = approved_review.user_id
     user = await db_manager.get_user(user_id)
     
-    # --- НОВАЯ ЛОГИКА РЕФЕРАЛЬНЫХ НАЧИСЛЕНИЙ ---
     if user and user.referrer_id:
         referrer = await db_manager.get_user(user.referrer_id)
         if referrer and referrer.referral_path:
             referral_reward = 0
             
-            # Путь 1: Google
             if referrer.referral_path == 'google' and approved_review.platform == 'google':
                 referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
             
-            # Путь 3: Yandex
             elif referrer.referral_path == 'yandex':
                 if referrer.referral_subpath == 'with_text' and approved_review.platform == 'yandex_with_text':
                     referral_reward = Rewards.REFERRAL_YANDEX_WITH_TEXT
@@ -326,7 +310,6 @@ async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
                     )
                 except Exception as e:
                     logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
-    # -----------------------------------------------
 
     if approved_review.platform == 'google':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
