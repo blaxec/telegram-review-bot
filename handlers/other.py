@@ -1,7 +1,7 @@
 # file: handlers/other.py
 
 import asyncio
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from config import Durations
@@ -9,11 +9,14 @@ from config import Durations
 # Создаем новый роутер специально для "прочих" обработчиков
 router = Router()
 
-@router.message()
+# --- ИЗМЕНЕНИЕ: Добавлен фильтр F.text & ~F.text.startswith('/') ---
+# Теперь этот обработчик будет ловить только текстовые сообщения,
+# которые НЕ начинаются со слеша '/', игнорируя любые команды.
+@router.message(F.text & ~F.text.startswith('/'))
 async def handle_unknown_messages(message: Message):
     """
-    Этот обработчик ловит ЛЮБЫЕ сообщения, которые не были пойманы
-    другими, более специфичными обработчиками в других роутерах.
+    Этот обработчик ловит текстовые сообщения, которые не являются командами
+    и не были пойманы другими, более специфичными обработчиками.
     """
     try:
         await message.delete()

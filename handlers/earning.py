@@ -55,6 +55,7 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный обработчик /skip ---
 @router.message(
     Command("skip"),
     F.from_user.id.in_(TESTER_IDS),
@@ -71,6 +72,7 @@ async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, sche
     current_state = await state.get_state()
     user_data = await state.get_data()
     
+    # Отменяем существующие запланированные задачи
     confirm_job_id = user_data.get("confirm_job_id")
     timeout_job_id = user_data.get("timeout_job_id")
     if confirm_job_id:
@@ -80,23 +82,30 @@ async def skip_timer_command(message: Message, state: FSMContext, bot: Bot, sche
         try: scheduler.remove_job(timeout_job_id)
         except Exception: pass
 
+    # Определяем, какую кнопку отправить, и отправляем ее немедленно
+    msg_to_delete = None
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id)
-        msg = await message.answer("✅ Таймер лайков пропущен.")
+        msg_to_delete = await message.answer("✅ Таймер лайков пропущен.")
     elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
         await send_yandex_liking_confirmation_button(bot, user_id)
-        msg = await message.answer("✅ Таймер прогрева пропущен.")
+        msg_to_delete = await message.answer("✅ Таймер прогрева пропущен.")
     elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
         platform = user_data.get("platform_for_task")
         if platform:
             await send_confirmation_button(bot, user_id, platform)
-            msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
+            msg_to_delete = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
     
-    await schedule_message_deletion(message, 5)
-    await schedule_message_deletion(msg, 5)
+    # Удаляем и команду, и ответное сообщение через 5 секунд для чистоты чата
+    asyncio.create_task(schedule_message_deletion(message, 5))
+    if msg_to_delete:
+        asyncio.create_task(schedule_message_deletion(msg_to_delete, 5))
     
     logger.info(f"Tester {user_id} skipped timer for state {current_state}.")
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
+
+# --- Основное меню Заработка ---
 
 @router.message(F.text == '💰 Заработок', UserState.MAIN_MENU)
 async def earning_handler_message(message: Message, state: FSMContext):
@@ -131,6 +140,8 @@ async def initiate_write_review(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == 'earning_menu_back')
 async def earning_menu_back(callback: CallbackQuery, state: FSMContext):
     await earning_menu_logic(callback)
+
+# --- Логика для Google Карт ---
 
 @router.callback_query(F.data == 'review_google_maps')
 async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
@@ -177,7 +188,7 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
                 "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
                 "2. Вас переведет на профиль Google Карты.\n"
                 "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
-                reply_markup=inline.get_google_back_from_instructions_keyboard(),
+                reply_markup=inline.get_google_back_from_instructions_keyboard(), # Новая клавиатура
                 disable_web_page_preview=True
             )
         except TelegramBadRequest as e:
@@ -233,7 +244,7 @@ async def show_google_last_reviews_instructions(callback: CallbackQuery):
                 "1. Откройте ваш профиль в Google Картах.\n"
                 "2. Перейдите во вкладку 'Отзывы'.\n"
                 "3. Сделайте скриншот, на котором видны даты ваших последних отзывов.",
-                reply_markup=inline.get_google_back_from_last_reviews_keyboard()
+                reply_markup=inline.get_google_back_from_last_reviews_keyboard() # Новая клавиатура
             )
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
@@ -426,6 +437,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
+# --- Логика для Yandex Карт ---
 
 @router.callback_query(F.data == 'review_yandex_maps')
 async def choose_yandex_review_type(callback: CallbackQuery, state: FSMContext):
