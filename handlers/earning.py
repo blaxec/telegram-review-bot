@@ -16,7 +16,7 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS, GOOGLE_API_KEYS
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -24,9 +24,10 @@ from logic.user_notifications import (
     handle_task_timeout,
     send_confirmation_button
 )
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Импортируем наш новый фильтр ---
+# --- ДОБАВЛЕНО: Импорт для OCR и логики отклонения ---
+from logic.ocr_helper import analyze_screenshot
+from logic.admin_logic import process_rejection_reason_logic
 from utils.tester_filter import IsTester
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def delete_user_and_prompt_messages(message: Message, state: FSMContext):
         pass
 
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Полностью переработанный блок обработки /skip с новым фильтром ---
+# --- Блок обработки /skip ---
 
 SKIP_ALLOWED_STATES = {
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
@@ -69,14 +70,10 @@ SKIP_ALLOWED_STATES = {
 
 @router.message(
     Command("skip"),
-    IsTester(),  # <-- ИСПОЛЬЗУЕМ НАШ НОВЫЙ НАДЁЖНЫЙ ФИЛЬТР
+    IsTester(),
     F.state.in_(SKIP_ALLOWED_STATES)
 )
 async def skip_timer_command_successful(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    """
-    ОСНОВНОЙ обработчик /skip. Срабатывает, когда все условия верны.
-    Пропускает таймер и удаляет за собой сообщения.
-    """
     user_id = message.from_user.id
     current_state = await state.get_state()
     user_data = await state.get_data()
@@ -111,13 +108,9 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
 
 @router.message(
     Command("skip"),
-    IsTester()  # <-- ИСПОЛЬЗУЕМ НАШ НОВЫЙ НАДЁЖНЫЙ ФИЛЬТР
+    IsTester()
 )
 async def skip_timer_command_failed(message: Message):
-    """
-    ЗАПАСНОЙ обработчик /skip. Срабатывает, если тестер ввел команду в НЕПОДХОДЯЩЕМ состоянии.
-    Сообщает об ошибке и удаляет команду.
-    """
     logger.warning(f"Tester {message.from_user.id} tried to use /skip in a wrong state.")
     
     try:
@@ -130,9 +123,6 @@ async def skip_timer_command_failed(message: Message):
         parse_mode="Markdown"
     )
     asyncio.create_task(schedule_message_deletion(response_msg, 5))
-
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
 
 # --- Основное меню Заработка ---
 
@@ -294,24 +284,56 @@ async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
-    
-    response_msg = await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
-    await schedule_message_deletion(response_msg, 25)
 
+    user_id = message.from_user.id
+    photo_file_id = message.photo[-1].file_id
+    
+    # --- НАЧАЛО ИНТЕГРАЦИИ OCR ---
+    if GOOGLE_API_KEYS:
+        status_msg = await message.answer("🤖 Анализирую дату последнего отзыва с помощью AI...")
+        ocr_result = await analyze_screenshot(bot, photo_file_id, 'review_date')
+        await status_msg.delete()
+
+        if ocr_result['status'] == 'success':
+            last_review_date = ocr_result['date']
+            days_since_last_review = (datetime.date.today() - last_review_date).days
+            
+            if days_since_last_review < 3:
+                reason = f"Ваш последний отзыв был написан менее 3 дней назад ({last_review_date.strftime('%d.%m.%Y')}). Пожалуйста, попробуйте позже."
+                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+                await process_rejection_reason_logic(bot, user_id, reason, "google_last_reviews", user_state)
+                await message.answer(f"❌ **Авто-отклонение:** {reason}")
+                return
+
+            else: # Проверка пройдена
+                await message.answer("✅ AI подтвердил, что ваш аккаунт подходит. Можно продолжать.")
+                await state.set_state(UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
+                await bot.send_message(user_id, "Отзывы прошли проверку. Можете продолжить.", reply_markup=inline.get_google_continue_writing_keyboard())
+                return
+
+    # --- Если AI не уверен или отключен, отправляем админу ---
+    await message.answer("Ваши последние отзывы отправлены на ручную проверку. Ожидайте...")
     await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
-    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
+    
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{user_id}</code>)"
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
+    
+    if GOOGLE_API_KEYS and ocr_result['status'] != 'success':
+        caption = f"⚠️ **AI не уверен.**\n{caption}\nПричина: {ocr_result.get('reason', 'Неизвестно')}"
+
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
-            photo=message.photo[-1].file_id,
+            photo=photo_file_id,
             caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_last_reviews")
+            reply_markup=inline.get_admin_verification_keyboard(user_id, "google_last_reviews")
         )
     except Exception as e:
-        print(f"Ошибка отправки фото последних отзывов админу: {e}")
+        logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
+    # --- КОНЕЦ ИНТЕГРАЦИИ OCR ---
+
 
 @router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
 async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -337,7 +359,7 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
     
     now = datetime.datetime.now(datetime.timezone.utc)
     confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков', scheduler])
     await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
@@ -502,7 +524,7 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
             f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward} звезд.\n\n"
             "💡 Для проверки нам понадобится скриншот вашего профиля.\n"
             "💡 Также выключите <i>\"Определение местоположения\"</i> для приложения в настройках телефона.\n"
-            "💡 Аккаунты принимаются не ниже <i>\"Знатока города\"</i>.",
+            "💡 Аккаунты принимаются не ниже <i>\"Знатока города\"</i> 3-го уровня.",
             reply_markup=inline.get_yandex_init_keyboard()
         )
 
@@ -533,28 +555,55 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
+    
+    user_id = message.from_user.id
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
+
+    # --- НАЧАЛО ИНТЕГРАЦИИ OCR ---
+    if GOOGLE_API_KEYS:
+        status_msg = await message.answer("🤖 Анализирую ваш уровень 'Знатока города' с помощью AI...")
+        ocr_result = await analyze_screenshot(bot, photo_file_id, 'yandex_level')
+        await status_msg.delete()
+
+        if ocr_result['status'] == 'success':
+            level = ocr_result['level']
+            if level < 3:
+                reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
+                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+                await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
+                await message.answer(f"❌ **Авто-отклонение:** {reason}")
+                return
+            else: # Проверка пройдена
+                await message.answer(f"✅ AI подтвердил ваш уровень ({level}). Можно продолжать.")
+                await state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
+                await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
+                return
     
-    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
-    await schedule_message_deletion(response_msg, 25)
-    
+    # --- Если AI не уверен или отключен, отправляем админу ---
+    await message.answer("Ваш скриншот отправлен на ручную проверку. Ожидайте...")
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
     
-    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что виден уровень знатока и дата последнего отзыва.\n"
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{user_id}</code>)"
+    caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что уровень знатока не ниже 3 и видна дата последнего отзыва.\n"
                f"{user_info_text}")
+    
+    if GOOGLE_API_KEYS and ocr_result['status'] != 'success':
+        caption = f"⚠️ **AI не уверен.**\n{caption}\nПричина: {ocr_result.get('reason', 'Неизвестно')}"
+    
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
             photo=photo_file_id,
             caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "yandex_profile_screenshot")
+            reply_markup=inline.get_admin_verification_keyboard(user_id, "yandex_profile_screenshot")
         )
     except Exception as e:
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
+    # --- КОНЕЦ ИНТЕГРАЦИИ OCR ---
+
 
 @router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
 async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -585,7 +634,7 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     
     now = datetime.datetime.now(datetime.timezone.utc)
     confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева', scheduler])
     await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)

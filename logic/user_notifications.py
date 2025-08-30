@@ -6,6 +6,8 @@ from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 
 from keyboards import inline, reply
 from database import db_manager
@@ -13,6 +15,28 @@ from references import reference_manager
 from config import FINAL_CHECK_ADMIN
 
 logger = logging.getLogger(__name__)
+
+# --- НОВАЯ ФУНКЦИЯ ---
+async def send_cooldown_expired_notification(bot: Bot, user_id: int, platform: str):
+    """Отправляет пользователю уведомление об истечении кулдауна."""
+    platform_names = {
+        'google': 'Google Карты',
+        'yandex_with_text': 'Яндекс Карты (с текстом)',
+        'yandex_without_text': 'Яндекс Карты (без текста)',
+        'gmail': 'создание Gmail аккаунтов'
+    }
+    platform_name = platform_names.get(platform, platform)
+    
+    try:
+        await bot.send_message(
+            user_id,
+            f"⏰ Ваш кулдаун для задания '{platform_name}' закончился! Вы снова можете выполнять эту задачу."
+        )
+        logger.info(f"Sent cooldown expiration notification to user {user_id} for platform {platform}.")
+    except (TelegramNetworkError, TelegramBadRequest):
+        logger.warning(f"Could not send cooldown notification to user {user_id} (bot might be blocked).")
+    except Exception as e:
+        logger.error(f"Unknown error sending cooldown notification to {user_id}: {e}")
 
 
 def format_timedelta(td: datetime.timedelta) -> str:
@@ -61,7 +85,7 @@ async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки подтверждения пользователю {user_id}: {e}")
 
-async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, platform: str, message_to_admins: str):
+async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, platform: str, message_to_admins: str, scheduler: AsyncIOScheduler):
     """Обрабатывает истечение времени на любом из этапов задания."""
     state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
@@ -74,7 +98,18 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     
     user_data = await state.get_data()
     await reference_manager.release_reference_from_user(user_id, final_status='available')
-    await db_manager.set_platform_cooldown(user_id, platform, 72)
+    
+    # Устанавливаем кулдаун и сразу планируем уведомление о его окончании
+    cooldown_hours = 72
+    cooldown_end_time = await db_manager.set_platform_cooldown(user_id, platform, cooldown_hours)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, user_id, platform]
+        )
+
     await state.clear()
     
     timeout_message = "Время, выделенное на выполнение работы, истекло. Следующая возможность написать отзыв будет через три дня (72:00:00)."

@@ -15,7 +15,7 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
-from logic.user_notifications import send_confirmation_button, handle_task_timeout
+from logic.user_notifications import send_confirmation_button, handle_task_timeout, send_cooldown_expired_notification
 from config import Rewards, Durations, Limits
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
 
     confirm_job = scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform, 'основное задание'])
+    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform, 'основное задание', scheduler])
     await user_state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
     
     return True, f"Текст успешно отправлен пользователю @{user_info.username} (ID: {user_id})."
@@ -234,7 +234,15 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     }
     cooldown_hours = cooldown_hours_map.get(review.platform)
     platform_for_cooldown = review.platform
-    await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
+    
+    cooldown_end_time = await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, review.user_id, platform_for_cooldown]
+        )
     
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
@@ -247,7 +255,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     hold_hours = hold_duration_minutes / 60
     return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.0f} ч."
 
-async def reject_initial_review_logic(review_id: int, bot: Bot, reason: str = None) -> tuple[bool, str]:
+async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler, reason: str = None) -> tuple[bool, str]:
     """Логика для отклонения начального отзыва."""
     review = await db_manager.get_review_by_id(review_id)
     if not review:
@@ -264,7 +272,15 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, reason: str = No
     }
     cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24)
     platform_for_cooldown = rejected_review.platform
-    await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
+
+    cooldown_end_time = await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, rejected_review.user_id, platform_for_cooldown]
+        )
     
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     

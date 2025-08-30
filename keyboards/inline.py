@@ -349,6 +349,16 @@ def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_reward_top_confirmation_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для подтверждения награждения топа."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="✅ Да, наградить", callback_data="confirm_reward_top"),
+            InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_reward_top")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 # --- Клавиатуры для поддержки ---
 def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

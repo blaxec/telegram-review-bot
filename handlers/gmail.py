@@ -14,7 +14,7 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from config import FINAL_CHECK_ADMIN, Rewards, Durations
-from logic.user_notifications import format_timedelta
+from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
 
 router = Router()
@@ -339,7 +339,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
 
 
 @router.callback_query(F.data.startswith('admin_gmail_confirm_account:'))
-async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
+async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     try:
         await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды и установлен кулдаун.", show_alert=True)
     except TelegramBadRequest:
@@ -365,7 +365,15 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
                 logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
 
     await db_manager.update_balance(user_id, reward_amount)
-    await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+    
+    cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, user_id, "gmail"]
+        )
     
     await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
@@ -383,11 +391,18 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
-async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
 
-    # Сразу устанавливаем кулдаун при отклонении
-    await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+    # Сразу устанавливаем кулдаун при отклонении и планируем уведомление
+    cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, user_id, "gmail"]
+        )
     
     try:
         await callback.answer("Устанавливаю кулдаун пользователю... Введите причину.", show_alert=True)

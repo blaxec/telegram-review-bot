@@ -156,13 +156,17 @@ async def check_platform_cooldown(user_id: int, platform: str) -> Union[datetime
         return cooldown_end_time - datetime.datetime.utcnow()
     return None
 
-async def set_platform_cooldown(user_id: int, platform: str, hours: int):
+async def set_platform_cooldown(user_id: int, platform: str, hours: float) -> Union[datetime.datetime, None]:
+    """Устанавливает кулдаун и возвращает время его окончания."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
             if user:
                 cooldown_field = f"{platform}_cooldown_until"
-                setattr(user, cooldown_field, datetime.datetime.utcnow() + datetime.timedelta(hours=hours))
+                end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=hours)
+                setattr(user, cooldown_field, end_time)
+                return end_time
+            return None
 
 async def add_user_warning(user_id: int, platform: str, hours_block: int = Durations.COOLDOWN_WARNING_BLOCK_HOURS) -> int:
     current_warnings = 0
@@ -388,10 +392,12 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             logger.info(f"All cooldowns and warnings have been reset for user {user_id}.")
             return True
 
-async def get_top_10_users() -> List[Tuple[str, float, int]]:
+async def get_top_10_users() -> List[Tuple[int, str, float, int]]:
+    """Возвращает ID, имя, баланс и кол-во отзывов для топ-10 пользователей."""
     async with async_session() as session:
         query = (
             select(
+                User.id,
                 case(
                     (User.is_anonymous_in_stats, "Анонимный пользователь"),
                     else_=User.username

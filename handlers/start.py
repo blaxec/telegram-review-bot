@@ -2,19 +2,32 @@
 
 import re
 import asyncio
-from aiogram import Router, F
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Добавлен импорт logging ---
+import logging
+from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart, StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState
 from keyboards import reply, inline
 from database import db_manager
 from config import Durations, TESTER_IDS
 from references import reference_manager
+from utils.tester_filter import IsTester
+from logic.user_notifications import (
+    send_liking_confirmation_button,
+    send_yandex_liking_confirmation_button,
+    send_confirmation_button
+)
+
 
 router = Router()
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Инициализация logger ---
+logger = logging.getLogger(__name__)
+
 
 ACTIVE_TASK_STATES = [
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
@@ -37,15 +50,92 @@ async def schedule_message_deletion(message: Message, delay: int):
             pass
     asyncio.create_task(delete_after_delay())
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Добавлена диагностическая команда /getstate ---
-@router.message(Command("getstate"), F.from_user.id.in_(TESTER_IDS))
+
+@router.message(Command("getstate"), IsTester())
 async def get_current_state(message: Message, state: FSMContext):
     """
-    [ТЕСТОВАЯ КОМАНДА] Отправляет в чат текущее состояние FSM.
+    [ТЕСТОВАЯ КОМАНДА] Отправляет в чат текущее состояние FSM и статус тестера.
     """
+    user_id = message.from_user.id
+    is_tester = user_id in TESTER_IDS
     current_state = await state.get_state()
-    await message.answer(f"Текущее состояние FSM: `{current_state}`")
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    
+    diagnostics_text = (
+        "<b>--- Диагностика Бота ---</b>\n\n"
+        f"<b>Ваш ID:</b> <code>{user_id}</code>\n"
+        f"<b>Считаетесь ли вы тестером:</b> {'✅ Да' if is_tester else '❌ Нет'}\n"
+        f"<b>Текущий список TESTER_IDS в боте:</b> <code>{TESTER_IDS}</code>\n"
+        f"<b>Текущее состояние FSM:</b> <code>{current_state}</code>"
+    )
+    await message.answer(diagnostics_text)
+
+SKIP_ALLOWED_STATES = {
+    UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.GOOGLE_REVIEW_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_TASK_ACTIVE
+}
+
+@router.message(
+    Command("skip"),
+    IsTester(),
+    StateFilter(*SKIP_ALLOWED_STATES)
+)
+async def skip_timer_command_successful(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """
+    ОСНОВНОЙ обработчик /skip. Срабатывает, когда все условия верны.
+    Пропускает таймер и удаляет за собой сообщения.
+    """
+    user_id = message.from_user.id
+    current_state = await state.get_state()
+    user_data = await state.get_data()
+    
+    confirm_job_id = user_data.get("confirm_job_id")
+    timeout_job_id = user_data.get("timeout_job_id")
+    if confirm_job_id:
+        try: scheduler.remove_job(confirm_job_id)
+        except Exception: pass
+    if timeout_job_id:
+        try: scheduler.remove_job(timeout_job_id)
+        except Exception: pass
+
+    response_msg = None
+    if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
+        await send_liking_confirmation_button(bot, user_id)
+        response_msg = await message.answer("✅ Таймер лайков пропущен.")
+    elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
+        await send_yandex_liking_confirmation_button(bot, user_id)
+        response_msg = await message.answer("✅ Таймер прогрева пропущен.")
+    elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
+        platform = user_data.get("platform_for_task")
+        if platform:
+            await send_confirmation_button(bot, user_id, platform)
+            response_msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
+    
+    asyncio.create_task(schedule_message_deletion(message, 5))
+    if response_msg:
+        asyncio.create_task(schedule_message_deletion(response_msg, 5))
+    
+    logger.info(f"Tester {user_id} successfully skipped timer for state {current_state}.")
+
+@router.message(Command("skip"), IsTester())
+async def skip_timer_command_failed(message: Message):
+    """
+    ЗАПАСНОЙ обработчик /skip. Срабатывает, если тестер ввел команду в НЕПОДХОДЯЩЕМ состоянии.
+    Сообщает об ошибке и удаляет команду.
+    """
+    logger.warning(f"Tester {message.from_user.id} tried to use /skip in a wrong state.")
+    
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+        
+    response_msg = await message.answer(
+        "❌ Команда `/skip` работает только на этапах с активным таймером.",
+        parse_mode="Markdown"
+    )
+    asyncio.create_task(schedule_message_deletion(response_msg, 5))
 
 
 @router.message(CommandStart(), StateFilter(*ACTIVE_TASK_STATES))

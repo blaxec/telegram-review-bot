@@ -43,7 +43,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="fine", description="💸 Выписать штраф"),
         BotCommand(command="ban", description="🚫 Забанить"),
         BotCommand(command="unban", description="✅ Разбанить"),
-        BotCommand(command="create_promo", description="✨ Создать промокод")
+        BotCommand(command="create_promo", description="✨ Создать промокод"),
+        BotCommand(command="reward_top", description="🏆 Наградить топ пользователей")
     ]
 
     tester_commands = user_commands + [

@@ -605,7 +605,7 @@ async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Ожидание причины...")
 
 @router.message(AdminState.PROVIDE_FINAL_REJECTION_REASON, F.from_user.id.in_(ADMINS))
-async def admin_final_reject_process_reason(message: Message, state: FSMContext, bot: Bot):
+async def admin_final_reject_process_reason(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     """Шаг 2: Админ отправляет причину, логика выполняется."""
     if not message.text:
         await message.answer("Причина не может быть пустой.")
@@ -616,7 +616,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     review_id = data.get('review_id_to_reject')
     reason = message.text
 
-    success, message_text = await reject_initial_review_logic(review_id, bot, reason=reason)
+    success, message_text = await reject_initial_review_logic(review_id, bot, scheduler, reason=reason)
     
     admin_info_msg = await message.answer(message_text)
     asyncio.create_task(schedule_message_deletion(admin_info_msg, Durations.DELETE_ADMIN_REPLY_DELAY))
@@ -842,6 +842,68 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     await state.clear()
+
+# --- НОВЫЙ БЛОК: НАГРАЖДЕНИЕ ТОП-ПОЛЬЗОВАТЕЛЕЙ ---
+@router.message(Command("reward_top"), F.from_user.id.in_(ADMINS))
+async def reward_top_start(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except TelegramBadRequest: pass
+
+    top_users = await db_manager.get_top_10_users()
+    
+    # Берем только то количество пользователей, для которых есть награды в конфиге
+    rewards_config = Rewards.TOP_USER_REWARDS
+    users_to_reward = [user for user in top_users if (top_users.index(user) + 1) in rewards_config]
+
+    if not users_to_reward:
+        await message.answer("В топе нет пользователей для награждения, или награды не настроены.")
+        return
+
+    confirmation_text = "🏆 Вы собираетесь наградить лучших пользователей:\n\n"
+    for i, (user_id, display_name, balance, _) in enumerate(users_to_reward):
+        place = i + 1
+        reward_amount = rewards_config.get(place)
+        if reward_amount:
+            confirmation_text += f"<b>{place}-е место:</b> {display_name} (ID: {user_id}) - получит {reward_amount} ⭐\n"
+
+    confirmation_text += "\nПодтверждаете действие?"
+    await message.answer(confirmation_text, reply_markup=inline.get_reward_top_confirmation_keyboard())
+
+@router.callback_query(F.data == "confirm_reward_top", F.from_user.id.in_(ADMINS))
+async def reward_top_confirm(callback: CallbackQuery, bot: Bot):
+    await callback.message.edit_text("⏳ Начинаю рассылку наград...")
+    
+    top_users = await db_manager.get_top_10_users()
+    rewards_config = Rewards.TOP_USER_REWARDS
+    users_to_reward = [user for user in top_users if (top_users.index(user) + 1) in rewards_config]
+
+    rewarded_count = 0
+    errors_count = 0
+    
+    for i, (user_id, display_name, _, _) in enumerate(users_to_reward):
+        place = i + 1
+        reward_amount = rewards_config.get(place)
+        if reward_amount:
+            await db_manager.update_balance(user_id, reward_amount)
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"🎉 Поздравляем! Вы заняли **{place}-е место** в топе пользователей и получаете награду в размере **{reward_amount} ⭐**!"
+                )
+                rewarded_count += 1
+            except Exception as e:
+                errors_count += 1
+                logger.error(f"Не удалось уведомить пользователя {user_id} о награде: {e}")
+
+    await callback.message.edit_text(f"✅ Готово!\n\nНаграждено: {rewarded_count}\nОшибок: {errors_count}")
+    await callback.answer()
+
+@router.callback_query(F.data == "cancel_reward_top", F.from_user.id.in_(ADMINS))
+async def reward_top_cancel(callback: CallbackQuery):
+    await callback.message.delete()
+    await callback.answer("Награждение отменено.", show_alert=True)
+
 
 # --- Обработчики состояний (FSM) ---
 

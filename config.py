@@ -23,8 +23,16 @@ TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if teste
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 FINAL_CHECK_ADMIN = ADMIN_ID_2 # Админ для финальной проверки
 
-# URL AI-модели
-AI_MODEL_URL = os.getenv("AI_MODEL_URL", "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2")
+# --- ДОБАВЛЕНО: Ключи для Google Gemini ---
+# Загружаем ключи и отфильтровываем пустые, если какой-то не указан
+GOOGLE_API_KEY_1 = os.getenv("GOOGLE_API_KEY_1")
+GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
+GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
+
+if not GOOGLE_API_KEYS:
+    logger.warning("!!! КОНФИГУРАЦИЯ: Не найдены GOOGLE_API_KEY_1 и GOOGLE_API_KEY_2 в .env файле.")
+    logger.warning("!!! Функция автоматической проверки скриншотов (OCR) будет отключена.")
+
 
 if WITHDRAWAL_CHANNEL_ID > 0:
     logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")
@@ -49,6 +57,14 @@ class Rewards:
     # ПУТЬ 3: Yandex
     REFERRAL_YANDEX_WITH_TEXT = 1.2
     REFERRAL_YANDEX_WITHOUT_TEXT = 0.6
+
+    # --- ДОБАВЛЕНО: Награды для топа пользователей ---
+    # Ключ - место в топе, значение - сумма награды
+    TOP_USER_REWARDS = {
+        1: 50.0,  # 1-е место
+        2: 30.0,  # 2-е место
+        3: 15.0   # 3-е место
+    }
 
 
 # --- Длительности и тайминги ---
