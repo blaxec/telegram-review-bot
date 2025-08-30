@@ -258,10 +258,10 @@ async def admin_send_answer(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
 
 
-# --- НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ПРЕДУПРЕЖДЕНИЙ В ПОДДЕРЖКЕ ---
+# --- ИЗМЕНЕННЫЙ ОБРАБОТЧИК ДЛЯ ПРЕДУПРЕЖДЕНИЙ В ПОДДЕРЖКЕ ---
 
 @router.callback_query(F.data.startswith("support_warn:"))
-async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext):
+async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Админ нажимает кнопку 'Выдать предупреждение'."""
     try:
         _, ticket_id_str, user_id_str = callback.data.split(":")
@@ -271,23 +271,69 @@ async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка в данных кнопки.", show_alert=True)
         return
 
+    # --- НАЧАЛО ИЗМЕНЕНИЙ: БЛОК ЗАЩИТЫ ОТ ГОНКИ СОСТОЯНИЙ ---
+    admin_id = callback.from_user.id
+    admin_username = callback.from_user.username or "Администратор"
+
+    # 1. Пытаемся "захватить" тикет
+    ticket = await db_manager.claim_support_ticket(ticket_id, admin_id)
+    
+    # 2. Если не получилось (кто-то другой уже захватил)
+    if not ticket:
+        await callback.answer("Этот вопрос уже был взят в работу другим администратором.", show_alert=True)
+        try:
+            # Убираем кнопки у этого админа, чтобы он больше не нажимал
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception: 
+            pass
+        return # Прекращаем выполнение
+
+    # 3. Если получилось, уведомляем других админов
+    other_admin_ids = [aid for aid in ADMIN_IDS if aid != admin_id]
+    for other_admin_id in other_admin_ids:
+        msg_id_to_edit = ticket.admin_message_id_1 if ADMIN_IDS.index(other_admin_id) == 0 else ticket.admin_message_id_2
+        if msg_id_to_edit:
+            try:
+                if ticket.photo_file_id:
+                    await bot.edit_message_caption(
+                        caption=f"{callback.message.caption}\n\n*Взят в работу (для предупреждения) администратором @{admin_username}*",
+                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                    )
+                else:
+                    await bot.edit_message_text(
+                        text=f"{callback.message.text}\n\n*Взят в работу (для предупреждения) администратором @{admin_username}*",
+                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                    )
+            except Exception as e:
+                logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id} (warn): {e}")
+
+    # 4. Редактируем сообщение у себя и переходим в FSM
+    try:
+        new_text = (callback.message.caption or callback.message.text) + "\n\n⚠️ Вы собираетесь выдать предупреждение. Введите причину следующим сообщением."
+        if ticket.photo_file_id:
+            await callback.message.edit_caption(caption=new_text, reply_markup=None)
+        else:
+            await callback.message.edit_text(text=new_text, reply_markup=None)
+    except Exception as e:
+         logger.warning(f"Не удалось отредактировать сообщение у админа {admin_id} (warn): {e}")
+
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
     await state.set_state(AdminState.SUPPORT_AWAITING_WARN_REASON)
     await state.update_data(
         support_ticket_id=ticket_id,
         target_user_id=user_id,
         original_message_id=callback.message.message_id
     )
-    prompt_msg = await callback.message.answer(
-        f"Введите причину предупреждения для пользователя ID: {user_id}",
-        reply_markup=inline.get_cancel_inline_keyboard()
-    )
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    # Старый prompt_msg больше не нужен, так как мы редактируем текущее сообщение
+    # prompt_msg = await callback.message.answer(...)
     await callback.answer()
+
 
 @router.message(AdminState.SUPPORT_AWAITING_WARN_REASON, F.text)
 async def admin_process_support_warn_reason(message: Message, state: FSMContext, bot: Bot):
     """Админ ввел причину, выдаем предупреждение и решаем, нужен ли кулдаун."""
-    await delete_previous_messages(message, state)
+    await delete_previous_messages(message, state) # Удаляем только сообщение с причиной
     data = await state.get_data()
     user_id = data.get("target_user_id")
     ticket_id = data.get("support_ticket_id")

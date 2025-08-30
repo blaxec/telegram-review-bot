@@ -11,7 +11,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, 
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, ADMIN_ID_1
+from config import BOT_TOKEN
 from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system, referral
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
@@ -108,16 +108,17 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
+    ### НАСТОЯЩЕЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ###
     # --- ФИНАЛЬНЫЙ, ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
     # 1. Сначала регистрируем роутеры, которые ловят КОМАНДЫ.
     # Это гарантирует, что /skip, /start и другие команды будут пойманы до того,
-    # как сработают обработчики сообщений в состояниях.
+    # как сработают обработчики сообщений в состояниях или "прочие" обработчики.
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
     
-    # 2. Роутер earning идет следующим, так как в нем есть команда /skip.
+    # 2. Роутер earning идет следующим, так как в нем есть важная команда /skip.
     dp.include_router(earning.router)
     
     # 3. Затем все остальные роутеры, которые в основном работают с состояниями (FSM) и колбэками.

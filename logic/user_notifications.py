@@ -4,7 +4,6 @@ import datetime
 import logging
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
-# ИСПРАВЛЕНИЕ: 'Storage' переименован в 'BaseStorage' в новых версиях aiogram
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 

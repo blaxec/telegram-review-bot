@@ -3,7 +3,8 @@
 import re
 import asyncio
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+# --- ДОБАВЛЕНО: Импорт StateFilter ---
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -11,10 +12,22 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import reply, inline
 from database import db_manager
-# ИЗМЕНЕНИЕ: Импортируем Durations для задержек
 from config import Durations
+from references import reference_manager
 
 router = Router()
+
+# --- ДОБАВЛЕНО: Список состояний, в которых /start не должен работать ---
+ACTIVE_TASK_STATES = [
+    UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT,
+    UserState.GOOGLE_REVIEW_TASK_ACTIVE,
+    UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT,
+    UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT,
+    UserState.YANDEX_REVIEW_TASK_ACTIVE,
+    UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT,
+]
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Планирует удаление сообщения через заданную задержку."""
@@ -23,18 +36,38 @@ async def schedule_message_deletion(message: Message, delay: int):
         try:
             await message.delete()
         except TelegramBadRequest:
-            # Сообщение могло быть уже удалено, игнорируем.
             pass
     asyncio.create_task(delete_after_delay())
 
+# --- ДОБАВЛЕНО: Новый обработчик, который "ловит" /start во время задания ---
+@router.message(CommandStart(), StateFilter(*ACTIVE_TASK_STATES))
+async def start_while_busy_handler(message: Message):
+    """Обрабатывает команду /start, когда пользователь выполняет задание."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    
+    response_msg = await message.answer(
+        "❗️ Вы сейчас выполняете задание. Пожалуйста, завершите его.\n\n"
+        "Если вы хотите отменить задание, воспользуйтесь кнопкой «❌ Отмена»."
+    )
+    # Удаляем это сообщение через 10 секунд
+    asyncio.create_task(schedule_message_deletion(response_msg, 10))
 
-@router.message(CommandStart())
+
+# --- ИЗМЕНЕНИЕ: Добавлен фильтр, чтобы этот обработчик НЕ срабатывал во время задания ---
+@router.message(CommandStart(), ~StateFilter(*ACTIVE_TASK_STATES))
 async def start_handler(message: Message, state: FSMContext):
     """Обработчик команды /start."""
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass # Игнорируем ошибку, если не удалось удалить (например, нет прав)
+        pass
+    
+    # --- ИЗМЕНЕНИЕ: Эта проверка больше не нужна здесь, так как этот хендлер
+    # не будет вызван для активных состояний. Убираем ее для чистоты кода. ---
+    # await reference_manager.release_reference_from_user(message.from_user.id, 'available')
     
     await state.clear()
     
@@ -51,8 +84,7 @@ async def start_handler(message: Message, state: FSMContext):
         username=message.from_user.username,
         referrer_id=referrer_id
     )
-
-    # --- ИЗМЕНЕНИЕ: Текст соглашения стал короче и понятнее ---
+    
     welcome_text = (
         "👋 **Добро пожаловать!**\n\n"
         "Я бот, который поможет вам зарабатывать звезды за выполнение простых заданий.\n\n"
@@ -80,8 +112,6 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
     try:
         if callback.message:
             await callback.message.edit_text("Вы приняли соглашение.")
-            # Планируем удаление этого сообщения
-            # ИЗМЕНЕНИЕ: Используем константу из конфига
             await schedule_message_deletion(callback.message, Durations.DELETE_WELCOME_MESSAGE_DELAY)
     except TelegramBadRequest:
         pass
@@ -92,8 +122,6 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
             "Добро пожаловать в главное меню!",
             reply_markup=reply.get_main_menu_keyboard()
         )
-        # Планируем удаление и этого сообщения
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         await schedule_message_deletion(welcome_msg, Durations.DELETE_WELCOME_MESSAGE_DELAY)
 
 
@@ -111,6 +139,9 @@ async def cancel_handler_reply(message: Message, state: FSMContext):
     if current_state is None:
         await message.answer("Нечего отменять. Вы уже в главном меню.")
         return
+
+    # Здесь логика освобождения ссылки остается, т.к. это штатный способ отмены
+    await reference_manager.release_reference_from_user(message.from_user.id, 'available')
 
     await state.clear()
     await message.answer(
@@ -138,6 +169,9 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
     if current_state is None:
         return
 
+    # И здесь логика освобождения ссылки остается
+    await reference_manager.release_reference_from_user(callback.from_user.id, 'available')
+
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
@@ -162,6 +196,4 @@ async def go_main_menu_handler(callback: CallbackQuery, state: FSMContext):
             "Главное меню:",
             reply_markup=reply.get_main_menu_keyboard()
         )
-        # Планируем удаление сообщения "Главное меню"
-        # ИЗМЕНЕНИЕ: Используем константу из конфига
         await schedule_message_deletion(menu_msg, Durations.DELETE_WELCOME_MESSAGE_DELAY)

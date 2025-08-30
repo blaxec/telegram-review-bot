@@ -111,6 +111,7 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
 async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: AsyncIOScheduler, user_id: int, link_id: int, platform: str, review_text: str):
     """Логика отправки текста отзыва пользователю и планирования задач."""
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+            
     user_info = await bot.get_chat(user_id)
     link = await db_manager.db_get_link_by_id(link_id)
 
@@ -156,7 +157,6 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
-        # --- ИЗМЕНЕНИЕ: Всегда отправляем новое сообщение, а не редактируем. Это надежнее. ---
         await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
     except Exception as e:
         await reference_manager.release_reference_from_user(user_id, 'available')
@@ -247,7 +247,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     hold_hours = hold_duration_minutes / 60
     return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.0f} ч."
 
-async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler) -> tuple[bool, str]:
+async def reject_initial_review_logic(review_id: int, bot: Bot, reason: str = None) -> tuple[bool, str]:
     """Логика для отклонения начального отзыва."""
     review = await db_manager.get_review_by_id(review_id)
     if not review:
@@ -269,7 +269,11 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     await reference_manager.release_reference_from_user(rejected_review.user_id, 'available')
     
     try:
-        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен. Вы сможете попробовать снова после окончания кулдауна."
+        user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен."
+        if reason:
+            user_message += f"\n\n**Причина:** {reason}"
+        user_message += "\n\nВы сможете попробовать снова после окончания кулдауна."
+        
         await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")

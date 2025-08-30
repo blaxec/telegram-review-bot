@@ -80,6 +80,9 @@ class Durations:
     TASK_YANDEX_REVIEW_CONFIRM_APPEARS = 10
     TASK_GMAIL_VERIFICATION_TIMEOUT = 5 # Таймер на отправку созданного Gmail на проверку
 
+    # --- ДОБАВЛЕНО: Таймаут ожидания текста от администратора ---
+    AWAIT_ADMIN_TEXT_TIMEOUT_MINUTES = 60
+
     # Время жизни информационных сообщений (в секундах)
     DELETE_WELCOME_MESSAGE_DELAY = 15
     DELETE_INFO_MESSAGE_DELAY = 25

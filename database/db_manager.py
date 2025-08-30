@@ -168,7 +168,8 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = Durat
     current_warnings = 0
     async with async_session() as session:
         async with session.begin():
-            user = await session.get(User, user_id)
+            # --- ИЗМЕНЕНИЕ: Добавлена блокировка with_for_update для атомарности ---
+            user = await session.get(User, user_id, with_for_update=True)
             if not user:
                 return 0
             user.warnings += 1

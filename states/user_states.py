@@ -70,6 +70,8 @@ class AdminState(StatesGroup):
     # Состояния для указания причин
     PROVIDE_REJECTION_REASON = State()
     PROVIDE_WARN_REASON = State()
+    # --- ДОБАВЛЕНО: Новое состояние для причины отклонения финального отзыва ---
+    PROVIDE_FINAL_REJECTION_REASON = State()
     
     # Состояния для предоставления текста отзыва
     PROVIDE_GOOGLE_REVIEW_TEXT = State()

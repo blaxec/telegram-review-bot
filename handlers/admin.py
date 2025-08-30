@@ -29,7 +29,6 @@ from logic.admin_logic import (
     reject_withdrawal_logic,
     apply_fine_to_user
 )
-# --- НОВЫЙ ИМПОРТ ---
 from logic.ai_helper import generate_review_text
 
 router = Router()
@@ -85,7 +84,6 @@ async def admin_refs_menu(message: Message, state: FSMContext):
     temp_admin_tasks.pop(message.from_user.id, None)
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
-# --- ИЗМЕНЕНИЕ: Новый обработчик для выбора платформы ---
 @router.callback_query(F.data.startswith("admin_refs:select_platform:"), F.from_user.id.in_(ADMINS))
 async def admin_select_ref_platform(callback: CallbackQuery):
     platform = callback.data.split(':')[2]
@@ -217,13 +215,11 @@ async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMCont
             chunks.append("")
         chunks[-1] += line
     
-    # Отправляем главный управляющий месседж в конце
     final_management_message = await bot.send_message(callback.from_user.id, "Управление списком:", reply_markup=inline.get_admin_refs_list_keyboard(platform))
     message_ids.append(final_management_message.message_id)
 
     for i, chunk in enumerate(chunks):
         final_text = (base_text + chunk) if i == 0 else chunk
-        # Клавиатура теперь только на последнем сообщении
         msg = await bot.send_message(callback.from_user.id, final_text, disable_web_page_preview=True)
         message_ids.append(msg.message_id)
 
@@ -235,7 +231,6 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
     platform = callback.data.split(':')[2]
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
-    # --- ИЗМЕНЕНИЕ: Отправляем новое сообщение, а не редактируем старое ---
     if callback.message:
         prompt_msg = await callback.message.answer("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_cancel_inline_keyboard())
         await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -274,16 +269,14 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
 
     await state.clear()
     
-    # --- ИЗМЕНЕНИЕ: Обновляем список для наглядности ---
     temp_message = await message.answer("Обновляю список...")
-    # Создаем фейковый колбэк, чтобы переиспользовать существующий хендлер
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
-        message=temp_message, # Используем временное сообщение
+        message=temp_message, 
         data=f"admin_refs:list:{platform}"
     )
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
-    await temp_message.delete() # Удаляем "Обновляю список..."
+    await temp_message.delete()
 
 
 @router.callback_query(F.data.startswith("admin_refs:return_start:"), F.from_user.id.in_(ADMINS))
@@ -292,7 +285,6 @@ async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     platform = callback.data.split(':')[2]
     await state.set_state(AdminState.RETURN_LINK_ID)
     await state.update_data(platform_for_return=platform)
-    # --- ИЗМЕНЕНИЕ: Отправляем новое сообщение, а не редактируем старое ---
     if callback.message:
         prompt_msg = await callback.message.answer("Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", reply_markup=inline.get_cancel_inline_keyboard())
         await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -332,7 +324,6 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
 
     await state.clear()
     
-    # --- ИЗМЕНЕНИЕ: Обновляем список для наглядности ---
     temp_message = await message.answer("Обновляю список...")
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
@@ -360,7 +351,6 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         action_text = f"✅ ПОДТВЕРЖДЕНО (@{callback.from_user.username})"
         if context == "google_profile":
             await user_state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
-            # --- ИЗМЕНЕНИЕ: Сохраняем ID сообщения в FSM пользователя ---
             prompt_msg = await bot.send_message(user_id, "Профиль прошел проверку. Пришлите скриншот последних отзывов.", reply_markup=inline.get_google_last_reviews_check_keyboard())
             await user_state.update_data(prompt_message_id=prompt_msg.message_id)
         elif context == "google_last_reviews":
@@ -435,11 +425,16 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         )
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-# --- НОВЫЙ БЛОК: ИНТЕГРАЦИЯ С ИИ ---
-
 @router.callback_query(F.data.startswith('admin_ai_generate_start:'), F.from_user.id == TEXT_ADMIN)
 async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
     """Шаг 1: Админ нажимает кнопку 'Сгенерировать с ИИ'."""
+    # --- НАЧАЛО ИЗМЕНЕНИЙ: Немедленный ответ на callback ---
+    try:
+        await callback.answer("Ожидаю сценарий...")
+    except TelegramBadRequest:
+        pass
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
         
@@ -448,25 +443,23 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
         
         prompt_msg = None
         if callback.message:
-            # Удаляем старую клавиатуру и добавляем текст-приглашение
             if callback.message.photo: 
                 await callback.message.edit_caption(caption=new_content, reply_markup=None)
             else: 
                 prompt_msg = await callback.message.edit_text(new_content, reply_markup=None)
 
         await state.set_state(AdminState.AI_AWAITING_SCENARIO)
-        # Сохраняем все необходимые данные для последующих шагов
         await state.update_data(
             target_user_id=int(user_id_str), 
             target_link_id=int(link_id_str), 
             platform=platform,
             prompt_message_id=prompt_msg.message_id if prompt_msg else None,
-            original_message_id=callback.message.message_id # Сохраняем ID исходного сообщения
+            original_message_id=callback.message.message_id 
         )
-        await callback.answer("Ожидаю сценарий...")
     except Exception as e: 
         logger.exception(f"Ошибка на старте AI генерации: {e}")
-        await callback.answer("Произошла ошибка.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Произошла ошибка на старте генерации.", show_alert=True)
 
 @router.message(AdminState.AI_AWAITING_SCENARIO, F.from_user.id == TEXT_ADMIN)
 async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
@@ -500,15 +493,13 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
 
     await status_msg.delete()
 
-    # --- ИЗМЕНЕНИЕ: Улучшенная обработка ошибок ---
     if "ошибка" in generated_text.lower() or "ai-сервер" in generated_text.lower() or "ai-модель" in generated_text.lower():
         await message.answer(
             f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
             reply_markup=inline.get_ai_error_keyboard()
         )
-        # Сохраняем сценарий, чтобы его можно было повторно использовать
         await state.update_data(ai_scenario=scenario)
-        await state.set_state(AdminState.AI_AWAITING_MODERATION) # Остаемся в этом состоянии для обработки кнопок
+        await state.set_state(AdminState.AI_AWAITING_MODERATION) 
         return
 
     moderation_text = (
@@ -589,8 +580,6 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await state.set_state(state_map[platform])
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-# --- КОНЕЦ БЛОКА ИИ ---
-
 
 @router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
@@ -600,13 +589,56 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     if success and callback.message:
         await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В ХОЛДЕ (@{callback.from_user.username})", reply_markup=None)
 
+# --- НАЧАЛО ИЗМЕНЕНИЙ: Отклонение финального отзыва теперь запрашивает причину ---
 @router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
-async def admin_final_reject(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
+async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
+    """Шаг 1: Админ нажимает 'Отклонить' и бот запрашивает причину."""
     review_id = int(callback.data.split(':')[1])
-    success, message_text = await reject_initial_review_logic(review_id, bot, scheduler)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})", reply_markup=None)
+    await state.set_state(AdminState.PROVIDE_FINAL_REJECTION_REASON)
+    await state.update_data(review_id_to_reject=review_id)
+    
+    prompt_msg = await callback.message.answer(
+        f"✍️ Введите причину отклонения для отзыва ID: {review_id}",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer("Ожидание причины...")
+
+@router.message(AdminState.PROVIDE_FINAL_REJECTION_REASON, F.from_user.id.in_(ADMINS))
+async def admin_final_reject_process_reason(message: Message, state: FSMContext, bot: Bot):
+    """Шаг 2: Админ отправляет причину, логика выполняется."""
+    if not message.text:
+        await message.answer("Причина не может быть пустой.")
+        return
+
+    await delete_previous_messages(message, state)
+    data = await state.get_data()
+    review_id = data.get('review_id_to_reject')
+    reason = message.text
+
+    success, message_text = await reject_initial_review_logic(review_id, bot, reason=reason)
+    
+    admin_info_msg = await message.answer(message_text)
+    asyncio.create_task(schedule_message_deletion(admin_info_msg, Durations.DELETE_ADMIN_REPLY_DELAY))
+
+    # Находим исходное сообщение с кнопками и редактируем его
+    try:
+        # Это потребует более сложной логики, если сообщение может быть в разных чатах.
+        # Для простоты предположим, что админ, отклоняющий отзыв, и FINAL_CHECK_ADMIN - один и тот же.
+        review = await db_manager.get_review_by_id(review_id)
+        if review and review.admin_message_id:
+            original_message = await bot.edit_message_caption(
+                chat_id=message.from_user.id,
+                message_id=review.admin_message_id,
+                caption=f"{(review.review_text or '')}\n\n❌ ОТКЛОНЕН (@{message.from_user.username})\nПричина: {reason}",
+                reply_markup=None
+            )
+    except Exception as e:
+        logger.warning(f"Не удалось отредактировать исходное сообщение об отклонении отзыва {review_id}: {e}")
+
+    await state.clear()
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
 
 @router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
 async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
@@ -620,12 +652,10 @@ async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
     if not hold_reviews:
         await message.answer("В холде нет отзывов."); return
         
-    # --- ИЗМЕНЕНИЕ: Сортировка отзывов по платформам ---
     platform_order = ['google', 'yandex_with_text', 'yandex_without_text']
     try:
         hold_reviews.sort(key=lambda r: platform_order.index(r.platform) if r.platform in platform_order else len(platform_order))
     except ValueError:
-        # На случай, если в базе есть платформа, которой нет в platform_order
         pass
 
     await message.answer(f"Найдено отзывов: {len(hold_reviews)}")
@@ -636,18 +666,15 @@ async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
                      f"Платформа: <code>{review.platform}</code> | Сумма: <code>{review.amount}</code> ⭐\n"
                      f"Ссылка: <code>{link_url}</code>\nТекст: «<i>{review.review_text}</i>»")
         try:
-            # --- ИЗМЕНЕНИЕ: Используем review.admin_message_id для копирования сообщения со скриншотом ---
             if review.admin_message_id:
-                # Копируем исходное сообщение (фото + caption) от админа проверки
                 await bot.copy_message(
                     chat_id=message.chat.id, 
                     from_chat_id=FINAL_CHECK_ADMIN, 
                     message_id=review.admin_message_id, 
-                    caption=info_text,  # Заменяем старый caption на новый, информативный
+                    caption=info_text,
                     reply_markup=inline.get_admin_hold_review_keyboard(review.id)
                 )
             else:
-                # Фоллбэк для старых записей без admin_message_id
                 await message.answer(info_text, reply_markup=inline.get_admin_hold_review_keyboard(review.id))
         except Exception as e:
             logger.error(f"Ошибка обработки отзыва {review.id} в reviewhold: {e}")
