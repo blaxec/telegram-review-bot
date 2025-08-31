@@ -284,7 +284,8 @@ def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Google Карты", callback_data="admin_refs:select_platform:google_maps")
     builder.button(text="Яндекс (с текстом)", callback_data="admin_refs:select_platform:yandex_with_text")
     builder.button(text="Яндекс (без текста)", callback_data="admin_refs:select_platform:yandex_without_text")
-    builder.button(text="🔄 Сбросить 'просроченные'", callback_data="admin_refs:reset_expired")
+    # ИЗМЕНЕНИЕ: Текст кнопки
+    builder.button(text="🔄 Найти и пометить просроченные", callback_data="admin_refs:expire_manual")
     builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
     builder.adjust(1)
     return builder.as_markup()

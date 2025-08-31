@@ -17,6 +17,8 @@ from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 from logic.reward_logic import distribute_rewards
+# ИЗМЕНЕНИЕ: Импортируем новую логику очистки
+from logic.cleanup_logic import check_and_expire_links
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,6 +127,9 @@ async def main():
 
     # Добавляем фоновую задачу для проверки и выдачи наград
     scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
+    # ИЗМЕНЕНИЕ: Добавляем фоновую задачу для очистки просроченных ссылок
+    scheduler.add_job(check_and_expire_links, 'interval', hours=6, args=[bot, dp.storage])
+
 
     try:
         scheduler.start()

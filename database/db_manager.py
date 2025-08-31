@@ -588,6 +588,42 @@ async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> i
 
 # --- Функции для системы бана и просроченных ссылок ---
 
+# ИЗМЕНЕНИЕ: Новая функция для поиска и обновления старых "зависших" ссылок
+async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> List[Link]:
+    """Находит все ссылки в статусе 'assigned' дольше N часов, меняет их статус на 'expired' и возвращает их."""
+    async with async_session() as session:
+        async with session.begin():
+            threshold_time = datetime.datetime.utcnow() - datetime.timedelta(hours=hours_threshold)
+            
+            # 1. Находим ID ссылок, которые нужно обновить
+            select_stmt = select(Link.id).where(
+                Link.status == 'assigned',
+                Link.assigned_at < threshold_time
+            )
+            result = await session.execute(select_stmt)
+            link_ids_to_expire = result.scalars().all()
+
+            if not link_ids_to_expire:
+                return []
+            
+            # 2. Получаем полные объекты этих ссылок ДО обновления, чтобы вернуть их для уведомления
+            select_objects_stmt = select(Link).where(Link.id.in_(link_ids_to_expire))
+            result_objects = await session.execute(select_objects_stmt)
+            expired_links = result_objects.scalars().all()
+
+            # 3. Обновляем их статус на 'expired'
+            update_stmt = update(Link).where(
+                Link.id.in_(link_ids_to_expire)
+            ).values(
+                status='expired',
+                assigned_to_user_id=None, # Сбрасываем привязку к пользователю
+                assigned_at=None
+            )
+            await session.execute(update_stmt)
+            
+            return expired_links
+
+
 async def reset_all_expired_links() -> int:
     """Сбрасывает статус всех 'expired' ссылок на 'available'."""
     async with async_session() as session:

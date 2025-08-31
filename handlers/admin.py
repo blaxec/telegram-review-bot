@@ -32,6 +32,8 @@ from logic.admin_logic import (
 )
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
+# ИЗМЕНЕНИЕ: Импортируем новую логику
+from logic.cleanup_logic import check_and_expire_links
 
 
 router = Router()
@@ -112,18 +114,14 @@ async def admin_back_to_platform_selection(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_refs:reset_expired", F.from_user.id.in_(ADMINS))
-async def admin_reset_expired(callback: CallbackQuery):
-    await callback.answer("⚙️ Сбрасываю просроченные ссылки...")
-    count = await db_manager.reset_all_expired_links()
-    if callback.message:
-        await callback.message.answer(f"✅ Готово. {count} просроченных ссылок возвращены в статус 'available'.")
-        await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    try:
-        if callback.message:
-            await callback.message.delete()
-    except:
-        pass
+# ИЗМЕНЕНИЕ: Обработчик кнопки для ручного запуска проверки просроченных ссылок
+@router.callback_query(F.data == "admin_refs:expire_manual", F.from_user.id.in_(ADMINS))
+async def admin_expire_links_manual(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await callback.answer("⚙️ Запускаю проверку 'зависших' ссылок...", show_alert=True)
+    # Вызываем ту же логику, что и в фоновой задаче
+    await check_and_expire_links(bot, state.storage)
+    await callback.message.answer("✅ Проверка завершена. Все 'зависшие' более 24 часов ссылки были помечены как просроченные.")
+
 
 @router.callback_query(F.data == "back_to_refs_menu", F.from_user.id.in_(ADMINS))
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -175,18 +173,20 @@ async def admin_add_links_handler(message: Message):
         logger.exception(f"Критическая ошибка (без FSM) для пользователя {user_id}: {e}")
         await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
 
+# ИЗМЕНЕНИЕ: Добавлено поле expired в статистику
 @router.callback_query(F.data.startswith("admin_refs:stats:"), F.from_user.id.in_(ADMINS))
 async def admin_view_refs_stats(callback: CallbackQuery):
     try: await callback.answer("Загружаю...", show_alert=False)
     except: pass
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
-    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used']}
+    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
     text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
             f"Всего: {len(all_links)}\n"
             f"🟢 Доступно: {stats.get('available', 0)}\n"
             f"🟡 В работе: {stats.get('assigned', 0)}\n"
-            f"🔴 Использовано: {stats.get('used', 0)}")
+            f"🔴 Использовано: {stats.get('used', 0)}\n"
+            f"⚫ Просрочено: {stats.get('expired', 0)}")
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
 
@@ -335,11 +335,10 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
     await temp_message.delete()
 
-# --- ИСПРАВЛЕННЫЙ БЛОК: ОБРАБОТКА OCR ---
+# ИЗМЕНЕНИЕ: Полностью переписанный блок для исправления ошибок
 @router.callback_query(F.data.startswith("admin_ocr:"), F.from_user.id.in_(ADMINS))
 async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Администратор нажимает кнопку для AI-проверки скриншота."""
-    # 1. Безопасно разбираем данные кнопки
     try:
         _, context, user_id_str = callback.data.split(":")
         user_id = int(user_id_str)
@@ -347,20 +346,18 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer("Ошибка в данных кнопки.", show_alert=True)
         return
 
-    # 2. Безопасно получаем file_id из сообщения
     if not (callback.message and callback.message.photo):
         await callback.answer("Не удалось найти фото для анализа.", show_alert=True)
         return
     file_id = callback.message.photo[-1].file_id
 
-    # 3. Обновляем подпись и запускаем анализ
-    await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n"
-                                     f"🤖 *Запущена проверка с помощью ИИ...*")
+    await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n"
+                                                f"🤖 *Запущена проверка с помощью ИИ...*")
     
     task_map = {
         'yandex_profile_screenshot': 'yandex_level',
         'google_last_reviews': 'review_date',
-        'google_profile': 'review_date' # Проверяем дату последнего отзыва и на этом скриншоте
+        'google_profile': 'review_date'
     }
     task = task_map.get(context)
 
@@ -372,19 +369,27 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     admin_id = callback.from_user.id
     
-    # 4. Логика обработки результата OCR
     if ocr_result.get('status') == 'success':
+        # Создаем "искусственный" callback, чтобы избежать ошибки "Instance is frozen"
+        new_callback_data = f"admin_verify:confirm:{context}:{user_id}"
+        dummy_callback = CallbackQuery(
+            id=callback.id, 
+            from_user=callback.from_user, 
+            chat_instance=callback.chat_instance, 
+            message=callback.message, 
+            data=new_callback_data
+        )
+
         if task == 'yandex_level':
             level = ocr_result.get('level', 0)
             if level >= 3:
-                dummy_callback = callback
-                dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
                 await admin_verification_handler(dummy_callback, state, bot)
                 await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Уровень знатока ({level}) достаточный. Заявка автоматически одобрена.")
             else:
                 reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
                 await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
-                await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Уровень {level} < 3.")
+                # ИСПОЛЬЗУЕМ &lt; ВМЕСТО <
+                await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ **AI-отклонение:** Уровень {level} &lt; 3.")
                 await bot.send_message(admin_id, f"❌ **AI-проверка:** Уровень знатока ({level}) недостаточный. Заявка автоматически отклонена.")
 
         elif task == 'review_date':
@@ -392,19 +397,18 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
             last_review_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
             days_diff = (datetime.date.today() - last_review_date).days
             if days_diff >= 3:
-                dummy_callback = callback
-                dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
                 await admin_verification_handler(dummy_callback, state, bot)
                 await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Прошло {days_diff} дней. Заявка автоматически одобрена.")
             else:
                 reason = f"Ваш последний отзыв был написан менее 3 дней назад ({date_str})."
-                await process_rejection_reason_logic(bot, user_id, reason, "google_last_reviews", user_state)
-                await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Прошло {days_diff} < 3 дней.")
+                await process_rejection_reason_logic(bot, user_id, reason, context, user_state)
+                 # ИСПОЛЬЗУЕМ &lt; ВМЕСТО <
+                await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ **AI-отклонение:** Прошло {days_diff} &lt; 3 дней.")
                 await bot.send_message(admin_id, f"❌ **AI-проверка:** Последний отзыв был слишком недавно ({date_str}). Заявка автоматически отклонена.")
     
-    else: # uncertain или error
+    else:
         await callback.message.edit_caption(
-            caption=f"{callback.message.caption}\n\n"
+            caption=f"{(callback.message.caption or '')}\n\n"
                     f"⚠️ **AI не уверен.**\n"
                     f"Причина: {ocr_result.get('message') or ocr_result.get('reason', 'Неизвестно')}\n"
                     f"Требуется ручная проверка."
