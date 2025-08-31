@@ -12,8 +12,11 @@ from keyboards import inline
 router = Router()
 logger = logging.getLogger(__name__)
 
-def format_stats_text(top_users: list) -> str:
+async def format_stats_text(top_users: list) -> str:
     """Форматирует текст для сообщения со статистикой."""
+    reward_settings = await db_manager.get_reward_settings()
+    rewards_map = {setting.place: setting.reward_amount for setting in reward_settings}
+
     if not top_users:
         return "📊 <i>Топ пользователей</i>\n\nПока в рейтинге никого нет."
 
@@ -24,10 +27,14 @@ def format_stats_text(top_users: list) -> str:
         7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
     }
 
-    for i, (display_name, balance, review_count) in enumerate(top_users, 1):
+    for i, (user_id, display_name, balance, review_count) in enumerate(top_users, 1):
         user_display = display_name if display_name else "Скрытый пользователь"
+        reward_info = ""
+        if i in rewards_map and rewards_map[i] > 0:
+            reward_info = f" (🎁 Приз: {rewards_map[i]} ⭐)"
+        
         stats_text += (
-            f"{place_emojis.get(i, '🔹')} <i>{user_display}</i>\n"
+            f"{place_emojis.get(i, '🔹')} <i>{user_display}</i>{reward_info}\n"
             f"   - Баланс: <i>{balance:.2f}</i> ⭐\n"
             f"   - Отзывов одобрено: <i>{review_count}</i>\n\n"
         )
@@ -51,7 +58,7 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
             return
 
         is_anonymous = user.is_anonymous_in_stats
-        stats_text = format_stats_text(top_users)
+        stats_text = await format_stats_text(top_users)
         stats_text += f"\nВаш текущий статус в топе: <i>{'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}</i>"
         keyboard = inline.get_stats_keyboard(is_anonymous=is_anonymous)
 

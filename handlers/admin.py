@@ -1,5 +1,6 @@
 # file: handlers/admin.py
 
+import datetime
 import logging
 import asyncio
 from aiogram import Router, F, Bot, Dispatcher
@@ -12,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, Rewards, Durations
+from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, Durations
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import (
@@ -30,6 +31,8 @@ from logic.admin_logic import (
     apply_fine_to_user
 )
 from logic.ai_helper import generate_review_text
+from logic.ocr_helper import analyze_screenshot
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -69,8 +72,8 @@ async def admin_add_stars(message: Message, state: FSMContext):
         await message.delete()
     except TelegramBadRequest: pass
     await state.clear()
-    await db_manager.update_balance(message.from_user.id, Rewards.ADMIN_ADD_STARS)
-    msg = await message.answer(f"✅ На ваш баланс зачислено {Rewards.ADMIN_ADD_STARS} ⭐.")
+    await db_manager.update_balance(message.from_user.id, 999.0)
+    msg = await message.answer(f"✅ На ваш баланс зачислено 999.0 ⭐.")
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
@@ -115,7 +118,6 @@ async def admin_reset_expired(callback: CallbackQuery):
     count = await db_manager.reset_all_expired_links()
     if callback.message:
         await callback.message.answer(f"✅ Готово. {count} просроченных ссылок возвращены в статус 'available'.")
-        # Возвращаемся в главное меню управления ссылками
         await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     try:
         if callback.message:
@@ -333,6 +335,76 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
     await temp_message.delete()
 
+# --- НОВЫЙ БЛОК: ОБРАБОТКА OCR ---
+@router.callback_query(F.data.startswith("admin_ocr:"), F.from_user.id.in_(ADMINS))
+async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Администратор нажимает кнопку для AI-проверки скриншота."""
+    try:
+        _, context, user_id_str, file_id = callback.data.split(":")
+        user_id = int(user_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка в данных кнопки.", show_alert=True)
+        return
+
+    await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n"
+                                     f"🤖 *Запущена проверка с помощью ИИ...*")
+    
+    task_map = {
+        'yandex_profile_screenshot': 'yandex_level',
+        'google_last_reviews': 'review_date'
+    }
+    task = task_map.get(context)
+
+    if not task:
+        await callback.message.answer("Неизвестная задача для OCR.")
+        return
+
+    ocr_result = await analyze_screenshot(bot, file_id, task)
+    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
+    admin_id = callback.from_user.id
+    
+    # --- Логика обработки результата OCR ---
+    if ocr_result.get('status') == 'success':
+        if task == 'yandex_level':
+            level = ocr_result.get('level', 0)
+            if level >= 3:
+                # Имитируем нажатие кнопки "Подтвердить"
+                dummy_callback = callback
+                dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
+                await admin_verification_handler(dummy_callback, state, bot)
+                await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Уровень знатока ({level}) достаточный. Заявка автоматически одобрена.")
+            else:
+                # Авто-отклонение
+                reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
+                await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
+                await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Уровень {level} < 3.")
+                await bot.send_message(admin_id, f"❌ **AI-проверка:** Уровень знатока ({level}) недостаточный. Заявка автоматически отклонена.")
+
+        elif task == 'review_date':
+            date_str = ocr_result.get('date')
+            last_review_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
+            days_diff = (datetime.date.today() - last_review_date).days
+            if days_diff >= 3:
+                # Авто-одобрение
+                dummy_callback = callback
+                dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
+                await admin_verification_handler(dummy_callback, state, bot)
+                await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Прошло {days_diff} дней. Заявка автоматически одобрена.")
+            else:
+                # Авто-отклонение
+                reason = f"Ваш последний отзыв был написан менее 3 дней назад ({date_str})."
+                await process_rejection_reason_logic(bot, user_id, reason, "google_last_reviews", user_state)
+                await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Прошло {days_diff} < 3 дней.")
+                await bot.send_message(admin_id, f"❌ **AI-проверка:** Последний отзыв был слишком недавно ({date_str}). Заявка автоматически отклонена.")
+    
+    else: # uncertain или error
+        await callback.message.edit_caption(
+            caption=f"{callback.message.caption}\n\n"
+                    f"⚠️ **AI не уверен.**\n"
+                    f"Причина: {ocr_result.get('message') or ocr_result.get('reason', 'Неизвестно')}\n"
+                    f"Требуется ручная проверка."
+        )
+
 
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -427,13 +499,10 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data.startswith('admin_ai_generate_start:'), F.from_user.id == TEXT_ADMIN)
 async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
-    """Шаг 1: Админ нажимает кнопку 'Сгенерировать с ИИ'."""
-    # --- НАЧАЛО ИЗМЕНЕНИЙ: Немедленный ответ на callback ---
     try:
         await callback.answer("Ожидаю сценарий...")
     except TelegramBadRequest:
         pass
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
     
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
@@ -463,7 +532,6 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.AI_AWAITING_SCENARIO, F.from_user.id == TEXT_ADMIN)
 async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
-    """Шаг 2 и 3: Админ отправляет сценарий, бот генерирует текст."""
     if not message.text:
         await message.answer("Сценарий не может быть пустым. Пожалуйста, отправьте текст.")
         return
@@ -493,7 +561,7 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
 
     await status_msg.delete()
 
-    if "ошибка" in generated_text.lower() or "ai-сервер" in generated_text.lower() or "ai-модель" in generated_text.lower():
+    if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
         await message.answer(
             f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
             reply_markup=inline.get_ai_error_keyboard()
@@ -516,7 +584,6 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
 
 @router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, F.from_user.id == TEXT_ADMIN)
 async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    """Шаг 6: Обработка кнопок модерации."""
     action = callback.data.split(':')[1]
     data = await state.get_data()
     
@@ -553,7 +620,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         )
         await status_msg.delete()
 
-        if "ошибка" in generated_text.lower() or "ai-сервер" in generated_text.lower() or "ai-модель" in generated_text.lower():
+        if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
             await callback.message.edit_text(
                 f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
                 reply_markup=inline.get_ai_error_keyboard()
@@ -589,10 +656,8 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     if success and callback.message:
         await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В ХОЛДЕ (@{callback.from_user.username})", reply_markup=None)
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ: Отклонение финального отзыва теперь запрашивает причину ---
 @router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
 async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
-    """Шаг 1: Админ нажимает 'Отклонить' и бот запрашивает причину."""
     review_id = int(callback.data.split(':')[1])
     await state.set_state(AdminState.PROVIDE_FINAL_REJECTION_REASON)
     await state.update_data(review_id_to_reject=review_id)
@@ -606,7 +671,6 @@ async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.PROVIDE_FINAL_REJECTION_REASON, F.from_user.id.in_(ADMINS))
 async def admin_final_reject_process_reason(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    """Шаг 2: Админ отправляет причину, логика выполняется."""
     if not message.text:
         await message.answer("Причина не может быть пустой.")
         return
@@ -621,10 +685,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     admin_info_msg = await message.answer(message_text)
     asyncio.create_task(schedule_message_deletion(admin_info_msg, Durations.DELETE_ADMIN_REPLY_DELAY))
 
-    # Находим исходное сообщение с кнопками и редактируем его
     try:
-        # Это потребует более сложной логики, если сообщение может быть в разных чатах.
-        # Для простоты предположим, что админ, отклоняющий отзыв, и FINAL_CHECK_ADMIN - один и тот же.
         review = await db_manager.get_review_by_id(review_id)
         if review and review.admin_message_id:
             original_message = await bot.edit_message_caption(
@@ -637,7 +698,6 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
         logger.warning(f"Не удалось отредактировать исходное сообщение об отклонении отзыва {review_id}: {e}")
 
     await state.clear()
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
 @router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
@@ -843,67 +903,126 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     await state.clear()
 
-# --- НОВЫЙ БЛОК: НАГРАЖДЕНИЕ ТОП-ПОЛЬЗОВАТЕЛЕЙ ---
-@router.message(Command("reward_top"), F.from_user.id.in_(ADMINS))
-async def reward_top_start(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
+# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ НАГРАДАМИ СТАТИСТИКИ ---
 
-    top_users = await db_manager.get_top_10_users()
+async def show_reward_settings_menu(message_or_callback: Message | CallbackQuery, state: FSMContext):
+    """Отображает меню настроек наград."""
+    await state.set_state(AdminState.REWARD_SETTINGS_MENU)
     
-    # Берем только то количество пользователей, для которых есть награды в конфиге
-    rewards_config = Rewards.TOP_USER_REWARDS
-    users_to_reward = [user for user in top_users if (top_users.index(user) + 1) in rewards_config]
+    settings = await db_manager.get_reward_settings()
+    timer_hours_str = await db_manager.get_system_setting("reward_timer_hours")
+    timer_hours = int(timer_hours_str) if timer_hours_str and timer_hours_str.isdigit() else 24
+    
+    text = "⚙️ **Управление наградами для топа статистики**\n\n**Текущие настройки:**\n"
+    if not settings:
+        text += "Призовые места не настроены.\n"
+    else:
+        for setting in settings:
+            text += f" • {setting.place}-е место: {setting.reward_amount} ⭐\n"
+    
+    text += f"\n**Период выдачи:** раз в {timer_hours} часов."
+    
+    markup = inline.get_reward_settings_menu_keyboard(timer_hours)
 
-    if not users_to_reward:
-        await message.answer("В топе нет пользователей для награждения, или награды не настроены.")
+    if isinstance(message_or_callback, Message):
+        await message_or_callback.answer(text, reply_markup=markup)
+    else:
+        await message_or_callback.message.edit_text(text, reply_markup=markup)
+
+
+@router.message(Command("stat_rewards"), F.from_user.id.in_(ADMINS))
+async def stat_rewards_handler(message: Message, state: FSMContext):
+    await show_reward_settings_menu(message, state)
+
+
+@router.callback_query(F.data == "reward_setting:set_places", AdminState.REWARD_SETTINGS_MENU)
+async def ask_places_count(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminState.REWARD_SET_PLACES_COUNT)
+    prompt_msg = await callback.message.edit_text(
+        "Введите новое количество призовых мест (например, 3). Это действие сбросит текущие суммы наград.",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.message(AdminState.REWARD_SET_PLACES_COUNT, F.text)
+async def process_places_count(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    if not message.text.isdigit() or not (0 < int(message.text) <= 10):
+        await message.answer("❌ Введите целое число от 1 до 10.")
+        return
+    
+    count = int(message.text)
+    new_settings = [{"place": i, "reward_amount": 0.0} for i in range(1, count + 1)]
+    await db_manager.update_reward_settings(new_settings)
+    
+    await message.answer(f"✅ Количество призовых мест установлено на {count}. Теперь настройте суммы наград.")
+    await show_reward_settings_menu(message, state)
+
+
+@router.callback_query(F.data == "reward_setting:set_amounts", AdminState.REWARD_SETTINGS_MENU)
+async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminState.REWARD_SET_AMOUNT_FOR_PLACE)
+    prompt_msg = await callback.message.edit_text(
+        "Введите данные для изменения награды в формате: `МЕСТО СУММА`\nНапример: `1 50.5` или `3 15`",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.message(AdminState.REWARD_SET_AMOUNT_FOR_PLACE, F.text)
+async def process_reward_amount(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    try:
+        place_str, amount_str = message.text.split()
+        place = int(place_str)
+        amount = float(amount_str.replace(',', '.'))
+        if place <= 0 or amount < 0: raise ValueError
+    except (ValueError, TypeError):
+        await message.answer("❌ Неверный формат. Используйте: `МЕСТО СУММА`, например: `1 50.5`")
         return
 
-    confirmation_text = "🏆 Вы собираетесь наградить лучших пользователей:\n\n"
-    for i, (user_id, display_name, balance, _) in enumerate(users_to_reward):
-        place = i + 1
-        reward_amount = rewards_config.get(place)
-        if reward_amount:
-            confirmation_text += f"<b>{place}-е место:</b> {display_name} (ID: {user_id}) - получит {reward_amount} ⭐\n"
+    settings = await db_manager.get_reward_settings()
+    settings_dict = {s.place: s for s in settings}
 
-    confirmation_text += "\nПодтверждаете действие?"
-    await message.answer(confirmation_text, reply_markup=inline.get_reward_top_confirmation_keyboard())
-
-@router.callback_query(F.data == "confirm_reward_top", F.from_user.id.in_(ADMINS))
-async def reward_top_confirm(callback: CallbackQuery, bot: Bot):
-    await callback.message.edit_text("⏳ Начинаю рассылку наград...")
+    if place not in settings_dict:
+        await message.answer(f"❌ Призовое место №{place} не настроено. Сначала установите количество призовых мест.")
+        return
     
-    top_users = await db_manager.get_top_10_users()
-    rewards_config = Rewards.TOP_USER_REWARDS
-    users_to_reward = [user for user in top_users if (top_users.index(user) + 1) in rewards_config]
-
-    rewarded_count = 0
-    errors_count = 0
+    settings_dict[place].reward_amount = amount
     
-    for i, (user_id, display_name, _, _) in enumerate(users_to_reward):
-        place = i + 1
-        reward_amount = rewards_config.get(place)
-        if reward_amount:
-            await db_manager.update_balance(user_id, reward_amount)
-            try:
-                await bot.send_message(
-                    user_id,
-                    f"🎉 Поздравляем! Вы заняли **{place}-е место** в топе пользователей и получаете награду в размере **{reward_amount} ⭐**!"
-                )
-                rewarded_count += 1
-            except Exception as e:
-                errors_count += 1
-                logger.error(f"Не удалось уведомить пользователя {user_id} о награде: {e}")
+    new_settings_list = [{"place": p, "reward_amount": s.reward_amount} for p, s in settings_dict.items()]
+    await db_manager.update_reward_settings(new_settings_list)
 
-    await callback.message.edit_text(f"✅ Готово!\n\nНаграждено: {rewarded_count}\nОшибок: {errors_count}")
-    await callback.answer()
+    await message.answer(f"✅ Награда для {place}-го места установлена на {amount} ⭐.")
+    await show_reward_settings_menu(message, state)
 
-@router.callback_query(F.data == "cancel_reward_top", F.from_user.id.in_(ADMINS))
-async def reward_top_cancel(callback: CallbackQuery):
-    await callback.message.delete()
-    await callback.answer("Награждение отменено.", show_alert=True)
 
+@router.callback_query(F.data == "reward_setting:set_timer", AdminState.REWARD_SETTINGS_MENU)
+async def ask_timer_duration(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminState.REWARD_SET_TIMER)
+    prompt_msg = await callback.message.edit_text(
+        "Введите интервал автоматической выдачи наград в часах (например, 24).",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.message(AdminState.REWARD_SET_TIMER, F.text)
+async def process_timer_duration(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    if not message.text.isdigit() or int(message.text) <= 0:
+        await message.answer("❌ Введите целое положительное число.")
+        return
+    
+    hours = message.text
+    await db_manager.set_system_setting("reward_timer_hours", hours)
+    # Сбрасываем таймер, чтобы новый интервал применился со следующего запуска
+    await db_manager.set_system_setting("next_reward_timestamp", "0")
+    
+    await message.answer(f"✅ Интервал выдачи наград установлен на {hours} часов. Изменения вступят в силу после следующего цикла.")
+    await show_reward_settings_menu(message, state)
+    
 
 # --- Обработчики состояний (FSM) ---
 

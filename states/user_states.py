@@ -55,13 +55,12 @@ class UserState(StatesGroup):
     PROMO_ENTER_CODE = State()
     PROMO_AWAITING_CHOICE = State()
 
-    # --- ИЗМЕНЕНИЕ: Расширенные состояния для поддержки ---
+    # Состояния для поддержки
     SUPPORT_AWAITING_QUESTION = State()
     SUPPORT_AWAITING_PHOTO_CHOICE = State()
     SUPPORT_AWAITING_PHOTO = State()
-    # --------------------------------------------------
 
-    # --- НОВЫE СОСТОЯНИЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+    # Состояния для реферальной системы
     REFERRAL_PATH_SELECTION = State()
     REFERRAL_YANDEX_SUBPATH_SELECTION = State()
 
@@ -70,17 +69,15 @@ class AdminState(StatesGroup):
     # Состояния для указания причин
     PROVIDE_REJECTION_REASON = State()
     PROVIDE_WARN_REASON = State()
-    # --- ДОБАВЛЕНО: Новое состояние для причины отклонения финального отзыва ---
     PROVIDE_FINAL_REJECTION_REASON = State()
     
     # Состояния для предоставления текста отзыва
     PROVIDE_GOOGLE_REVIEW_TEXT = State()
     PROVIDE_YANDEX_REVIEW_TEXT = State()
     
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ГЕНЕРАЦИИ С ИИ ---
+    # Состояния для генерации с ИИ
     AI_AWAITING_SCENARIO = State()
     AI_AWAITING_MODERATION = State()
-    # ----------------------------------------
     
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
@@ -96,15 +93,20 @@ class AdminState(StatesGroup):
     PROMO_REWARD = State()
     PROMO_USES = State()
     
-    # --- ИЗМЕНЕНИЕ: Расширенные состояния для поддержки ---
+    # Состояния для поддержки
     SUPPORT_AWAITING_ANSWER = State()
     SUPPORT_AWAITING_WARN_REASON = State()
     SUPPORT_AWAITING_COOLDOWN_HOURS = State()
-    # ----------------------------------------------------
 
     # Состояния для управления ссылками
     DELETE_LINK_ID = State()
-    RETURN_LINK_ID = State() # Новое состояние для возврата ссылки
+    RETURN_LINK_ID = State()
 
     # Состояния для процесса бана
     BAN_REASON = State()
+
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
+    REWARD_SETTINGS_MENU = State()
+    REWARD_SET_PLACES_COUNT = State()
+    REWARD_SET_AMOUNT_FOR_PLACE = State()
+    REWARD_SET_TIMER = State()

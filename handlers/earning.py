@@ -16,7 +16,7 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS, GOOGLE_API_KEYS
+from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -24,9 +24,6 @@ from logic.user_notifications import (
     handle_task_timeout,
     send_confirmation_button
 )
-# --- ДОБАВЛЕНО: Импорт для OCR и логики отклонения ---
-from logic.ocr_helper import analyze_screenshot
-from logic.admin_logic import process_rejection_reason_logic
 from utils.tester_filter import IsTester
 
 router = Router()
@@ -207,7 +204,7 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
                 "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
                 "2. Вас переведет на профиль Google Карты.\n"
                 "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
-                reply_markup=inline.get_google_back_from_instructions_keyboard(), # Новая клавиатура
+                reply_markup=inline.get_google_back_from_instructions_keyboard(),
                 disable_web_page_preview=True
             )
         except TelegramBadRequest as e:
@@ -250,7 +247,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
             reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile")
         )
     except Exception as e:
-        print(f"Ошибка отправки фото профиля админу: {e}")
+        logger.error(f"Ошибка отправки фото профиля админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
@@ -263,7 +260,7 @@ async def show_google_last_reviews_instructions(callback: CallbackQuery):
                 "1. Откройте ваш профиль в Google Картах.\n"
                 "2. Перейдите во вкладку 'Отзывы'.\n"
                 "3. Сделайте скриншот, на котором видны даты ваших последних отзывов.",
-                reply_markup=inline.get_google_back_from_last_reviews_keyboard() # Новая клавиатура
+                reply_markup=inline.get_google_back_from_last_reviews_keyboard()
             )
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
@@ -285,54 +282,29 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
 
-    user_id = message.from_user.id
     photo_file_id = message.photo[-1].file_id
     
-    # --- НАЧАЛО ИНТЕГРАЦИИ OCR ---
-    if GOOGLE_API_KEYS:
-        status_msg = await message.answer("🤖 Анализирую дату последнего отзыва с помощью AI...")
-        ocr_result = await analyze_screenshot(bot, photo_file_id, 'review_date')
-        await status_msg.delete()
-
-        if ocr_result['status'] == 'success':
-            last_review_date = ocr_result['date']
-            days_since_last_review = (datetime.date.today() - last_review_date).days
-            
-            if days_since_last_review < 3:
-                reason = f"Ваш последний отзыв был написан менее 3 дней назад ({last_review_date.strftime('%d.%m.%Y')}). Пожалуйста, попробуйте позже."
-                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-                await process_rejection_reason_logic(bot, user_id, reason, "google_last_reviews", user_state)
-                await message.answer(f"❌ **Авто-отклонение:** {reason}")
-                return
-
-            else: # Проверка пройдена
-                await message.answer("✅ AI подтвердил, что ваш аккаунт подходит. Можно продолжать.")
-                await state.set_state(UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
-                await bot.send_message(user_id, "Отзывы прошли проверку. Можете продолжить.", reply_markup=inline.get_google_continue_writing_keyboard())
-                return
-
-    # --- Если AI не уверен или отключен, отправляем админу ---
-    await message.answer("Ваши последние отзывы отправлены на ручную проверку. Ожидайте...")
+    await message.answer("Ваши последние отзывы отправлены на проверку. Ожидайте...")
     await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
     
-    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{user_id}</code>)"
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
-    
-    if GOOGLE_API_KEYS and ocr_result['status'] != 'success':
-        caption = f"⚠️ **AI не уверен.**\n{caption}\nПричина: {ocr_result.get('reason', 'Неизвестно')}"
 
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
             photo=photo_file_id,
             caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(user_id, "google_last_reviews")
+            reply_markup=inline.get_admin_verification_keyboard(
+                user_id=message.from_user.id, 
+                context="google_last_reviews",
+                file_id=photo_file_id
+            )
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
-    # --- КОНЕЦ ИНТЕГРАЦИИ OCR ---
 
 
 @router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
@@ -370,7 +342,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         try:
             scheduler.remove_job(timeout_job_id)
         except Exception as e:
-            print(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+            logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
 
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
     if callback.message:
@@ -420,7 +392,7 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
         try:
             scheduler.remove_job(timeout_job_id)
         except Exception as e:
-            print(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+            logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
     
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
     if callback.message:
@@ -556,53 +528,31 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
-    user_id = message.from_user.id
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
-
-    # --- НАЧАЛО ИНТЕГРАЦИИ OCR ---
-    if GOOGLE_API_KEYS:
-        status_msg = await message.answer("🤖 Анализирую ваш уровень 'Знатока города' с помощью AI...")
-        ocr_result = await analyze_screenshot(bot, photo_file_id, 'yandex_level')
-        await status_msg.delete()
-
-        if ocr_result['status'] == 'success':
-            level = ocr_result['level']
-            if level < 3:
-                reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
-                user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-                await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
-                await message.answer(f"❌ **Авто-отклонение:** {reason}")
-                return
-            else: # Проверка пройдена
-                await message.answer(f"✅ AI подтвердил ваш уровень ({level}). Можно продолжать.")
-                await state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
-                await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
-                return
     
-    # --- Если AI не уверен или отключен, отправляем админу ---
-    await message.answer("Ваш скриншот отправлен на ручную проверку. Ожидайте...")
+    await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
     
-    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{user_id}</code>)"
+    user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
     caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что уровень знатока не ниже 3 и видна дата последнего отзыва.\n"
                f"{user_info_text}")
-    
-    if GOOGLE_API_KEYS and ocr_result['status'] != 'success':
-        caption = f"⚠️ **AI не уверен.**\n{caption}\nПричина: {ocr_result.get('reason', 'Неизвестно')}"
     
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
             photo=photo_file_id,
             caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(user_id, "yandex_profile_screenshot")
+            reply_markup=inline.get_admin_verification_keyboard(
+                user_id=message.from_user.id,
+                context="yandex_profile_screenshot",
+                file_id=photo_file_id
+            )
         )
     except Exception as e:
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
-    # --- КОНЕЦ ИНТЕГРАЦИИ OCR ---
 
 
 @router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
@@ -775,6 +725,8 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         )
         
         await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        
+        await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
 
     except Exception as e:
         logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)

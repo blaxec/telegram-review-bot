@@ -3,9 +3,10 @@
 import logging
 import datetime
 import re
+import json
 from io import BytesIO
 from itertools import cycle
-from typing import Literal, Dict, Any, List
+from typing import Literal, Dict, Any, List, Optional
 
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
@@ -23,6 +24,8 @@ class GeminiKeyManager:
         self.keys = api_keys
         self.key_iterator = cycle(self.keys)
         self.exhausted_keys = set()
+        if not self.keys:
+            logger.warning("OCR Key Manager initialized with no keys.")
 
     def get_next_key(self) -> str | None:
         """Возвращает следующий рабочий ключ или None, если все исчерпаны."""
@@ -32,7 +35,6 @@ class GeminiKeyManager:
             logger.error("All Google API keys are exhausted.")
             return None
         
-        # Прокручиваем итератор, пока не найдем рабочий ключ
         for _ in range(len(self.keys)):
             key = next(self.key_iterator)
             if key not in self.exhausted_keys:
@@ -44,7 +46,6 @@ class GeminiKeyManager:
         logger.warning(f"Google API key ending with '...{key[-4:]}' has been marked as exhausted.")
         self.exhausted_keys.add(key)
 
-# Создаем один экземпляр менеджера для всего бота
 key_manager = GeminiKeyManager(GOOGLE_API_KEYS)
 
 
@@ -61,28 +62,23 @@ async def _get_image_from_telegram(bot: Bot, file_id: str) -> BytesIO | None:
         logger.error(f"Failed to download image with file_id {file_id}: {e}")
         return None
 
-def _parse_yandex_level(text: str) -> int | None:
-    """Извлекает числовой уровень из текста, возвращенного AI."""
-    # Ищем числа (целые или с плавающей точкой)
-    numbers = re.findall(r'\d+', text)
-    if numbers:
-        try:
-            # Берем первое найденное число
-            return int(numbers[0])
-        except (ValueError, IndexError):
-            return None
-    return None
-
-def _parse_review_date(text: str) -> datetime.date | None:
-    """Извлекает и парсит дату из текста, возвращенного AI."""
-    # Ищем дату в формате ДД.ММ.ГГГГ
-    match = re.search(r'(\d{2})\.(\d{2})\.(\d{4})', text)
+def _parse_relative_date(text: str, today: datetime.date) -> Optional[datetime.date]:
+    """Пытается распарсить относительные даты типа 'неделю назад'."""
+    text = text.lower()
+    match = re.search(r'(\d+)\s+(день|дня|дней|недел|месяц)', text)
     if match:
-        try:
-            day, month, year = map(int, match.groups())
-            return datetime.date(year, month, day)
-        except ValueError:
-            return None
+        value = int(match.group(1))
+        unit = match.group(2)
+        if 'ден' in unit:
+            return today - datetime.timedelta(days=value)
+        if 'недел' in unit:
+            return today - datetime.timedelta(weeks=value)
+        if 'месяц' in unit:
+            return today - datetime.timedelta(days=value * 30) # Приблизительно
+    if 'вчера' in text:
+        return today - datetime.timedelta(days=1)
+    if 'сегодня' in text:
+        return today
     return None
 
 
@@ -97,22 +93,37 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
     if not image_bytes:
         return {"status": "error", "message": "Failed to download image from Telegram."}
 
-    image_for_api = {'mime_type': 'image/png', 'data': image_bytes.getvalue()}
+    image_for_api = {'mime_type': 'image/jpeg', 'data': image_bytes.getvalue()}
     
-    # Определяем промпт в зависимости от задачи
+    today_str = datetime.date.today().strftime('%d.%m.%Y')
+    
+    # Улучшенные промпты с требованием JSON-ответа
     if task == 'yandex_level':
-        prompt = "На этом изображении профиля Яндекс Карт найди уровень 'Знатока города'. В ответе напиши только одно число, обозначающее этот уровень. Например: 5"
+        prompt = f"""
+        Проанализируй это изображение профиля Яндекс Карт. Найди уровень "Знатока города".
+        Твоя задача вернуть ответ ТОЛЬКО в формате JSON.
+        - Если ты уверенно видишь числовой уровень, верни: {{"status": "success", "level": ЧИСЛО}}
+        - Если ты не можешь найти уровень, верни: {{"status": "uncertain", "reason": "Уровень не найден на изображении"}}
+        Пример ответа: {{"status": "success", "level": 5}}
+        """
     elif task == 'review_date':
-        prompt = "На этом скриншоте из профиля отзывов найди дату самого последнего (верхнего) отзыва. В ответе напиши только эту дату в формате ДД.ММ.ГГГГ. Например: 21.08.2025"
+        prompt = f"""
+        Проанализируй это изображение с отзывом. Сегодняшняя дата: {today_str}.
+        Найди дату самого последнего (верхнего) отзыва.
+        Твоя задача вернуть ответ ТОЛЬКО в формате JSON.
+        - Если ты видишь точную дату (например, 21.08.2025), верни: {{"status": "success", "date": "ДД.ММ.ГГГГ"}}
+        - Если ты видишь относительную дату (например, "неделю назад", "вчера"), верни: {{"status": "relative", "text": "ОРИГИНАЛЬНЫЙ_ТЕКСТ_ДАТЫ"}}
+        - Если ты не можешь найти дату, верни: {{"status": "uncertain", "reason": "Дата не найдена на изображении"}}
+        Пример ответа 1: {{"status": "success", "date": "21.08.2025"}}
+        Пример ответа 2: {{"status": "relative", "text": "неделю назад"}}
+        """
     else:
         return {"status": "error", "message": f"Unknown OCR task: {task}"}
 
-    # Цикл для перебора ключей в случае ошибки квоты
     for _ in range(len(GOOGLE_API_KEYS)):
         api_key = key_manager.get_next_key()
         if not api_key:
             try:
-                # Уведомляем админа, что все ключи закончились
                 await bot.send_message(ADMIN_ID_1, "🚨 ВНИМАНИЕ! Все API ключи для распознавания изображений (Google Gemini) исчерпали свой дневной лимит. Автопроверка скриншотов отключена до следующего дня.")
             except Exception as e:
                 logger.error(f"Failed to notify admin about exhausted keys: {e}")
@@ -125,36 +136,38 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
             logger.info(f"Attempting OCR with key ...{api_key[-4:]} for task '{task}'.")
             response = await model.generate_content_async([prompt, image_for_api])
             
-            # --- Обработка результата ---
-            raw_text = response.text.strip()
+            raw_text = response.text.strip().replace("`", "") # Очистка от markdown
             logger.info(f"Gemini response for task '{task}': '{raw_text}'")
-
-            if task == 'yandex_level':
-                level = _parse_yandex_level(raw_text)
-                if level is not None:
-                    return {"status": "success", "level": level}
             
-            elif task == 'review_date':
-                date = _parse_review_date(raw_text)
-                if date:
-                    return {"status": "success", "date": date}
+            try:
+                data = json.loads(raw_text)
+                
+                if data.get("status") == "success":
+                    return data # Возвращаем успешный JSON как есть
+                
+                if data.get("status") == "relative":
+                    parsed_date = _parse_relative_date(data.get("text", ""), datetime.date.today())
+                    if parsed_date:
+                        return {"status": "success", "date": parsed_date.strftime('%d.%m.%Y')}
+                    else:
+                        return {"status": "uncertain", "reason": f"Could not parse relative date: {data.get('text')}"}
 
-            # Если парсинг не удался, считаем результат неопределенным
-            return {"status": "uncertain", "reason": "Could not parse AI response.", "raw_text": raw_text}
+                return data # Возвращаем uncertain
+
+            except json.JSONDecodeError:
+                return {"status": "uncertain", "reason": "AI returned non-JSON response.", "raw_text": raw_text}
 
         except google_exceptions.ResourceExhausted as e:
             logger.warning(f"Quota exhausted for Google API key ...{api_key[-4:]}. Trying next key.")
             key_manager.mark_key_as_exhausted(api_key)
             try:
-                # Уведомляем админа, что один из ключей закончился
                 await bot.send_message(ADMIN_ID_1, f"🔔 API ключ Google Gemini (заканчивается на ...{api_key[-4:]}) исчерпал свой дневной лимит. Бот автоматически переключился на следующий.")
             except Exception as admin_notify_error:
                 logger.error(f"Failed to notify admin about exhausted key: {admin_notify_error}")
-            continue # Переходим к следующему ключу
+            continue
 
         except Exception as e:
             logger.exception(f"An unexpected error occurred with Google Gemini API using key ...{api_key[-4:]}")
             return {"status": "error", "message": str(e)}
 
-    # Если мы вышли из цикла, значит все ключи были перебраны и не сработали
     return {"status": "error", "message": "All available API keys failed or are exhausted."}

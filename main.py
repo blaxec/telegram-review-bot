@@ -11,11 +11,12 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, 
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, ADMIN_ID_1
+from config import BOT_TOKEN
 from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system, referral
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
+from logic.reward_logic import distribute_rewards
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,14 +38,14 @@ async def set_bot_commands(bot: Bot):
     
     admin_commands = user_commands + [
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
+        BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
         BotCommand(command="viewhold", description="⏳ Холд пользователя"),
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны"),
         BotCommand(command="fine", description="💸 Выписать штраф"),
         BotCommand(command="ban", description="🚫 Забанить"),
         BotCommand(command="unban", description="✅ Разбанить"),
-        BotCommand(command="create_promo", description="✨ Создать промокод"),
-        BotCommand(command="reward_top", description="🏆 Наградить топ пользователей")
+        BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
 
     tester_commands = user_commands + [
@@ -58,7 +59,6 @@ async def set_bot_commands(bot: Bot):
         try:
             commands_to_set = admin_commands
             if admin_id in TESTER_IDS:
-                # Добавляем команду skip, если админ также является тестером, избегая дубликатов
                 commands_to_set = admin_commands + [cmd for cmd in tester_commands if cmd not in admin_commands]
             
             await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
@@ -109,31 +109,22 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ: ФИНАЛЬНЫЙ, ПРАВИЛЬНЫЙ ПОРЯДОК РЕГИСТРАЦИИ РОУТЕРОВ ---
-    # 1. Сначала регистрируем роутеры, которые ловят КОМАНДЫ.
-    # Это гарантирует, что /skip, /start и другие команды будут пойманы до того,
-    # как сработают обработчики сообщений в состояниях.
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
-    
-    # 2. Роутер earning идет следующим, так как в нем есть команда /skip.
     dp.include_router(earning.router)
-    
-    # 3. Затем все остальные роутеры, которые в основном работают с состояниями (FSM) и колбэками.
-    # Порядок между ними уже не так критичен.
     dp.include_router(referral.router)
     dp.include_router(profile.router)
     dp.include_router(support.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
-    
-    # 4. Роутер "other" для отлова неизвестных команд ВСЕГДА ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ.
     dp.include_router(other.router)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
     
     dp.errors.register(handle_telegram_bad_request)
+
+    # Добавляем фоновую задачу для проверки и выдачи наград
+    scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
 
     try:
         scheduler.start()

@@ -20,10 +20,8 @@ class User(Base):
     referrer_id = Column(BigInteger, ForeignKey('users.id'), nullable=True)
     referrer = relationship("User", remote_side=[id])
 
-    # --- НОВЫЕ ПОЛЯ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
-    referral_path = Column(String, nullable=True) # e.g., 'google', 'gmail', 'yandex'
-    referral_subpath = Column(String, nullable=True) # e.g., 'with_text', 'without_text' for yandex
-    # -------------------------------------------
+    referral_path = Column(String, nullable=True)
+    referral_subpath = Column(String, nullable=True)
 
     warnings = Column(Integer, default=0)
     google_cooldown_until = Column(DateTime, nullable=True)
@@ -37,10 +35,8 @@ class User(Base):
     last_unban_request_at = Column(DateTime, nullable=True)
     phone_number = Column(String, nullable=True)
 
-    # --- НОВЫЕ ПОЛЯ ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
     support_warnings = Column(Integer, default=0, nullable=False)
     support_cooldown_until = Column(DateTime, nullable=True)
-    # ------------------------------------------
 
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
@@ -61,9 +57,7 @@ class Review(Base):
     
     review_text = Column(String, nullable=True)
     admin_message_id = Column(BigInteger, nullable=True)
-    # --- ИЗМЕНЕНИЕ: Добавлено поле для хранения file_id скриншота ---
     screenshot_file_id = Column(String, nullable=True)
-    # -----------------------------------------------------------
     
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")
@@ -93,8 +87,6 @@ class WithdrawalRequest(Base):
 
     user = relationship("User")
 
-# --- Таблицы для промокодов ---
-
 class PromoCode(Base):
     __tablename__ = 'promo_codes'
 
@@ -121,8 +113,6 @@ class PromoActivation(Base):
     user = relationship("User", back_populates="promo_activations")
     promo_code = relationship("PromoCode", back_populates="activations")
 
-# --- ТАБЛИЦА ДЛЯ СИСТЕМЫ ПОДДЕРЖКИ ---
-
 class SupportTicket(Base):
     __tablename__ = 'support_tickets'
 
@@ -134,9 +124,7 @@ class SupportTicket(Base):
     admin_message_id_1 = Column(BigInteger, nullable=True)
     admin_message_id_2 = Column(BigInteger, nullable=True)
     
-    # --- НОВОЕ ПОЛЕ ---
     photo_file_id = Column(String, nullable=True)
-    # ------------------
     
     status = Column(Enum('open', 'claimed', 'closed', name='ticket_status_enum'), default='open', nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -144,3 +132,14 @@ class SupportTicket(Base):
     admin_id = Column(BigInteger, nullable=True)
 
     user = relationship("User", back_populates="support_tickets")
+
+# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ НАСТРОЕК НАГРАД ---
+class RewardSetting(Base):
+    __tablename__ = 'reward_settings'
+    place = Column(Integer, primary_key=True)
+    reward_amount = Column(Float, nullable=False)
+
+class SystemSetting(Base):
+    __tablename__ = 'system_settings'
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=True)

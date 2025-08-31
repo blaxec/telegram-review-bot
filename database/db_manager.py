@@ -2,13 +2,15 @@
 
 import datetime
 import logging
+from typing import Union, List, Tuple, Dict, Optional
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy import select, update, and_, delete, func, desc, case
+from sqlalchemy import select, update, and_, delete, func, desc, case, insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
-from typing import Union, List, Tuple
 
-from database.models import Base, User, Review, Link, WithdrawalRequest, PromoCode, PromoActivation, SupportTicket
+from database.models import (Base, User, Review, Link, WithdrawalRequest, 
+                             PromoCode, PromoActivation, SupportTicket,
+                             RewardSetting, SystemSetting)
 from config import DATABASE_URL, Durations, Limits
 
 logger = logging.getLogger(__name__)
@@ -172,7 +174,6 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = Durat
     current_warnings = 0
     async with async_session() as session:
         async with session.begin():
-            # --- ИЗМЕНЕНИЕ: Добавлена блокировка with_for_update для атомарности ---
             user = await session.get(User, user_id, with_for_update=True)
             if not user:
                 return 0
@@ -490,14 +491,11 @@ async def create_promo_activation(user_id: int, promo_id: int, status: str) -> P
             )
             session.add(new_activation)
             if status == 'completed':
-                # ИЗМЕНЕНИЕ: Безопасно получаем и обновляем промокод внутри одной транзакции
                 promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
                 if promo_to_update:
                     promo_to_update.current_uses += 1
                 else:
-                    # Обработка редкого случая, когда промокод удален между проверкой и созданием
                     logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
-                    # Можно вызвать исключение, чтобы откатить транзакцию
                     raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
 
             await session.flush()
@@ -520,7 +518,6 @@ async def complete_promo_activation(activation_id: int) -> bool:
             if not activation or activation.status != 'pending_condition':
                 return False
             
-            # Блокируем промокод для безопасного обновления
             promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
             if promo_to_update.current_uses >= promo_to_update.total_uses:
                 logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
@@ -573,7 +570,6 @@ async def close_support_ticket(ticket_id: int) -> bool:
             ticket.status = 'closed'
             return True
 
-# --- НОВАЯ ФУНКЦИЯ для предупреждений в поддержке ---
 async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> int:
     """Добавляет предупреждение и, если нужно, кулдаун для системы поддержки."""
     async with async_session() as session:
@@ -628,7 +624,7 @@ async def update_last_unban_request_time(user_id: int):
             if user:
                 user.last_unban_request_at = datetime.datetime.utcnow()
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ---
+# --- Функции для реферальной системы ---
 
 async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -> bool:
     """Сохраняет выбранный пользователем реферальный путь."""
@@ -640,3 +636,40 @@ async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -
             user.referral_path = path
             user.referral_subpath = subpath
             return True
+            
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
+
+async def get_reward_settings() -> List[RewardSetting]:
+    """Получает все настройки наград из базы."""
+    async with async_session() as session:
+        result = await session.execute(select(RewardSetting).order_by(RewardSetting.place))
+        return result.scalars().all()
+
+async def update_reward_settings(settings: List[Dict[str, Union[int, float]]]):
+    """Полностью перезаписывает настройки наград."""
+    async with async_session() as session:
+        async with session.begin():
+            # Сначала удаляем все старые настройки
+            await session.execute(delete(RewardSetting))
+            # Затем добавляем новые
+            if settings:
+                # Используем ORM-объекты для вставки
+                objects = [RewardSetting(**s) for s in settings]
+                session.add_all(objects)
+
+async def get_system_setting(key: str) -> Optional[str]:
+    """Получает значение системной настройки по ключу."""
+    async with async_session() as session:
+        setting = await session.get(SystemSetting, key)
+        return setting.value if setting else None
+
+async def set_system_setting(key: str, value: str):
+    """Устанавливает или обновляет значение системной настройки."""
+    async with async_session() as session:
+        async with session.begin():
+            setting = await session.get(SystemSetting, key)
+            if setting:
+                setting.value = value
+            else:
+                new_setting = SystemSetting(key=key, value=value)
+                session.add(new_setting)

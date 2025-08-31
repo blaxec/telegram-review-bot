@@ -2,7 +2,7 @@
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import Rewards
+from config import Rewards, GOOGLE_API_KEYS
 
 # --- /start и навигация ---
 
@@ -241,12 +241,18 @@ def get_gmail_back_to_verification_keyboard() -> InlineKeyboardMarkup:
     
 # --- Админские клавиатуры ---
 
-def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboardMarkup:
+def get_admin_verification_keyboard(user_id: int, context: str, file_id: str = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    
+    # Добавляем кнопку OCR, только если контекст это подразумевает и ключи есть
+    ocr_contexts = ['yandex_profile_screenshot', 'google_last_reviews']
+    if context in ocr_contexts and GOOGLE_API_KEYS and file_id:
+        builder.button(text="🤖 Проверить с ИИ", callback_data=f"admin_ocr:{context}:{user_id}:{file_id}")
+
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"admin_verify:reject:{context}:{user_id}")
     builder.button(text="⚠️ Выдать предупреждение", callback_data=f"admin_verify:warn:{context}:{user_id}")
-    builder.adjust(2, 1)
+    builder.adjust(1, 2, 1) # Гибкая разметка
     return builder.as_markup()
 
 def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
@@ -349,15 +355,15 @@ def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_reward_top_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для подтверждения награждения топа."""
-    buttons = [
-        [
-            InlineKeyboardButton(text="✅ Да, наградить", callback_data="confirm_reward_top"),
-            InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_reward_top")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def get_reward_settings_menu_keyboard(current_timer_hours: int) -> InlineKeyboardMarkup:
+    """Меню управления настройками наград."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Изменить кол-во призовых мест", callback_data="reward_setting:set_places")
+    builder.button(text="💰 Изменить награды", callback_data="reward_setting:set_amounts")
+    builder.button(text=f"⏰ Таймер выдачи (сейчас: {current_timer_hours} ч)", callback_data="reward_setting:set_timer")
+    builder.button(text="⬅️ Назад", callback_data="cancel_action")
+    builder.adjust(1)
+    return builder.as_markup()
 
 # --- Клавиатуры для поддержки ---
 def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
@@ -401,7 +407,6 @@ def get_cancel_to_earning_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_earning')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- НОВЫЕ КЛАВИАТУРЫ ДЛЯ ПОДДЕРЖКИ ---
 def get_support_photo_choice_keyboard() -> InlineKeyboardMarkup:
     """Предлагает пользователю прикрепить фото к тикету."""
     buttons = [
