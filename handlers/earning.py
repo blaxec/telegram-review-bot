@@ -6,17 +6,16 @@ import asyncio
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import any_state
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from states.user_states import UserState, AdminState
+from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import ADMIN_ID_1, FINAL_CHECK_ADMIN, Durations, TESTER_IDS
+from config import FINAL_CHECK_ADMIN, Durations, TESTER_IDS
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -29,7 +28,7 @@ from utils.tester_filter import IsTester
 router = Router()
 logger = logging.getLogger(__name__)
 
-TEXT_ADMIN = ADMIN_ID_1
+TEXT_ADMIN = 1 # Ваш ID админа, который будет получать запросы на текст
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Планирует удаление сообщения через заданную задержку."""
@@ -233,12 +232,12 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     photo_file_id = message.photo[-1].file_id
     await state.update_data(profile_screenshot_id=photo_file_id)
     
-    response_msg = await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
-    await schedule_message_deletion(response_msg, 25)
-    
+    await message.answer("Ваш скриншот отправлен на проверку. Ожидайте...")
     await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
+    
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
     caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
+    
     try:
         await bot.send_photo(
             chat_id=FINAL_CHECK_ADMIN,
@@ -297,15 +296,13 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(
                 user_id=message.from_user.id, 
-                context="google_last_reviews",
-                file_id=photo_file_id
+                context="google_last_reviews"
             )
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
-
 
 @router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
 async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -545,8 +542,7 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(
                 user_id=message.from_user.id,
-                context="yandex_profile_screenshot",
-                file_id=photo_file_id
+                context="yandex_profile_screenshot"
             )
         )
     except Exception as e:

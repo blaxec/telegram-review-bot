@@ -241,18 +241,18 @@ def get_gmail_back_to_verification_keyboard() -> InlineKeyboardMarkup:
     
 # --- Админские клавиатуры ---
 
-def get_admin_verification_keyboard(user_id: int, context: str, file_id: str = None) -> InlineKeyboardMarkup:
+def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
-    # Добавляем кнопку OCR, только если контекст это подразумевает и ключи есть
-    ocr_contexts = ['yandex_profile_screenshot', 'google_last_reviews']
-    if context in ocr_contexts and GOOGLE_API_KEYS and file_id:
-        builder.button(text="🤖 Проверить с ИИ", callback_data=f"admin_ocr:{context}:{user_id}:{file_id}")
+    ocr_contexts = ['yandex_profile_screenshot', 'google_last_reviews', 'google_profile']
+    if context in ocr_contexts and GOOGLE_API_KEYS:
+        # file_id больше не передаем, он будет взят из сообщения
+        builder.button(text="🤖 Проверить с ИИ", callback_data=f"admin_ocr:{context}:{user_id}")
 
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
     builder.button(text="❌ Отклонить", callback_data=f"admin_verify:reject:{context}:{user_id}")
     builder.button(text="⚠️ Выдать предупреждение", callback_data=f"admin_verify:warn:{context}:{user_id}")
-    builder.adjust(1, 2, 1) # Гибкая разметка
+    builder.adjust(1, 2, 1)
     return builder.as_markup()
 
 def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
