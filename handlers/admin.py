@@ -335,23 +335,32 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
     await temp_message.delete()
 
-# --- НОВЫЙ БЛОК: ОБРАБОТКА OCR ---
+# --- ИСПРАВЛЕННЫЙ БЛОК: ОБРАБОТКА OCR ---
 @router.callback_query(F.data.startswith("admin_ocr:"), F.from_user.id.in_(ADMINS))
 async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Администратор нажимает кнопку для AI-проверки скриншота."""
+    # 1. Безопасно разбираем данные кнопки
     try:
-        _, context, user_id_str, file_id = callback.data.split(":")
+        _, context, user_id_str = callback.data.split(":")
         user_id = int(user_id_str)
     except (ValueError, IndexError):
         await callback.answer("Ошибка в данных кнопки.", show_alert=True)
         return
 
+    # 2. Безопасно получаем file_id из сообщения
+    if not (callback.message and callback.message.photo):
+        await callback.answer("Не удалось найти фото для анализа.", show_alert=True)
+        return
+    file_id = callback.message.photo[-1].file_id
+
+    # 3. Обновляем подпись и запускаем анализ
     await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n"
                                      f"🤖 *Запущена проверка с помощью ИИ...*")
     
     task_map = {
         'yandex_profile_screenshot': 'yandex_level',
-        'google_last_reviews': 'review_date'
+        'google_last_reviews': 'review_date',
+        'google_profile': 'review_date' # Проверяем дату последнего отзыва и на этом скриншоте
     }
     task = task_map.get(context)
 
@@ -363,18 +372,16 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     admin_id = callback.from_user.id
     
-    # --- Логика обработки результата OCR ---
+    # 4. Логика обработки результата OCR
     if ocr_result.get('status') == 'success':
         if task == 'yandex_level':
             level = ocr_result.get('level', 0)
             if level >= 3:
-                # Имитируем нажатие кнопки "Подтвердить"
                 dummy_callback = callback
                 dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
                 await admin_verification_handler(dummy_callback, state, bot)
                 await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Уровень знатока ({level}) достаточный. Заявка автоматически одобрена.")
             else:
-                # Авто-отклонение
                 reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
                 await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
                 await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Уровень {level} < 3.")
@@ -385,13 +392,11 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
             last_review_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
             days_diff = (datetime.date.today() - last_review_date).days
             if days_diff >= 3:
-                # Авто-одобрение
                 dummy_callback = callback
                 dummy_callback.data = f"admin_verify:confirm:{context}:{user_id}"
                 await admin_verification_handler(dummy_callback, state, bot)
                 await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Прошло {days_diff} дней. Заявка автоматически одобрена.")
             else:
-                # Авто-отклонение
                 reason = f"Ваш последний отзыв был написан менее 3 дней назад ({date_str})."
                 await process_rejection_reason_logic(bot, user_id, reason, "google_last_reviews", user_state)
                 await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **AI-отклонение:** Прошло {days_diff} < 3 дней.")
@@ -648,7 +653,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
-@router.callback_query(F.data.startswith('admin_final_approve:'), F.from_user.id.in_(ADMINS))
+@router.callback_query(F.data.startswith("admin_final_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     review_id = int(callback.data.split(':')[1])
     success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)

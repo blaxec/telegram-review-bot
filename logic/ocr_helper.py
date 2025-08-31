@@ -8,6 +8,7 @@ from io import BytesIO
 from itertools import cycle
 from typing import Literal, Dict, Any, List, Optional
 
+import pytz
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from aiogram import Bot
@@ -16,7 +17,9 @@ from config import GOOGLE_API_KEYS, ADMIN_ID_1
 
 logger = logging.getLogger(__name__)
 
-AnalysisTask = Literal['yandex_level', 'review_date']
+AnalysisTask = Literal['yandex_level', 'review_date', 'google_profile']
+# Устанавливаем часовой пояс Алматы
+almaty_tz = pytz.timezone('Asia/Almaty')
 
 class GeminiKeyManager:
     """Управляет ротацией и состоянием API-ключей Google Gemini."""
@@ -63,7 +66,7 @@ async def _get_image_from_telegram(bot: Bot, file_id: str) -> BytesIO | None:
         return None
 
 def _parse_relative_date(text: str, today: datetime.date) -> Optional[datetime.date]:
-    """Пытается распарсить относительные даты типа 'неделю назад'."""
+    """Пытается распарсить относительные даты типа 'неделю назад', используя 'сегодня' в правильном часовом поясе."""
     text = text.lower()
     match = re.search(r'(\d+)\s+(день|дня|дней|недел|месяц)', text)
     if match:
@@ -95,24 +98,27 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
 
     image_for_api = {'mime_type': 'image/jpeg', 'data': image_bytes.getvalue()}
     
-    today_str = datetime.date.today().strftime('%d.%m.%Y')
+    # Используем 'сегодня' по часовому поясу Алматы
+    today_in_almaty = datetime.datetime.now(almaty_tz).date()
+    today_str = today_in_almaty.strftime('%d.%m.%Y')
     
+    prompt = ""
     # Улучшенные промпты с требованием JSON-ответа
     if task == 'yandex_level':
         prompt = f"""
-        Проанализируй это изображение профиля Яндекс Карт. Найди уровень "Знатока города".
+        Проанализируй это изображение профиля Яндекс Карт. Найди числовой уровень "Знатока города".
         Твоя задача вернуть ответ ТОЛЬКО в формате JSON.
         - Если ты уверенно видишь числовой уровень, верни: {{"status": "success", "level": ЧИСЛО}}
         - Если ты не можешь найти уровень, верни: {{"status": "uncertain", "reason": "Уровень не найден на изображении"}}
-        Пример ответа: {{"status": "success", "level": 5}}
+        Пример успешного ответа: {{"status": "success", "level": 5}}
         """
-    elif task == 'review_date':
+    elif task == 'review_date' or task == 'google_profile': # Объединяем, так как задача одна
         prompt = f"""
-        Проанализируй это изображение с отзывом. Сегодняшняя дата: {today_str}.
+        Проанализируй это изображение из профиля Google Карт. Сегодняшняя дата: {today_str} (по времени Алматы).
         Найди дату самого последнего (верхнего) отзыва.
         Твоя задача вернуть ответ ТОЛЬКО в формате JSON.
-        - Если ты видишь точную дату (например, 21.08.2025), верни: {{"status": "success", "date": "ДД.ММ.ГГГГ"}}
-        - Если ты видишь относительную дату (например, "неделю назад", "вчера"), верни: {{"status": "relative", "text": "ОРИГИНАЛЬНЫЙ_ТЕКСТ_ДАТЫ"}}
+        - Если ты видишь точную дату (например, 21.08.2025), верни ее в поле "date": {{"status": "success", "date": "ДД.ММ.ГГГГ"}}
+        - Если ты видишь относительную дату (например, "неделю назад", "вчера"), верни ее в поле "text": {{"status": "relative", "text": "ОРИГИНАЛЬНЫЙ_ТЕКСТ_ДАТЫ"}}
         - Если ты не можешь найти дату, верни: {{"status": "uncertain", "reason": "Дата не найдена на изображении"}}
         Пример ответа 1: {{"status": "success", "date": "21.08.2025"}}
         Пример ответа 2: {{"status": "relative", "text": "неделю назад"}}
@@ -136,17 +142,23 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
             logger.info(f"Attempting OCR with key ...{api_key[-4:]} for task '{task}'.")
             response = await model.generate_content_async([prompt, image_for_api])
             
-            raw_text = response.text.strip().replace("`", "") # Очистка от markdown
-            logger.info(f"Gemini response for task '{task}': '{raw_text}'")
+            # Очищаем ответ от markdown обертки для JSON
+            clean_response_text = response.text.strip()
+            if clean_response_text.startswith("```json"):
+                clean_response_text = clean_response_text[7:]
+            if clean_response_text.endswith("```"):
+                clean_response_text = clean_response_text[:-3]
+            
+            logger.info(f"Gemini response for task '{task}': '{clean_response_text}'")
             
             try:
-                data = json.loads(raw_text)
+                data = json.loads(clean_response_text)
                 
                 if data.get("status") == "success":
-                    return data # Возвращаем успешный JSON как есть
+                    return data
                 
                 if data.get("status") == "relative":
-                    parsed_date = _parse_relative_date(data.get("text", ""), datetime.date.today())
+                    parsed_date = _parse_relative_date(data.get("text", ""), today_in_almaty)
                     if parsed_date:
                         return {"status": "success", "date": parsed_date.strftime('%d.%m.%Y')}
                     else:
@@ -155,7 +167,7 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
                 return data # Возвращаем uncertain
 
             except json.JSONDecodeError:
-                return {"status": "uncertain", "reason": "AI returned non-JSON response.", "raw_text": raw_text}
+                return {"status": "uncertain", "reason": "AI returned non-JSON response.", "raw_text": clean_response_text}
 
         except google_exceptions.ResourceExhausted as e:
             logger.warning(f"Quota exhausted for Google API key ...{api_key[-4:]}. Trying next key.")

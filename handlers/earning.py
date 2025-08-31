@@ -15,7 +15,8 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import FINAL_CHECK_ADMIN, Durations, TESTER_IDS
+# ИСПРАВЛЕНИЕ: Импортируем ADMIN_ID_1 вместо жестко заданного значения
+from config import FINAL_CHECK_ADMIN, Durations, TESTER_IDS, ADMIN_ID_1
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -28,7 +29,8 @@ from utils.tester_filter import IsTester
 router = Router()
 logger = logging.getLogger(__name__)
 
-TEXT_ADMIN = 1 # Ваш ID админа, который будет получать запросы на текст
+# ИСПРАВЛЕНИЕ: Убрали неверную переменную
+# TEXT_ADMIN = 1 
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Планирует удаление сообщения через заданную задержку."""
@@ -368,17 +370,17 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
         if profile_screenshot_id:
             await bot.send_photo(
-                chat_id=TEXT_ADMIN,
+                chat_id=ADMIN_ID_1, # ИСПРАВЛЕНИЕ
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
                 reply_markup=keyboard
             )
         else:
-            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
+            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
     except Exception as e:
-        logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN}: {e}")
+        logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1}: {e}")
         keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
-        await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
+        await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
 
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
@@ -619,13 +621,13 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         try:
             keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
             if profile_screenshot_id:
-                await bot.send_photo(chat_id=TEXT_ADMIN, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
+                await bot.send_photo(chat_id=ADMIN_ID_1, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
             else:
-                await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
+                await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True) # ИСПРАВЛЕНИЕ
         except Exception as e:
-            logger.error(f"Failed to send task to TEXT_ADMIN {TEXT_ADMIN} for Yandex: {e}")
+            logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1} for Yandex: {e}")
             keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
-            await bot.send_message(TEXT_ADMIN, admin_notification_text, reply_markup=keyboard)
+            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
     
     else: # review_type == "without_text"
         link_id = user_data.get('active_link_id')
