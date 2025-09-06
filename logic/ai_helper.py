@@ -6,9 +6,9 @@ import logging
 import json
 from groq import Groq, APIError
 
-# --- Импорты для моделей и поиска ---
-import google.generativeai as genai
 from duckduckgo_search import DDGS
+# --- ИЗМЕНЕНИЕ: Импортируем имя модели из конфига ---
+from config import GROQ_MODEL_NAME
 
 # Инициализируем логгер
 logger = logging.getLogger(__name__)
@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 # Загружаем ключ API Groq из переменных окружения
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# --- Инструмент для поиска в интернете ---
 def perform_web_search(query: str):
     """
     Выполняет поиск в интернете по заданному запросу, чтобы найти актуальную информацию.
@@ -29,7 +28,6 @@ def perform_web_search(query: str):
             results = [r['body'] for r in ddgs.text(query, max_results=3)]
             if not results:
                 return "Поиск не дал результатов."
-            # Возвращаем объединенный текст из топ-3 результатов
             return "\n".join(results)
     except Exception as e:
         logger.error(f"DuckDuckGo search failed: {e}")
@@ -39,7 +37,6 @@ def generate_review_sync(client: Groq, model: str, system_prompt: str, user_prom
     """
     Синхронная обертка для вызова API Groq, которая умеет работать с инструментами.
     """
-    # Шаг 1: Отправляем запрос и инструменты модели
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -55,11 +52,9 @@ def generate_review_sync(client: Groq, model: str, system_prompt: str, user_prom
     response_message = response.choices[0].message
     tool_calls = response_message.tool_calls
 
-    # Шаг 2: Проверяем, хочет ли модель использовать инструмент
     if not tool_calls:
         return response_message.content.strip()
 
-    # Шаг 3: Если модель запросила инструмент, выполняем его
     logger.info(f"AI requested tool call: {tool_calls[0].function.name}")
     
     available_tools = {
@@ -79,7 +74,6 @@ def generate_review_sync(client: Groq, model: str, system_prompt: str, user_prom
         
     function_response = function_to_call(**function_args)
 
-    # Шаг 4: Отправляем результат работы инструмента обратно модели
     second_response = client.chat.completions.create(
         model=model,
         messages=[
@@ -144,7 +138,9 @@ async def generate_review_text(
 
     try:
         loop = asyncio.get_running_loop()
-        model_to_use = "llama-3.1-70b-versatile" 
+        
+        # --- ИЗМЕНЕНИЕ: Используем модель из конфига ---
+        model_to_use = GROQ_MODEL_NAME
         
         generated_text = await loop.run_in_executor(
             None,

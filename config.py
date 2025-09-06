@@ -23,11 +23,14 @@ TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if teste
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 FINAL_CHECK_ADMIN = ADMIN_ID_2 # Админ для финальной проверки
 
-# --- ДОБАВЛЕНО: Ключи для Google Gemini ---
-# Загружаем ключи и отфильтровываем пустые, если какой-то не указан
+# --- Ключи для Google Gemini ---
 GOOGLE_API_KEY_1 = os.getenv("GOOGLE_API_KEY_1")
 GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
 GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
+
+# --- ИЗМЕНЕНИЕ: Добавляем настройку модели Groq ---
+GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama3-70b-8192")
+
 
 if not GOOGLE_API_KEYS:
     logger.warning("!!! КОНФИГУРАЦИЯ: Не найдены GOOGLE_API_KEY_1 и GOOGLE_API_KEY_2 в .env файле.")
