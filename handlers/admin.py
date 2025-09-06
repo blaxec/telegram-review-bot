@@ -346,75 +346,49 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer("Не удалось найти фото для анализа.", show_alert=True)
         return
     file_id = callback.message.photo[-1].file_id
+    original_caption = callback.message.caption or ""
 
-    await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n"
-                                                f"🤖 *Запущена проверка с помощью ИИ...*")
+    await callback.message.edit_caption(
+        caption=f"{original_caption}\n\n🤖 *Запущена проверка с помощью ИИ...*",
+        # Убираем кнопки на время проверки
+        reply_markup=None 
+    )
     
     task_map = {
-        'yandex_profile_screenshot': 'yandex_level',
-        'google_last_reviews': 'review_date_check',
-        'google_profile': 'review_date_check'
+        'yandex_profile_screenshot': 'yandex_profile_check',
+        'google_last_reviews': 'google_reviews_check',
+        'google_profile': 'google_profile_check'
     }
     task = task_map.get(context)
 
     if not task:
         await callback.message.answer("Неизвестная задача для OCR.")
+        # Возвращаем кнопки, если задача не найдена
+        await callback.message.edit_reply_markup(reply_markup=inline.get_admin_verification_keyboard(user_id, context))
         return
 
     ocr_result = await analyze_screenshot(bot, file_id, task)
-    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    admin_id = callback.from_user.id
     
+    # Формируем текст с вердиктом ИИ
+    ai_summary_text = ""
     if ocr_result.get('status') == 'success':
-        # Создаем "искусственный" callback, чтобы избежать ошибки "Instance is frozen"
-        new_callback_data = f"admin_verify:confirm:{context}:{user_id}"
-        dummy_callback = CallbackQuery(
-            id=callback.id, 
-            from_user=callback.from_user, 
-            chat_instance=callback.chat_instance, 
-            message=callback.message, 
-            data=new_callback_data
-        )
-
-        if task == 'yandex_level':
-            level = ocr_result.get('level', 0)
-            if level >= 3:
-                await admin_verification_handler(dummy_callback, state, bot)
-                await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Уровень знатока ({level}) достаточный. Заявка автоматически одобрена.")
-            else:
-                reason = f"Ваш уровень 'Знаток города' ({level}) ниже минимально допустимого (3-й уровень)."
-                await process_rejection_reason_logic(bot, user_id, reason, "yandex_profile", user_state)
-                # ИСПОЛЬЗУЕМ &lt; ВМЕСТО < для безопасного отображения в HTML
-                await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ **AI-отклонение:** Уровень {level} &lt; 3.")
-                await bot.send_message(admin_id, f"❌ **AI-проверка:** Уровень знатока ({level}) недостаточный. Заявка автоматически отклонена.")
-
-        elif task == 'review_date_check':
-            is_valid = ocr_result.get('is_valid')
-            days_passed = ocr_result.get('days_passed', '?')
-            detected_text = ocr_result.get('detected_date_text', 'N/A')
-
-            if is_valid:
-                await admin_verification_handler(dummy_callback, state, bot)
-                await bot.send_message(admin_id, f"✅ **AI-проверка успешна:** Прошло {days_passed} дн. ({detected_text}). Заявка автоматически одобрена.")
-            else: # is_valid is False
-                reason = f"Ваш последний отзыв был написан слишком недавно (найден текст: \"{detected_text}\", прошло {days_passed} дн.)."
-                await process_rejection_reason_logic(bot, user_id, reason, context, user_state)
-                 # ИСПОЛЬЗУЕМ &lt; ВМЕСТО <
-                await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n❌ **AI-отклонение:** Прошло {days_passed} &lt; 3 дней.")
-                await bot.send_message(admin_id, f"❌ **AI-проверка:** Последний отзыв был слишком недавно ({detected_text}). Заявка автоматически отклонена.")
-    
-    # --- ИЗМЕНЕНИЕ: Возвращаем клавиатуру при неуверенности ИИ ---
+        summary = ocr_result.get('analysis_summary', 'Анализ завершен.')
+        reasoning = ocr_result.get('reasoning', 'Без дополнительных комментариев.')
+        ai_summary_text = f"🤖 *Вердикт ИИ:*\n- {summary}\n- *Обоснование:* {reasoning}"
     else: # uncertain или error
-        # Регенерируем оригинальную клавиатуру для ручной верификации
-        manual_verification_keyboard = inline.get_admin_verification_keyboard(user_id, context)
-        
-        await callback.message.edit_caption(
-            caption=f"{(callback.message.caption or '')}\n\n"
-                    f"⚠️ **AI не уверен.**\n"
-                    f"Причина: {ocr_result.get('message') or ocr_result.get('reason', 'Неизвестно')}\n"
-                    f"Требуется ручная проверка.",
-            reply_markup=manual_verification_keyboard  # Возвращаем кнопки
-        )
+        reason = ocr_result.get('message') or ocr_result.get('reason', 'Неизвестная ошибка')
+        ai_summary_text = (f"⚠️ **AI не уверен или произошла ошибка.**\n"
+                         f"Причина: {reason}\n"
+                         f"Требуется ручная проверка.")
+
+    # Обновляем сообщение, добавляя вердикт ИИ и ВОЗВРАЩАЯ кнопки для ручной проверки
+    new_caption = f"{original_caption}\n\n{ai_summary_text}"
+    manual_verification_keyboard = inline.get_admin_verification_keyboard(user_id, context)
+    
+    await callback.message.edit_caption(
+        caption=new_caption,
+        reply_markup=manual_verification_keyboard
+    )
 
 
 @router.callback_query(F.data.startswith('admin_verify:'), F.from_user.id.in_(ADMINS))

@@ -3,108 +3,163 @@
 import os
 import asyncio
 import logging
+import json
 from groq import Groq, APIError
+
+# --- Импорты для моделей и поиска ---
+import google.generativeai as genai
+from duckduckgo_search import DDGS
 
 # Инициализируем логгер
 logger = logging.getLogger(__name__)
 
-# Загружаем ключ API из переменных окружения
+# Загружаем ключ API Groq из переменных окружения
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-def generate_review_sync(client: Groq, system_prompt: str, user_prompt: str) -> str:
+# --- Инструмент для поиска в интернете ---
+def perform_web_search(query: str):
     """
-    Синхронная обертка для вызова API Groq.
-    Эта функция будет выполняться в отдельном потоке, чтобы не блокировать бота.
+    Выполняет поиск в интернете по заданному запросу, чтобы найти актуальную информацию.
+
+    Args:
+        query: Поисковый запрос (например, 'особенности кафе Ромашка' или 'чем известно ООО Вектор').
     """
-    chat_completion = client.chat.completions.create(
+    try:
+        with DDGS() as ddgs:
+            results = [r['body'] for r in ddgs.text(query, max_results=3)]
+            if not results:
+                return "Поиск не дал результатов."
+            # Возвращаем объединенный текст из топ-3 результатов
+            return "\n".join(results)
+    except Exception as e:
+        logger.error(f"DuckDuckGo search failed: {e}")
+        return f"Ошибка при поиске: {e}"
+
+def generate_review_sync(client: Groq, model: str, system_prompt: str, user_prompt: str, tools: list = None) -> str:
+    """
+    Синхронная обертка для вызова API Groq, которая умеет работать с инструментами.
+    """
+    # Шаг 1: Отправляем запрос и инструменты модели
+    response = client.chat.completions.create(
+        model=model,
         messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
-        model="llama3-8b-8192",
+        tools=tools,
+        tool_choice="auto",
         temperature=0.7,
-        max_tokens=200,
+        max_tokens=400,
     )
 
-    if (
-        chat_completion
-        and chat_completion.choices
-        and isinstance(chat_completion.choices, list)
-        and len(chat_completion.choices) > 0
-        and chat_completion.choices[0].message
-        and chat_completion.choices[0].message.content
-    ):
-        return chat_completion.choices[0].message.content.strip()
-    else:
-        logger.warning(f"Groq API returned a successful response but without content. Full response: {chat_completion}")
-        raise ValueError("AI-модель вернула пустой ответ. Вероятно, сработал фильтр безопасности.")
+    response_message = response.choices[0].message
+    tool_calls = response_message.tool_calls
+
+    # Шаг 2: Проверяем, хочет ли модель использовать инструмент
+    if not tool_calls:
+        return response_message.content.strip()
+
+    # Шаг 3: Если модель запросила инструмент, выполняем его
+    logger.info(f"AI requested tool call: {tool_calls[0].function.name}")
+    
+    available_tools = {
+        "perform_web_search": perform_web_search,
+    }
+    
+    function_name = tool_calls[0].function.name
+    function_to_call = available_tools.get(function_name)
+    
+    if not function_to_call:
+        return f"Ошибка: модель запросила несуществующий инструмент '{function_name}'."
+
+    try:
+        function_args = json.loads(tool_calls[0].function.arguments)
+    except json.JSONDecodeError:
+        return "Ошибка: модель вернула некорректные аргументы для инструмента."
+        
+    function_response = function_to_call(**function_args)
+
+    # Шаг 4: Отправляем результат работы инструмента обратно модели
+    second_response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+            response_message,
+            {
+                "tool_call_id": tool_calls[0].id,
+                "role": "tool",
+                "name": function_name,
+                "content": function_response,
+            },
+        ],
+    )
+    
+    return second_response.choices[0].message.content.strip()
 
 
 async def generate_review_text(
     company_info: str,
     scenario: str,
-    tone: str = "спокойный и довольный",
-    details: list[str] = None
+    tone: str = "спокойный и довольный"
 ) -> str:
     """
-    Генерирует текст отзыва с помощью API от Groq, выполняя вызов в отдельном потоке.
+    Генерирует текст отзыва, используя Groq и, при необходимости, поиск в интернете.
     """
     if not GROQ_API_KEY:
         logger.critical("Groq API key not found in .env file! AI generation is disabled.")
         return "Ошибка: AI-сервис не настроен. Отсутствует GROQ_API_KEY."
 
-    # Создаем СИНХРОННЫЙ клиент
     client = Groq(api_key=GROQ_API_KEY)
 
-    details_text = ""
-    if details:
-        details_list = "\n".join([f"- {detail}" for detail in details])
-        details_text = f"\nЧто нужно упомянуть в тексте:\n{details_list}"
+    search_tool = {
+        "type": "function",
+        "function": {
+            "name": "perform_web_search",
+            "description": "Искать в интернете актуальную информацию о компании, ее услугах или особенностях.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Поисковый запрос, например 'особенности кафе Ромашка'",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    }
 
-    # Усиленный системный промпт
-    system_prompt = "Ты — талантливый копирайтер, который пишет короткие, живые и абсолютно естественные отзывы для Google и Яндекс Карт от лица разных людей. Твоя главная задача — избегать любых клише, роботизированных фраз и чрезмерного восторга. Текст должен звучать так, как будто его написал реальный человек. Твой ответ всегда должен быть только на русском языке, без единого английского слова."
+    system_prompt = "Ты — талантливый копирайтер, который пишет короткие, живые и абсолютно естественные отзывы для Google и Яндекс Карт. Твоя главная задача — избегать любых клише и роботизированных фраз. Текст должен звучать так, как будто его написал реальный человек. Если для написания качественного отзыва не хватает информации, используй инструмент поиска. Твой ответ всегда должен быть только на русском языке."
     
-    # Усиленный пользовательский промпт
     user_prompt = f"""
-    Вот сценарий: "{scenario}".
+    Мне нужно написать отзыв о компании/месте: "{company_info}".
+    Сценарий отзыва: "{scenario}".
+    Тон отзыва должен быть: {tone}.
 
-    Напиши короткий положительный отзыв на 5 звезд от лица этого человека о заведении: "{company_info}".
-
-    Требования:
-    - Язык: Строго русский. Никаких английских слов или фраз.
-    - Тон отзыва: {tone}.
-    - Длина: 2-4 предложения.
-    - НЕ используй шаблонные фразы вроде "рекомендую это место", "обязательно вернусь", "лучший в городе", "высокий уровень сервиса".
-    - Пиши просто и по-человечески.
-    {details_text}
+    Пожалуйста, сгенерируй короткий (2-4 предложения) и естественный отзыв на 5 звезд. Если в сценарии не хватает деталей, используй поиск, чтобы найти что-то уникальное об этом месте (например, их фирменное блюдо, особенность интерьера или популярную услугу) и ненавязчиво впиши это в отзыв.
+    
+    НЕ используй шаблонные фразы вроде "рекомендую это место", "обязательно вернусь", "лучший в городе".
     """
 
     try:
-        # Выполняем синхронную функцию в отдельном потоке
         loop = asyncio.get_running_loop()
+        model_to_use = "llama-3.1-70b-versatile" 
+        
         generated_text = await loop.run_in_executor(
-            None,  # Используем стандартный ThreadPoolExecutor
+            None,
             generate_review_sync,
             client,
+            model_to_use, 
             system_prompt,
-            user_prompt
+            user_prompt,
+            [search_tool]
         )
         return generated_text
 
     except APIError as e:
         logger.error(f"Groq API Error: {e}")
         return f"Ошибка AI-сервиса: {e.message}"
-    except ValueError as e:
-        # Наша кастомная ошибка для пустого ответа
-        logger.warning(str(e))
-        return f"Ошибка: {e}"
     except Exception as e:
-        # Логируем полную трассировку ошибки для дебага
         logger.exception("An unknown error occurred during AI text generation!")
         return "Произошла неизвестная ошибка при генерации текста. Администратор уже уведомлен через логи."
