@@ -17,8 +17,8 @@ from config import GOOGLE_API_KEYS, ADMIN_ID_1
 
 logger = logging.getLogger(__name__)
 
-AnalysisTask = Literal['yandex_level', 'review_date', 'google_profile']
-# Устанавливаем часовой пояс Алматы
+# ИЗМЕНЕНИЕ: Упрощаем типы задач и устанавливаем часовой пояс
+AnalysisTask = Literal['yandex_level', 'review_date_check']
 almaty_tz = pytz.timezone('Asia/Almaty')
 
 class GeminiKeyManager:
@@ -65,25 +65,6 @@ async def _get_image_from_telegram(bot: Bot, file_id: str) -> BytesIO | None:
         logger.error(f"Failed to download image with file_id {file_id}: {e}")
         return None
 
-def _parse_relative_date(text: str, today: datetime.date) -> Optional[datetime.date]:
-    """Пытается распарсить относительные даты типа 'неделю назад', используя 'сегодня' в правильном часовом поясе."""
-    text = text.lower()
-    match = re.search(r'(\d+)\s+(день|дня|дней|недел|месяц)', text)
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        if 'ден' in unit:
-            return today - datetime.timedelta(days=value)
-        if 'недел' in unit:
-            return today - datetime.timedelta(weeks=value)
-        if 'месяц' in unit:
-            return today - datetime.timedelta(days=value * 30) # Приблизительно
-    if 'вчера' in text:
-        return today - datetime.timedelta(days=1)
-    if 'сегодня' in text:
-        return today
-    return None
-
 
 async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict[str, Any]:
     """
@@ -103,7 +84,6 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
     today_str = today_in_almaty.strftime('%d.%m.%Y')
     
     prompt = ""
-    # Улучшенные промпты с требованием JSON-ответа
     if task == 'yandex_level':
         prompt = f"""
         Проанализируй это изображение профиля Яндекс Карт. Найди числовой уровень "Знатока города".
@@ -112,16 +92,34 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
         - Если ты не можешь найти уровень, верни: {{"status": "uncertain", "reason": "Уровень не найден на изображении"}}
         Пример успешного ответа: {{"status": "success", "level": 5}}
         """
-    elif task == 'review_date' or task == 'google_profile': # Объединяем, так как задача одна
+    # --- ИЗМЕНЕНИЕ: Полностью новый, умный промпт для анализа даты ---
+    elif task == 'review_date_check':
         prompt = f"""
-        Проанализируй это изображение из профиля Google Карт. Сегодняшняя дата: {today_str} (по времени Алматы).
-        Найди дату самого последнего (верхнего) отзыва.
-        Твоя задача вернуть ответ ТОЛЬКО в формате JSON.
-        - Если ты видишь точную дату (например, 21.08.2025), верни ее в поле "date": {{"status": "success", "date": "ДД.ММ.ГГГГ"}}
-        - Если ты видишь относительную дату (например, "неделю назад", "вчера"), верни ее в поле "text": {{"status": "relative", "text": "ОРИГИНАЛЬНЫЙ_ТЕКСТ_ДАТЫ"}}
-        - Если ты не можешь найти дату, верни: {{"status": "uncertain", "reason": "Дата не найдена на изображении"}}
-        Пример ответа 1: {{"status": "success", "date": "21.08.2025"}}
-        Пример ответа 2: {{"status": "relative", "text": "неделю назад"}}
+        Ты — внимательный ассистент-аналитик. Твоя задача — проанализировать скриншот из профиля Google или Яндекс Карт и определить, может ли пользователь написать новый отзыв.
+
+        КОНТЕКСТ:
+        - Сегодняшняя дата (по времени Алматы, Казахстан): **{today_str}**.
+        - ГЛАВНОЕ ПРАВИЛО: Пользователь может написать новый отзыв, только если его последний отзыв был опубликован **3 (три) или более дней назад**.
+
+        ТВОЯ ЗАДАЧА:
+        1. Найди на скриншоте самый верхний, самый свежий отзыв.
+        2. Определи его дату публикации. Дата может быть абсолютной ("15.08.2025") или относительной ("вчера", "2 дня назад", "неделю назад", "месяц назад").
+        3. Вычисли, сколько дней прошло между датой публикации отзыва и СЕГОДНЯШНЕЙ датой ({today_str}).
+        4. Примени ГЛАВНОЕ ПРАВИЛО.
+        5. Верни свой ответ СТРОГО в формате JSON.
+
+        ФОРМАТ ОТВЕТА JSON:
+        - Если ты уверен в дате и можешь принять решение:
+          {{"status": "success", "is_valid": true/false, "days_passed": ЧИСЛО_ДНЕЙ, "detected_date_text": "ТЕКСТ_ДАТЫ_С_КАРТИНКИ", "reason": "Краткое пояснение"}}
+        - Если ты не можешь найти дату или не уверен:
+          {{"status": "uncertain", "reason": "Причина неуверенности"}}
+
+        ПРИМЕРЫ:
+        - Сегодня {today_str}. На картинке "неделю назад". Ответ: {{"status": "success", "is_valid": true, "days_passed": 7, "detected_date_text": "неделю назад", "reason": "Прошло 7 дней, что больше 3."}}
+        - Сегодня {today_str}. На картинке "вчера". Ответ: {{"status": "success", "is_valid": false, "days_passed": 1, "detected_date_text": "вчера", "reason": "Прошел 1 день, что меньше 3."}}
+        - Сегодня {today_str}. На картинке "2 дня назад". Ответ: {{"status": "success", "is_valid": false, "days_passed": 2, "detected_date_text": "2 дня назад", "reason": "Прошло 2 дня, что меньше 3."}}
+        - Сегодня {today_str}. На картинке "месяц назад". Ответ: {{"status": "success", "is_valid": true, "days_passed": 30, "detected_date_text": "месяц назад", "reason": "Прошло около 30 дней, что больше 3."}}
+        - На картинке нет видимой даты. Ответ: {{"status": "uncertain", "reason": "Не удалось найти дату последнего отзыва на изображении."}}
         """
     else:
         return {"status": "error", "message": f"Unknown OCR task: {task}"}
@@ -142,7 +140,6 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
             logger.info(f"Attempting OCR with key ...{api_key[-4:]} for task '{task}'.")
             response = await model.generate_content_async([prompt, image_for_api])
             
-            # Очищаем ответ от markdown обертки для JSON
             clean_response_text = response.text.strip()
             if clean_response_text.startswith("```json"):
                 clean_response_text = clean_response_text[7:]
@@ -153,18 +150,7 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
             
             try:
                 data = json.loads(clean_response_text)
-                
-                if data.get("status") == "success":
-                    return data
-                
-                if data.get("status") == "relative":
-                    parsed_date = _parse_relative_date(data.get("text", ""), today_in_almaty)
-                    if parsed_date:
-                        return {"status": "success", "date": parsed_date.strftime('%d.%m.%Y')}
-                    else:
-                        return {"status": "uncertain", "reason": f"Could not parse relative date: {data.get('text')}"}
-
-                return data # Возвращаем uncertain
+                return data
 
             except json.JSONDecodeError:
                 return {"status": "uncertain", "reason": "AI returned non-JSON response.", "raw_text": clean_response_text}
