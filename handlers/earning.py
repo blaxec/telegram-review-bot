@@ -735,6 +735,69 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
 
+# --- НОВЫЙ ОБРАБОТЧИК ДЛЯ ПОДТВЕРЖДАЮЩЕГО СКРИНШОТА ---
+
+@router.message(F.photo, UserState.AWAITING_CONFIRMATION_SCREENSHOT)
+async def process_confirmation_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """
+    Ловит подтверждающий скриншот от пользователя, формирует пакет для админа
+    и отправляет на финальную верификацию.
+    """
+    if not message.photo:
+        return
+
+    data = await state.get_data()
+    review_id = data.get('review_id_for_confirmation')
+
+    if not review_id:
+        await message.answer("Произошла ошибка, не удалось найти ID вашего отзыва. Пожалуйста, обратитесь в поддержку.")
+        await state.clear()
+        return
+
+    review = await db_manager.get_review_by_id(review_id)
+    if not review or not review.screenshot_file_id:
+        await message.answer("Произошла критическая ошибка: не найден оригинальный скриншот вашего отзыва. Обратитесь в поддержку.")
+        await state.clear()
+        return
+
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+        
+    await message.answer("✅ Спасибо! Ваш скриншот отправлен на финальную проверку. Ожидайте решения.")
+    
+    new_screenshot_file_id = message.photo[-1].file_id
+    await db_manager.save_confirmation_screenshot(review_id, new_screenshot_file_id)
+    
+    admin_text = (
+        f"🚨 **Подтверждение отзыва #{review_id}** 🚨\n\n"
+        f"**Пользователь:** @{message.from_user.username} (ID: `{message.from_user.id}`)\n"
+        f"**Ссылка на компанию:** `{review.link.url if review.link else 'Ссылка не найдена'}`\n\n"
+        "Сравните два скриншота и примите решение. "
+        "Сверху — **новый**, снизу — **старый** (при первоначальной сдаче)."
+    )
+
+    try:
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=new_screenshot_file_id,
+            caption=admin_text,
+            reply_markup=inline.get_admin_final_verification_keyboard(review_id)
+        )
+        await bot.send_photo(
+            chat_id=FINAL_CHECK_ADMIN,
+            photo=review.screenshot_file_id
+        )
+
+    except Exception as e:
+        logger.error(f"Не удалось отправить файлы для финальной проверки отзыва {review_id} админу: {e}")
+        await bot.send_message(FINAL_CHECK_ADMIN, f"Ошибка при отправке файлов для проверки отзыва #{review_id}. Проверьте логи.")
+
+    await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
+
+
 @router.callback_query(F.data.in_({'review_zoon', 'review_avito', 'review_yandex_services'}))
 async def handle_unsupported_services(callback: CallbackQuery):
     platform_map = {

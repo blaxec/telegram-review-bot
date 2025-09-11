@@ -50,6 +50,8 @@ class Review(Base):
     user_id = Column(BigInteger, ForeignKey('users.id'))
     platform = Column(String)
     link_id = Column(Integer, ForeignKey('links.id'), nullable=True)
+    # ИЗМЕНЕНИЕ: Добавляем новые статусы в комментарий для ясности
+    # Статусы: pending, on_hold, awaiting_confirmation, approved, rejected
     status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     hold_until = Column(DateTime, nullable=True)
@@ -57,7 +59,11 @@ class Review(Base):
     
     review_text = Column(String, nullable=True)
     admin_message_id = Column(BigInteger, nullable=True)
-    screenshot_file_id = Column(String, nullable=True)
+    screenshot_file_id = Column(String, nullable=True) # Оригинальный скриншот
+    
+    # --- НОВОЕ ПОЛЕ ---
+    confirmation_screenshot_file_id = Column(String, nullable=True) # Скриншот для подтверждения
+    # ------------------
     
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")

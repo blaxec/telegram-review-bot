@@ -347,6 +347,16 @@ def get_admin_final_verdict_keyboard(review_id: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_admin_final_verification_keyboard(review_id: int) -> InlineKeyboardMarkup:
+    """Кнопки для финального подтверждения отзыва после холда."""
+    buttons = [
+        [
+            InlineKeyboardButton(text='✅ Одобрить и выплатить', callback_data=f'final_verify_approve:{review_id}'),
+            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'final_verify_reject:{review_id}')
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_admin_withdrawal_keyboard(request_id: int) -> InlineKeyboardMarkup:
     buttons = [
         [

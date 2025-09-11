@@ -16,7 +16,7 @@ from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
 from logic.user_notifications import send_confirmation_button, handle_task_timeout, send_cooldown_expired_notification
-from config import Rewards, Durations, Limits
+from config import Rewards, Durations, Limits, TESTER_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,9 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         logger.error(f"Attempted to approve review {review_id}, but it was not found or status was not 'pending'.")
         return False, "Ошибка: отзыв не найден или уже обработан."
 
+    user = await db_manager.get_user(review.user_id)
+    is_tester = user and user.id in TESTER_IDS
+
     amount_map = {
         'google': Rewards.GOOGLE_REVIEW,
         'yandex_with_text': Rewards.YANDEX_WITH_TEXT,
@@ -221,7 +224,12 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     }
     
     amount = amount_map.get(review.platform, 0.0)
-    hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
+    
+    if is_tester:
+        hold_duration_minutes = Durations.HOLD_TESTER_MINUTES
+        logger.info(f"User {user.id} is a tester. Setting hold duration to {hold_duration_minutes} minutes for review {review_id}.")
+    else:
+        hold_duration_minutes = hold_minutes_map.get(review.platform, 24 * 60)
     
     success = await db_manager.move_review_to_hold(review_id, amount, hold_minutes=hold_duration_minutes)
     if not success:
@@ -253,7 +261,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
     
     hold_hours = hold_duration_minutes / 60
-    return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.0f} ч."
+    return True, f"Одобрено. Отзыв отправлен в холд на {hold_hours:.2f} ч."
 
 async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler, reason: str = None) -> tuple[bool, str]:
     """Логика для отклонения начального отзыва."""
@@ -362,6 +370,72 @@ async def reject_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]
         logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
 
     return True, "❌ Отзыв отклонен!"
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ ФИНАЛЬНОЙ ВЕРИФИКАЦИИ ---
+
+async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
+    """Логика для окончательного одобрения отзыва ПОСЛЕ ХОЛДА и начисления реферальных наград."""
+    approved_review = await db_manager.admin_approve_review(review_id)
+    if not approved_review:
+        return False, "❌ Ошибка: отзыв не найден или уже обработан."
+    
+    user_id = approved_review.user_id
+    user = await db_manager.get_user(user_id)
+    
+    if user and user.referrer_id:
+        referrer = await db_manager.get_user(user.referrer_id)
+        if referrer and referrer.referral_path:
+            referral_reward = 0
+            
+            if referrer.referral_path == 'google' and approved_review.platform == 'google':
+                referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
+            
+            elif referrer.referral_path == 'yandex':
+                if referrer.referral_subpath == 'with_text' and approved_review.platform == 'yandex_with_text':
+                    referral_reward = Rewards.REFERRAL_YANDEX_WITH_TEXT
+                elif referrer.referral_subpath == 'without_text' and approved_review.platform == 'yandex_without_text':
+                    referral_reward = Rewards.REFERRAL_YANDEX_WITHOUT_TEXT
+            
+            if referral_reward > 0:
+                await db_manager.add_referral_earning(user_id, referral_reward)
+                try:
+                    await bot.send_message(
+                        referrer.id,
+                        f"🎉 Ваш реферал @{user.username} успешно завершил отзыв! "
+                        f"Вам начислено {referral_reward} ⭐ в копилку."
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
+
+    if approved_review.platform == 'google':
+        await check_and_apply_promo_reward(user_id, "google_review", bot)
+    elif 'yandex' in approved_review.platform:
+        await check_and_apply_promo_reward(user_id, "yandex_review", bot)
+    
+    try:
+        await bot.send_message(user_id, f"✅ Ваш подтверждающий скриншот одобрен! Награда за отзыв #{review_id} ({approved_review.amount} ⭐) зачислена на основной баланс.")
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id} об окончательном одобрении: {e}")
+        
+    return True, "✅ Отзыв одобрен и выплачен!"
+
+async def reject_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
+    """Логика для отклонения отзыва на финальном этапе проверки."""
+    rejected_review = await db_manager.admin_reject_final_confirmation(review_id)
+    if not rejected_review:
+        return False, "❌ Ошибка: отзыв не найден или уже обработан."
+
+    try:
+        await bot.send_message(
+            rejected_review.user_id,
+            f"❌ Ваш подтверждающий скриншот для отзыва #{review_id} был отклонен. Награда списана из холда."
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении на финальном этапе: {e}")
+
+    return True, "❌ Отзыв отклонен, холд списан."
+
+# --- КОНЕЦ НОВЫХ ФУНКЦИЙ ---
 
 
 # --- ЛОГИКА ДЛЯ ВЫВОДА СРЕДСТВ ---

@@ -17,8 +17,8 @@ from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 from logic.reward_logic import distribute_rewards
-# ИЗМЕНЕНИЕ: Импортируем новую логику очистки
-from logic.cleanup_logic import check_and_expire_links
+# ИЗМЕНЕНИЕ: Импортируем обе функции из файла
+from logic.cleanup_logic import check_and_expire_links, process_expired_holds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +129,8 @@ async def main():
     scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
     # ИЗМЕНЕНИЕ: Добавляем фоновую задачу для очистки просроченных ссылок
     scheduler.add_job(check_and_expire_links, 'interval', hours=6, args=[bot, dp.storage])
+    # --- НОВАЯ ЗАДАЧА: Проверка истекших холдов ---
+    scheduler.add_job(process_expired_holds, 'interval', minutes=1, args=[bot, dp.storage, scheduler])
 
 
     try:

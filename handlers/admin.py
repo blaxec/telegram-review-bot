@@ -24,11 +24,13 @@ from logic.admin_logic import (
     approve_review_to_hold_logic,
     reject_initial_review_logic,
     get_user_hold_info_logic,
-    approve_hold_review_logic,
-    reject_hold_review_logic,
+    # approve_hold_review_logic, # Эта логика теперь часть новой системы
+    # reject_hold_review_logic, # и больше не нужна в старом виде
     approve_withdrawal_logic,
     reject_withdrawal_logic,
-    apply_fine_to_user
+    apply_fine_to_user,
+    approve_final_review_logic,
+    reject_final_review_logic
 )
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
@@ -331,7 +333,7 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
     await temp_message.delete()
 
-# --- ИЗМЕНЕНИЕ: Полностью переписанный блок для исправления ошибок ---
+# --- БЛОК ПРОВЕРКИ И ВЕРИФИКАЦИИ ---
 @router.callback_query(F.data.startswith("admin_ocr:"), F.from_user.id.in_(ADMINS))
 async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Администратор нажимает кнопку для AI-проверки скриншота."""
@@ -350,7 +352,6 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     await callback.message.edit_caption(
         caption=f"{original_caption}\n\n🤖 *Запущена проверка с помощью ИИ...*",
-        # Убираем кнопки на время проверки
         reply_markup=None 
     )
     
@@ -363,25 +364,22 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     if not task:
         await callback.message.answer("Неизвестная задача для OCR.")
-        # Возвращаем кнопки, если задача не найдена
         await callback.message.edit_reply_markup(reply_markup=inline.get_admin_verification_keyboard(user_id, context))
         return
 
     ocr_result = await analyze_screenshot(bot, file_id, task)
     
-    # Формируем текст с вердиктом ИИ
     ai_summary_text = ""
     if ocr_result.get('status') == 'success':
         summary = ocr_result.get('analysis_summary', 'Анализ завершен.')
         reasoning = ocr_result.get('reasoning', 'Без дополнительных комментариев.')
         ai_summary_text = f"🤖 *Вердикт ИИ:*\n- {summary}\n- *Обоснование:* {reasoning}"
-    else: # uncertain или error
+    else: 
         reason = ocr_result.get('message') or ocr_result.get('reason', 'Неизвестная ошибка')
         ai_summary_text = (f"⚠️ **AI не уверен или произошла ошибка.**\n"
                          f"Причина: {reason}\n"
                          f"Требуется ручная проверка.")
 
-    # Обновляем сообщение, добавляя вердикт ИИ и ВОЗВРАЩАЯ кнопки для ручной проверки
     new_caption = f"{original_caption}\n\n{ai_summary_text}"
     manual_verification_keyboard = inline.get_admin_verification_keyboard(user_id, context)
     
@@ -455,6 +453,8 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             if callback.message.photo: await callback.message.edit_caption(caption=f"{original_text}\n\n{action_text}", reply_markup=None)
             else: await callback.message.edit_text(f"{original_text}\n\n{action_text}", reply_markup=None)
         except TelegramBadRequest: pass
+
+# --- БЛОК УПРАВЛЕНИЯ ТЕКСТОМ ОТЗЫВА ---
 
 @router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
@@ -632,6 +632,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await state.set_state(state_map[platform])
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
+# --- БЛОК МОДЕРАЦИИ ОТЗЫВОВ ---
 
 @router.callback_query(F.data.startswith("admin_final_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
@@ -685,64 +686,33 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     await state.clear()
 
 
-@router.message(Command("reviewhold"), F.from_user.id.in_(ADMINS))
-async def admin_review_hold(message: Message, bot: Bot, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    await message.answer("⏳ Загружаю отзывы в холде...")
-    hold_reviews = await db_manager.get_all_hold_reviews()
-
-    if not hold_reviews:
-        await message.answer("В холде нет отзывов."); return
-        
-    platform_order = ['google', 'yandex_with_text', 'yandex_without_text']
-    try:
-        hold_reviews.sort(key=lambda r: platform_order.index(r.platform) if r.platform in platform_order else len(platform_order))
-    except ValueError:
-        pass
-
-    await message.answer(f"Найдено отзывов: {len(hold_reviews)}")
-    
-    for review in hold_reviews:
-        link_url = review.link.url if review.link else "Ссылка удалена"
-        info_text = (f"ID: <code>{review.id}</code> | User: <code>{review.user_id}</code>\n"
-                     f"Платформа: <code>{review.platform}</code> | Сумма: <code>{review.amount}</code> ⭐\n"
-                     f"Ссылка: <code>{link_url}</code>\nТекст: «<i>{review.review_text}</i>»")
-        try:
-            if review.admin_message_id:
-                await bot.copy_message(
-                    chat_id=message.chat.id, 
-                    from_chat_id=FINAL_CHECK_ADMIN, 
-                    message_id=review.admin_message_id, 
-                    caption=info_text,
-                    reply_markup=inline.get_admin_hold_review_keyboard(review.id)
-                )
-            else:
-                await message.answer(info_text, reply_markup=inline.get_admin_hold_review_keyboard(review.id))
-        except Exception as e:
-            logger.error(f"Ошибка обработки отзыва {review.id} в reviewhold: {e}")
-            await message.answer(f"Ошибка обработки отзыва {review.id}: {e}\n\n{info_text}", reply_markup=inline.get_admin_hold_review_keyboard(review.id))
-
-
-@router.callback_query(F.data.startswith('admin_hold_approve:'), F.from_user.id.in_(ADMINS))
-async def admin_hold_approve_handler(callback: CallbackQuery, bot: Bot):
+@router.callback_query(F.data.startswith('final_verify_approve:'), F.from_user.id.in_(ADMINS))
+async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
+    """Админ одобряет отзыв после холда и выплачивает награду."""
     review_id = int(callback.data.split(':')[1])
-    success, message_text = await approve_hold_review_logic(review_id, bot)
+    success, message_text = await approve_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН (@{callback.from_user.username})"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН И ВЫПЛАЧЕН (@{callback.from_user.username})"
+        try:
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        except TelegramBadRequest:
+            pass
 
-@router.callback_query(F.data.startswith('admin_hold_reject:'), F.from_user.id.in_(ADMINS))
-async def admin_hold_reject_handler(callback: CallbackQuery, bot: Bot):
+@router.callback_query(F.data.startswith('final_verify_reject:'), F.from_user.id.in_(ADMINS))
+async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
+    """Админ отклоняет отзыв после холда."""
     review_id = int(callback.data.split(':')[1])
-    success, message_text = await reject_hold_review_logic(review_id, bot)
+    success, message_text = await reject_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})"
-        await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        try:
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+        except TelegramBadRequest:
+            pass
+            
+# --- БЛОК ВЫВОДА СРЕДСТВ ---
 
 @router.callback_query(F.data.startswith("admin_withdraw_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
@@ -767,6 +737,8 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
+
+# --- ПРОЧИЕ АДМИН-КОМАНДЫ ---
 
 @router.message(Command("reset_cooldown"), F.from_user.id.in_(ADMINS))
 async def reset_cooldown_handler(message: Message, state: FSMContext):
@@ -854,39 +826,6 @@ async def ban_user_start(message: Message, state: FSMContext):
     
     prompt_msg = await message.answer(f"Введите причину бана для пользователя @{user_to_ban.username} (<code>{user_id_to_ban}</code>).", reply_markup=inline.get_cancel_inline_keyboard())
     await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.BAN_REASON, F.from_user.id.in_(ADMINS))
-async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text:
-        await message.answer("Причина не может быть пустой. Введите причину текстом.")
-        return
-        
-    await delete_previous_messages(message, state)
-    data = await state.get_data()
-    user_id_to_ban = data.get("user_id_to_ban")
-    ban_reason = message.text
-
-    success = await db_manager.ban_user(user_id_to_ban)
-
-    if not success:
-        await message.answer("❌ Произошла ошибка при бане пользователя.")
-        await state.clear()
-        return
-
-    try:
-        user_notification = (
-            f"❗️ **Ваш аккаунт был заблокирован администратором.**\n\n"
-            f"<b>Причина:</b> {ban_reason}\n\n"
-            "Вам закрыт доступ ко всем функциям бота. "
-            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
-        )
-        await bot.send_message(user_id_to_ban, user_notification)
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
-
-    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
-    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
-    await state.clear()
 
 # --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ НАГРАДАМИ СТАТИСТИКИ ---
 
@@ -1167,4 +1106,37 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"✅ Промокод <code>{new_promo.code}</code> успешно создан!")
     elif callback.message:
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
+    await state.clear()
+
+@router.message(AdminState.BAN_REASON, F.from_user.id.in_(ADMINS))
+async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("Причина не может быть пустой. Введите причину текстом.")
+        return
+        
+    await delete_previous_messages(message, state)
+    data = await state.get_data()
+    user_id_to_ban = data.get("user_id_to_ban")
+    ban_reason = message.text
+
+    success = await db_manager.ban_user(user_id_to_ban)
+
+    if not success:
+        await message.answer("❌ Произошла ошибка при бане пользователя.")
+        await state.clear()
+        return
+
+    try:
+        user_notification = (
+            f"❗️ **Ваш аккаунт был заблокирован администратором.**\n\n"
+            f"<b>Причина:</b> {ban_reason}\n\n"
+            "Вам закрыт доступ ко всем функциям бота. "
+            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
+        )
+        await bot.send_message(user_id_to_ban, user_notification)
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
+
+    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
+    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     await state.clear()

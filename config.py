@@ -76,6 +76,8 @@ class Durations:
     HOLD_GOOGLE_MINUTES = 5
     HOLD_YANDEX_WITH_TEXT_MINUTES = 24 * 60  # 1 день
     HOLD_YANDEX_WITHOUT_TEXT_MINUTES = 72 * 60 # 3 дня
+    # --- ДОБАВЛЕНО: Отдельный холд для тестеров ---
+    HOLD_TESTER_MINUTES = 5 # 5 минут для тестеров
 
     # Длительность кулдаунов (в часах)
     COOLDOWN_GOOGLE_REVIEW_HOURS = 5 / 60  # 5 минут
@@ -87,6 +89,9 @@ class Durations:
 
     # Кулдаун для запроса на разбан (в минутах)
     COOLDOWN_UNBAN_REQUEST_MINUTES = 30
+    
+    # --- ДОБАВЛЕНО: Таймаут ожидания подтверждающего скриншота ---
+    CONFIRMATION_TIMEOUT_MINUTES = 30 # 30 минут
 
     # Тайминги для FSM-задач (в минутах)
     TASK_GOOGLE_LIKING_TIMEOUT = 10

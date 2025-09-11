@@ -242,7 +242,7 @@ async def get_user_hold_reviews(user_id: int) -> list:
 
 async def get_review_by_id(review_id: int) -> Union[Review, None]:
     async with async_session() as session:
-        query = select(Review).where(Review.id == review_id).options(selectinload(Review.link))
+        query = select(Review).where(Review.id == review_id).options(selectinload(Review.link), selectinload(Review.user))
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
@@ -261,15 +261,24 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             return review
 
 async def admin_approve_review(review_id: int) -> Union[Review, None]:
+    """ФИНАЛЬНОЕ одобрение отзыва. Переводит статус из 'awaiting_confirmation' или 'on_hold' в 'approved' и начисляет баланс."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
-            if not review or review.status != 'on_hold':
+            if not review or review.status not in ['on_hold', 'awaiting_confirmation']:
+                logger.warning(f"Admin approve failed for review {review_id}. Status was {review.status}, not 'awaiting_confirmation' or 'on_hold'.")
                 return None
+            
             user = await session.get(User, review.user_id)
             if user:
-                user.hold_balance -= review.amount
+                if user.hold_balance >= review.amount:
+                    user.hold_balance -= review.amount
+                else:
+                    logger.warning(f"User {user.id} hold balance ({user.hold_balance}) is less than review amount ({review.amount}) for review {review_id}. Setting hold to 0.")
+                    user.hold_balance = 0
+                
                 user.balance += review.amount
+
             review.status = 'approved'
             return review
 
@@ -585,6 +594,80 @@ async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> i
                 user.support_cooldown_until = datetime.datetime.utcnow() + datetime.timedelta(hours=hours)
             
             return current_warnings
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ ПРОЦЕССА ВЕРИФИКАЦИИ ПОСЛЕ ХОЛДА ---
+
+async def get_reviews_past_hold() -> List[Review]:
+    """Находит все отзывы в статусе 'on_hold', у которых истекло время холда."""
+    async with async_session() as session:
+        now = datetime.datetime.utcnow()
+        query = select(Review).where(
+            and_(
+                Review.status == 'on_hold',
+                Review.hold_until <= now
+            )
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def update_review_status(review_id: int, new_status: str) -> bool:
+    """Обновляет статус конкретного отзыва."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id)
+            if not review:
+                return False
+            review.status = new_status
+            return True
+
+async def save_confirmation_screenshot(review_id: int, file_id: str) -> bool:
+    """Сохраняет file_id подтверждающего скриншота."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id)
+            if not review:
+                return False
+            review.confirmation_screenshot_file_id = file_id
+            return True
+
+async def cancel_hold(review_id: int) -> Optional[Review]:
+    """Отменяет холд, если пользователь не прислал скриншот. Статус -> rejected."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id, options=[selectinload(Review.user)])
+            if not review or review.status != 'awaiting_confirmation':
+                return None
+            
+            user = review.user
+            if user and review.amount:
+                if user.hold_balance >= review.amount:
+                    user.hold_balance -= review.amount
+                else:
+                    user.hold_balance = 0
+            
+            review.status = 'rejected'
+            return review
+
+async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
+    """Отклоняет отзыв на финальном этапе проверки. Статус -> rejected."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id)
+            if not review or review.status != 'awaiting_confirmation':
+                return None
+            
+            user = await session.get(User, review.user_id)
+            if user and review.amount:
+                if user.hold_balance >= review.amount:
+                    user.hold_balance -= review.amount
+                else:
+                    user.hold_balance = 0
+
+            review.status = 'rejected'
+            return review
+
+# --- КОНЕЦ НОВЫХ ФУНКЦИЙ ---
+
 
 # --- Функции для системы бана и просроченных ссылок ---
 
