@@ -45,7 +45,7 @@ async def distribute_rewards(bot: Bot):
                     try:
                         await bot.send_message(
                             user_id,
-                            f"🎉 Поздравляем! Вы заняли **{place}-е место** в топе и получаете награду в **{reward} ⭐**!"
+                            f"🎉 Поздравляем! Вы заняли <b>{place}-е место</b> в топе и получаете награду в <b>{reward} ⭐</b>!"
                         )
                         logger.info(f"Rewarded user {user_id} ({display_name}) with {reward} stars for place {place}.")
                     except Exception as e:

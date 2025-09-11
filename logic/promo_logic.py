@@ -62,8 +62,8 @@ async def activate_promo_code_logic(user_id: int, code: str) -> tuple[str, model
         condition_text = condition_map.get(promo.condition, "неизвестное условие")
         
         message = (
-            f"✅ Промокод `{promo.code}` принят!\n\n"
-            f"💰 Для получения **{promo.reward} ⭐** вам необходимо **{condition_text}**.\n\n"
+            f"✅ Промокод <code>{promo.code}</code> принят!<br><br>"
+            f"💰 Для получения <b>{promo.reward} ⭐</b> вам необходимо <b>{condition_text}</b>.<br><br>"
             f"Вы готовы приступить к выполнению задания?"
         )
         return message, promo
@@ -86,8 +86,8 @@ async def check_and_apply_promo_reward(user_id: int, condition_completed: str, b
             try:
                 await bot.send_message(
                     user_id,
-                    f"🎉 Вы выполнили условие промокода **'{promo.code}'**! "
-                    f"Вам дополнительно начислено **{promo.reward} ⭐**."
+                    f"🎉 Вы выполнили условие промокода <b><code>{promo.code}</code></b>! "
+                    f"Вам дополнительно начислено <b>{promo.reward} ⭐</b>."
                 )
                 logger.info(f"User {user_id} completed promo '{promo.code}' condition. Rewarded {promo.reward} stars.")
             except Exception as e:

@@ -29,7 +29,7 @@ GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
 GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
 
 # --- ИЗМЕНЕНИЕ: Добавляем настройку модели Groq ---
-GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile")
+GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama3-70b-8192") # Актуальная модель Groq
 
 
 if not GOOGLE_API_KEYS:
@@ -49,7 +49,7 @@ class Rewards:
     YANDEX_WITH_TEXT = 50.0
     YANDEX_WITHOUT_TEXT = 15.0
     GMAIL_ACCOUNT = 5.0 # Стандартная награда
-    ADMIN_ADD_STARS = 999.0 # Награда для админ-команды /addstars
+    ADMIN_ADD_STARS = 999.0 # Награда для админ-команды /addstars. Убрал *
 
     # Награды для реферальной системы
     # ПУТЬ 1: Google

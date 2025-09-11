@@ -46,9 +46,9 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     referrer_info = await db_manager.get_referrer_info(user_id)
     
     profile_text = (
-        f"✨ Ваш Профиль ✨\n\n"
-        f"Вас пригласил: {referrer_info}\n"
-        f"Баланс звезд: {balance} ⭐\n"
+        f"✨ Ваш <b>Профиль</b> ✨<br><br>"
+        f"Вас пригласил: {referrer_info}<br>"
+        f"Баланс звезд: {balance} ⭐<br>"
         f"В холде: {hold_balance} ⭐"
     )
     
@@ -208,12 +208,12 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
     if success:
         sender_name = f"@{sender_username}" if data['show_nick'] else "Анонимный пользователь"
         notification_text = (
-            f"✨ Вам переданы звезды ✨\n\n"
-            f"От: {sender_name}\n"
+            f"✨ Вам переданы звезды ✨<br><br>"
+            f"От: {sender_name}<br>"
             f"Количество: {data['transfer_amount']} ⭐"
         )
         if comment:
-            notification_text += f"\nКомментарий: {comment}"
+            notification_text += f"<br>Комментарий: {comment}"
         
         try:
             await bot.send_message(data['recipient_id'], notification_text)
@@ -328,30 +328,26 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
         return
 
     admin_message = (
-        f"🚨 **Новый запрос на вывод средств!** 🚨\n\n"
-        f"👤 **Отправитель:** @{user.username} (ID: `{user.id}`)\n"
-        f"💰 **Сумма:** {amount} ⭐\n"
-        f"🎯 **Получатель:** {recipient_info}\n"
+        f"🚨 <b>Новый запрос на вывод средств!</b> 🚨<br><br>"
+        f"👤 <b>Отправитель:</b> @{user.username} (ID: <code>{user.id}</code>)<br>"
+        f"💰 <b>Сумма:</b> {amount} ⭐<br>"
+        f"🎯 <b>Получатель:</b> {recipient_info}<br>"
     )
     if comment:
-        admin_message += f"💬 **Комментарий:** {comment}\n"
+        admin_message += f"💬 <b>Комментарий:</b> {comment}<br>"
     
-    admin_message += f"\n*Запрос ID: `{request_id}`*"
+    admin_message += f"<br>Запрос ID: <code>{request_id}</code>"
 
     try:
         await bot.send_message(
             chat_id=WITHDRAWAL_CHANNEL_ID,
             text=admin_message,
-            parse_mode="Markdown",
             reply_markup=inline.get_admin_withdrawal_keyboard(request_id)
         )
-        # --- ИЗМЕНЕНИЕ: Добавлена ссылка на канал ---
-        await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.\n\nСледить за статусом можно в нашем <a href='https://t.me/conclusions_starref'>канале выплат</a>.")
+        await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.<br><br>Следить за статусом можно в нашем <a href='https://t.me/conclusions_starref'>канале выплат</a>.")
     except Exception as e:
         logger.error(f"Не удалось отправить запрос в канал выплат {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
-        # --- ИЗМЕНЕНИЕ: Улучшенное сообщение об ошибке ---
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат или не имеет нужных прав. Пожалуйста, обратитесь в поддержку. Ваши звезды не были списаны.")
-        # Возвращаем баланс, так как уведомление не было отправлено
         await db_manager.update_balance(user.id, amount)
     
     await state.clear()
@@ -430,11 +426,11 @@ async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str 
 async def show_hold_info(callback: CallbackQuery, state: FSMContext, **kwargs):
     reviews_in_hold = await db_manager.get_user_hold_reviews(callback.from_user.id)
     if not reviews_in_hold:
-        text = "⏳ Ваши отзывы в холде:\n\nУ вас нет отзывов в холде."
+        text = "⏳ Ваши отзывы в холде:<br><br>У вас нет отзывов в холде."
     else:
-        text = "⏳ Ваши отзывы в холде:\n\n"
+        text = "⏳ Ваши отзывы в холде:<br><br>"
         review_lines = [f"- {review.amount} ⭐ ({review.platform}) до {review.hold_until.strftime('%d.%m.%Y %H:%M')} UTC" for review in reviews_in_hold]
-        text += "\n".join(review_lines)
+        text += "<br>".join(review_lines)
     
     if callback.message:
         try:

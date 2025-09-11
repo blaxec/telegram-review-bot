@@ -16,7 +16,7 @@ from config import FINAL_CHECK_ADMIN
 
 logger = logging.getLogger(__name__)
 
-# --- НОВАЯ ФУНКЦИЯ ---
+
 async def send_cooldown_expired_notification(bot: Bot, user_id: int, platform: str):
     """Отправляет пользователю уведомление об истечении кулдауна."""
     platform_names = {
@@ -30,7 +30,7 @@ async def send_cooldown_expired_notification(bot: Bot, user_id: int, platform: s
     try:
         await bot.send_message(
             user_id,
-            f"⏰ Ваш кулдаун для задания '{platform_name}' закончился! Вы снова можете выполнять эту задачу."
+            f"⏰ Ваш кулдаун для задания '<b>{platform_name}</b>' закончился! Вы снова можете выполнять эту задачу."
         )
         logger.info(f"Sent cooldown expiration notification to user {user_id} for platform {platform}.")
     except (TelegramNetworkError, TelegramBadRequest):

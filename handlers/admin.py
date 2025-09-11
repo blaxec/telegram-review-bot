@@ -7,7 +7,7 @@ from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -24,8 +24,6 @@ from logic.admin_logic import (
     approve_review_to_hold_logic,
     reject_initial_review_logic,
     get_user_hold_info_logic,
-    # approve_hold_review_logic, # Эта логика теперь часть новой системы
-    # reject_hold_review_logic, # и больше не нужна в старом виде
     approve_withdrawal_logic,
     reject_withdrawal_logic,
     apply_fine_to_user,
@@ -351,7 +349,7 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     original_caption = callback.message.caption or ""
 
     await callback.message.edit_caption(
-        caption=f"{original_caption}\n\n🤖 *Запущена проверка с помощью ИИ...*",
+        caption=f"{original_caption}\n\n🤖 <b>Запущена проверка с помощью ИИ...</b>",
         reply_markup=None 
     )
     
@@ -373,10 +371,10 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if ocr_result.get('status') == 'success':
         summary = ocr_result.get('analysis_summary', 'Анализ завершен.')
         reasoning = ocr_result.get('reasoning', 'Без дополнительных комментариев.')
-        ai_summary_text = f"🤖 *Вердикт ИИ:*\n- {summary}\n- *Обоснование:* {reasoning}"
+        ai_summary_text = f"🤖 <b>Вердикт ИИ:</b>\n- {summary}\n- <b>Обоснование:</b> {reasoning}"
     else: 
         reason = ocr_result.get('message') or ocr_result.get('reason', 'Неизвестная ошибка')
-        ai_summary_text = (f"⚠️ **AI не уверен или произошла ошибка.**\n"
+        ai_summary_text = (f"⚠️ <b>AI не уверен или произошла ошибка.</b>\n"
                          f"Причина: {reason}\n"
                          f"Требуется ручная проверка.")
 
@@ -403,7 +401,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
     
     action_text = ""
     if action == "confirm":
-        action_text = f"✅ ПОДТВЕРЖДЕНО (@{callback.from_user.username})"
+        action_text = f"✅ <b>ПОДТВЕРЖДЕНО</b> (@{callback.from_user.username})"
         if context == "google_profile":
             await user_state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
             prompt_msg = await bot.send_message(user_id, "Профиль прошел проверку. Пришлите скриншот последних отзывов.", reply_markup=inline.get_google_last_reviews_check_keyboard())
@@ -415,12 +413,12 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
             await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
         elif context == "gmail_device_model":
-            prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.\nВведите данные для аккаунта:\nИмя\nФамилия\nПароль\nПочта (без @gmail.com)")
+            prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.<br>Введите данные для аккаунта:<br>Имя<br>Фамилия<br>Пароль<br>Почта (без @gmail.com)")
             await admin_state.set_state(AdminState.ENTER_GMAIL_DATA)
             await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
     
     elif action == "warn":
-        action_text = f"⚠️ ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ (@{callback.from_user.username})"
+        action_text = f"⚠️ <b>ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ</b> (@{callback.from_user.username})"
         platform = "gmail" if "gmail" in context else context.split('_')[0]
         prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
         await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
@@ -433,7 +431,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         )
 
     elif action == "reject":
-        action_text = f"❌ ОТКЛОНЕН (@{callback.from_user.username})"
+        action_text = f"❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
         context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_device_model"}
         rejection_context = context_map.get(context)
         if rejection_context:
@@ -548,7 +546,7 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
 
     if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
         await message.answer(
-            f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
+            f"❌ {generated_text}<br><br>Попробуйте снова или напишите вручную.", 
             reply_markup=inline.get_ai_error_keyboard()
         )
         await state.update_data(ai_scenario=scenario)
@@ -556,8 +554,8 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
         return
 
     moderation_text = (
-        "📄 **Сгенерированный текст отзыва:**\n\n"
-        f"<i>{generated_text}</i>\n\n"
+        "📄 <b>Сгенерированный текст отзыва:</b><br><br>"
+        f"<i>{generated_text}</i><br><br>"
         "Выберите следующее действие:"
     )
     
@@ -582,7 +580,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
             user_id=data['target_user_id'], link_id=data['target_link_id'],
             platform=data['platform'], review_text=review_text
         )
-        await callback.message.edit_text(f"Текст отправлен пользователю.\nСтатус: {response_text}", reply_markup=None)
+        await callback.message.edit_text(f"Текст отправлен пользователю.<br>Статус: {response_text}", reply_markup=None)
         await state.clear()
 
     elif action == 'regenerate':
@@ -607,14 +605,14 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
 
         if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
             await callback.message.edit_text(
-                f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
+                f"❌ {generated_text}<br><br>Попробуйте снова или напишите вручную.", 
                 reply_markup=inline.get_ai_error_keyboard()
             )
             return
 
         new_moderation_text = (
-            "📄 **Новый сгенерированный текст отзыва:**\n\n"
-            f"<i>{generated_text}</i>\n\n"
+            "📄 <b>Новый сгенерированный текст отзыва:</b><br><br>"
+            f"<i>{generated_text}</i><br><br>"
             "Выберите следующее действие:"
         )
         await callback.message.edit_text(new_moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
@@ -640,7 +638,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В ХОЛДЕ (@{callback.from_user.username})", reply_markup=None)
+        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В <b>ХОЛДЕ</b> (@{callback.from_user.username})", reply_markup=None)
 
 @router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
 async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
@@ -677,7 +675,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
             original_message = await bot.edit_message_caption(
                 chat_id=message.from_user.id,
                 message_id=review.admin_message_id,
-                caption=f"{(review.review_text or '')}\n\n❌ ОТКЛОНЕН (@{message.from_user.username})\nПричина: {reason}",
+                caption=f"{(review.review_text or '')}\n\n❌ <b>ОТКЛОНЕН</b> (@{message.from_user.username})\nПричина: {reason}",
                 reply_markup=None
             )
     except Exception as e:
@@ -693,9 +691,22 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     success, message_text = await approve_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n✅ ОДОБРЕН И ВЫПЛАЧЕН (@{callback.from_user.username})"
+        new_caption = (callback.message.caption or "") + f"\n\n✅ <b>ОДОБРЕН И ВЫПЛАЧЕН</b> (@{callback.from_user.username})"
         try:
-            await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+            # Для медиагруппы нужно удалить старые фото, а потом отправить новую
+            # Или просто отредактировать подпись у первого сообщения в группе
+            if callback.message.media_group_id: # Это медиагруппа
+                # Если это медиагруппа, Telegram не позволяет редактировать текст, кроме подписи
+                # у первого фото, и нельзя удалить/изменить другие медиа.
+                # Поэтому редактируем подпись у первого фото.
+                await bot.edit_message_caption(
+                    chat_id=callback.message.chat.id,
+                    message_id=callback.message.message_id,
+                    caption=new_caption,
+                    reply_markup=None
+                )
+            else: # Одно фото
+                await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         except TelegramBadRequest:
             pass
 
@@ -706,9 +717,17 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
     success, message_text = await reject_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n❌ ОТКЛОНЕН (@{callback.from_user.username})"
+        new_caption = (callback.message.caption or "") + f"\n\n❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
         try:
-            await callback.message.edit_caption(caption=new_caption, reply_markup=None)
+            if callback.message.media_group_id: # Это медиагруппа
+                await bot.edit_message_caption(
+                    chat_id=callback.message.chat.id,
+                    message_id=callback.message.message_id,
+                    caption=new_caption,
+                    reply_markup=None
+                )
+            else: # Одно фото
+                await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         except TelegramBadRequest:
             pass
             
@@ -721,7 +740,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ✅ ВЫПЛАЧЕНО Администратором ]</i>"
+            new_text = (callback.message.text or "") + f"<br><br><i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -733,7 +752,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ❌ ОТКЛОНЕНО Администратором ]</i>"
+            new_text = (callback.message.text or "") + f"<br><br><i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -837,14 +856,14 @@ async def show_reward_settings_menu(message_or_callback: Message | CallbackQuery
     timer_hours_str = await db_manager.get_system_setting("reward_timer_hours")
     timer_hours = int(timer_hours_str) if timer_hours_str and timer_hours_str.isdigit() else 24
     
-    text = "⚙️ **Управление наградами для топа статистики**\n\n**Текущие настройки:**\n"
+    text = "⚙️ <b>Управление наградами для топа статистики</b><br><br><b>Текущие настройки:</b><br>"
     if not settings:
-        text += "Призовые места не настроены.\n"
+        text += "Призовые места не настроены.<br>"
     else:
         for setting in settings:
-            text += f" • {setting.place}-е место: {setting.reward_amount} ⭐\n"
+            text += f" • {setting.place}-е место: {setting.reward_amount} ⭐<br>"
     
-    text += f"\n**Период выдачи:** раз в {timer_hours} часов."
+    text += f"<br><b>Период выдачи:</b> раз в {timer_hours} часов."
     
     markup = inline.get_reward_settings_menu_keyboard(timer_hours)
 
@@ -888,7 +907,7 @@ async def process_places_count(message: Message, state: FSMContext):
 async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.REWARD_SET_AMOUNT_FOR_PLACE)
     prompt_msg = await callback.message.edit_text(
-        "Введите данные для изменения награды в формате: `МЕСТО СУММА`\nНапример: `1 50.5` или `3 15`",
+        "Введите данные для изменения награды в формате: <code>МЕСТО СУММА</code><br>Например: <code>1 50.5</code> или <code>3 15</code>",
         reply_markup=inline.get_cancel_inline_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -903,7 +922,7 @@ async def process_reward_amount(message: Message, state: FSMContext):
         amount = float(amount_str.replace(',', '.'))
         if place <= 0 or amount < 0: raise ValueError
     except (ValueError, TypeError):
-        await message.answer("❌ Неверный формат. Используйте: `МЕСТО СУММА`, например: `1 50.5`")
+        await message.answer("❌ Неверный формат. Используйте: <code>МЕСТО СУММА</code>, например: <code>1 50.5</code>")
         return
 
     settings = await db_manager.get_reward_settings()
@@ -1075,7 +1094,7 @@ async def promo_uses_entered(message: Message, state: FSMContext):
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     await state.update_data(promo_uses=uses)
-    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
+    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.<br><br>Теперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.PROMO_REWARD)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -1091,7 +1110,7 @@ async def promo_reward_entered(message: Message, state: FSMContext):
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     await state.update_data(promo_reward=reward)
-    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
+    await message.answer(f"Принято. Награда: {reward} ⭐.<br><br>Теперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
     await state.set_state(AdminState.PROMO_CONDITION)
 
 @router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
@@ -1128,8 +1147,8 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
 
     try:
         user_notification = (
-            f"❗️ **Ваш аккаунт был заблокирован администратором.**\n\n"
-            f"<b>Причина:</b> {ban_reason}\n\n"
+            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b><br><br>"
+            f"<b>Причина:</b> {ban_reason}<br><br>"
             "Вам закрыт доступ ко всем функциям бота. "
             "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
         )

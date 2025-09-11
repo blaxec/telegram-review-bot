@@ -81,7 +81,7 @@ async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, st
             )
             await bot.send_message(
                 FINAL_CHECK_ADMIN,
-                f"⚠️ Пользователь @{review.user.username} (ID: `{user_id}`) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
+                f"⚠️ Пользователь @{review.user.username} (ID: <code>{user_id}</code>) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
             )
         except Exception as e:
             logger.error(f"Failed to notify about confirmation timeout for review {review_id}: {e}")
@@ -108,14 +108,17 @@ async def process_expired_holds(bot: Bot, storage: BaseStorage, scheduler: Async
         await user_state.update_data(review_id_for_confirmation=review_id)
         
         run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.CONFIRMATION_TIMEOUT_MINUTES)
-        scheduler.add_job(handle_confirmation_timeout, 'date', run_date=run_date, args=[bot, user_id, review_id, user_state])
+        
+        # Планируем задачу таймаута
+        timeout_job = scheduler.add_job(handle_confirmation_timeout, 'date', run_date=run_date, args=[bot, user_id, review_id, user_state])
+        await user_state.update_data(confirmation_timeout_job_id=timeout_job.id) # Сохраняем ID задачи в FSM
         
         try:
             await bot.send_message(
                 user_id,
                 f"🔔 Время холда для вашего отзыва #{review_id} истекло!\n\n"
-                f"Для зачисления награды, пожалуйста, пришлите **новый скриншот**, подтверждающий, что ваш отзыв всё ещё опубликован.\n\n"
-                f"⏳ У вас есть **{Durations.CONFIRMATION_TIMEOUT_MINUTES} минут** на отправку.",
+                f"Для зачисления награды, пожалуйста, пришлите <b>новый скриншот</b>, подтверждающий, что ваш отзыв всё ещё опубликован.<br><br>"
+                f"⏳ У вас есть <b>{Durations.CONFIRMATION_TIMEOUT_MINUTES} минут</b> на отправку.",
                 reply_markup=inline.get_cancel_inline_keyboard()
             )
             logger.info(f"Requested confirmation screenshot for review {review_id} from user {user_id}.")

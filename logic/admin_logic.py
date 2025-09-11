@@ -48,7 +48,7 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
             logger.warning(f"Skipping invalid link format: {stripped_link}")
             skipped_count += 1
 
-    return f"Готово!\n✅ Добавлено: {added_count}\n⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
+    return f"Готово!<br>✅ Добавлено: {added_count}<br>⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
 
 
 # --- ЛОГИКА ДЛЯ ПРЕДУПРЕЖДЕНИЙ И ОТКЛОНЕНИЙ ---
@@ -56,13 +56,13 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
 async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, context: str, user_state: FSMContext):
     """Логика обработки причины отклонения и уведомления пользователя."""
     if context == "gmail_data_request" or context == "gmail_device_model":
-        user_message_text = f"❌ Ваш запрос на создание аккаунта был отклонен.\n\n**Причина:** {reason}"
+        user_message_text = f"❌ Ваш запрос на создание аккаунта был отклонен.<br><br><b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
     elif context == "gmail_account":
-        user_message_text = f"❌ Ваш созданный аккаунт Gmail был отклонен администратором.\n\n**Причина:** {reason}"
+        user_message_text = f"❌ Ваш созданный аккаунт Gmail был отклонен администратором.<br><br><b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
     else:
-        user_message_text = f"❌ Ваша проверка была отклонена администратором.\n\n**Причина:** {reason}"
+        user_message_text = f"❌ Ваша проверка была отклонена администратором.<br><br><b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
         
     try:
@@ -76,10 +76,10 @@ async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, co
 async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, reason: str, user_state: FSMContext, context: str):
     """Логика обработки причины предупреждения и уведомления пользователя."""
     warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
-    user_message_text = f"⚠️ **Администратор выдал вам предупреждение.**\n\n**Причина:** {reason}\n"
+    user_message_text = f"⚠️ <b>Администратор выдал вам предупреждение.</b><br><br><b>Причина:</b> {reason}<br>"
 
     if warnings_count >= Limits.WARNINGS_THRESHOLD_FOR_BAN:
-        user_message_text += f"\n❗️ **Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.**"
+        user_message_text += f"<br>❗️ <b>Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.</b>"
         await user_state.clear()
         await user_state.set_state(UserState.MAIN_MENU)
     else:
@@ -96,7 +96,7 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
              await user_state.set_state(state_to_return)
         else: # На случай если контекст не найден
              await user_state.set_state(UserState.MAIN_MENU)
-        user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
+        user_message_text += "<br>Пожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
 
     try:
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
@@ -125,14 +125,14 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     if platform == "google":
         task_state = UserState.GOOGLE_REVIEW_TASK_ACTIVE
         task_message = (
-            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-            "1. Перепишите текст ниже. Вы должны опубликовать отзыв, который *В ТОЧНОСТИ* совпадает с этим текстом.\n"
-            "2. Перейдите по ссылке и оставьте отзыв на 5 звезд, переписав текст.\n\n"
-            "❗️❗️❗️ <b>ВНИМАНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы или эмодзи. Отзыв должен быть идентичным. КОПИРОВАТЬ И ВСТАВЛЯТЬ ТЕКСТ НЕЛЬЗЯ\n\n"
+            "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+            "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.<br>"
+            "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.<br><br>"
+            "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.<br><br>"
             "<b>Текст для отзыва:</b>\n"
-            f"{review_text}\n\n"
-            f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
-            f"⏳ На выполнение задания у вас есть <b>{Durations.TASK_GOOGLE_REVIEW_TIMEOUT} минут</b>. "
+            f"<i>{review_text}</i>\n\n"
+            f"🔗 <b><a href='{link.url}'>ПЕРЕЙТИ К ЗАДАНИЮ</a></b> \n\n"
+            f"⏳ На выполнение этого задания у вас есть <b>{Durations.TASK_GOOGLE_REVIEW_TIMEOUT} минут</b>. "
             f"Кнопка для подтверждения появится через <b>{Durations.TASK_GOOGLE_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
         run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_GOOGLE_REVIEW_CONFIRM_APPEARS)
@@ -141,13 +141,14 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
     elif platform == "yandex_with_text":
         task_state = UserState.YANDEX_REVIEW_TASK_ACTIVE
         task_message = (
-            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-            "1. Перепишите текст ниже. Вы должны опубликовать отзыв на <b>5 звезд</b>, который *В ТОЧНОСТИ* совпадает с этим текстом.\n\n"
-            "❗️❗️❗️ <b>ВНИМАНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы или эмодзи. Отзыв должен быть идентичным. КОПИРОВАТЬ И ВСТАВЛЯТЬ ТЕКСТ НЕЛЬЗЯ\n\n"
+            "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+            "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.<br>"
+            "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.<br><br>"
+            "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.<br><br>"
             "<b>Текст для отзыва:</b>\n"
-            f"{review_text}\n\n"
-            f"🔗 <b>[ПЕРЕЙТИ К ЗАДАНИЮ]({link.url})</b> \n\n"
-            f"⏳ На выполнение задания у вас есть <b>{Durations.TASK_YANDEX_REVIEW_TIMEOUT} минут</b>. "
+            f"<i>{review_text}</i>\n\n"
+            f"🔗 <b><a href='{link.url}'>ПЕРЕЙТИ К ЗАДАНИЮ</a></b> \n\n"
+            f"⏳ На выполнение этого задания у вас есть <b>{Durations.TASK_YANDEX_REVIEW_TIMEOUT} минут</b>. "
             f"Кнопка для подтверждения появится через <b>{Durations.TASK_YANDEX_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
         run_date_confirm = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_YANDEX_REVIEW_CONFIRM_APPEARS)
@@ -157,14 +158,33 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
-        await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
+        sent_message = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
+        # Отменяем предыдущие джобы, если они есть. Это важно, чтобы кнопка появлялась вовремя.
+        # Например, если пользователь очень быстро нажал "Выполнено" на этапе лайков, а потом админ
+        # отправил текст, то старые джобы нужно отменить, чтобы не было конфликтов.
+        user_data_prev = await user_state.get_data()
+        prev_confirm_job_id = user_data_prev.get('confirm_job_id')
+        prev_timeout_job_id = user_data_prev.get('timeout_job_id')
+        
+        if prev_confirm_job_id:
+            try: scheduler.remove_job(prev_confirm_job_id)
+            except Exception: pass
+        if prev_timeout_job_id:
+            try: scheduler.remove_job(prev_timeout_job_id)
+            except Exception: pass
+        
     except Exception as e:
         await reference_manager.release_reference_from_user(user_id, 'available')
         await user_state.clear()
         return False, f"Не удалось отправить задание пользователю {user_id}. Ошибка: {e}"
 
     await user_state.set_state(task_state)
-    await user_state.update_data(username=user_info.username, review_text=review_text, platform_for_task=platform)
+    await user_state.update_data(
+        username=user_info.username, 
+        review_text=review_text, 
+        platform_for_task=platform,
+        current_task_message_id=sent_message.message_id # Сохраняем ID сообщения для возможного удаления
+    )
 
     confirm_job = scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
     timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=run_date_timeout, args=[bot, dp.storage, user_id, platform, 'основное задание', scheduler])
@@ -179,21 +199,21 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
     """Применяет штраф к пользователю, обновляет его баланс и уведомляет его."""
     user = await db_manager.get_user(user_id)
     if not user:
-        return f"❌ Пользователь с ID `{user_id}` не найден."
+        return f"❌ Пользователь с ID <code>{user_id}</code> не найден."
 
     await db_manager.update_balance(user_id, -amount)
     
     user_notification_text = (
-        f"❗️ **Вам был выдан штраф администратором.**\n\n"
-        f"**Причина:** {reason}\n"
-        f"**Списано:** {amount} ⭐"
+        f"❗️ <b>Вам был выдан штраф администратором.</b><br><br>"
+        f"<b>Причина:</b> {reason}<br>"
+        f"<b>Списано:</b> {amount} ⭐"
     )
 
     try:
         await bot.send_message(user_id, user_notification_text, reply_markup=inline.get_back_to_main_menu_keyboard())
         logger.info(f"Admin {admin_id} fined user {user_id} for {amount} stars. Reason: {reason}")
         username = f"@{user.username}" if user.username else f"ID {user_id}"
-        return f"✅ Штраф успешно применен к пользователю **{username}**."
+        return f"✅ Штраф успешно применен к пользователю <b>{username}</b>."
     except Exception as e:
         logger.error(f"Failed to notify user {user_id} about the fine: {e}")
         await db_manager.update_balance(user_id, amount)
@@ -295,8 +315,8 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     try:
         user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен."
         if reason:
-            user_message += f"\n\n**Причина:** {reason}"
-        user_message += "\n\nВы сможете попробовать снова после окончания кулдауна."
+            user_message += f"<br><br><b>Причина:</b> {reason}"
+        user_message += "<br><br>Вы сможете попробовать снова после окончания кулдауна."
         
         await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
     except Exception as e:
@@ -304,74 +324,6 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     
     return True, "Отзыв отклонен. Пользователю выдан кулдаун."
 
-
-async def approve_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
-    """Логика для окончательного одобрения отзыва из холда и начисления реферальных наград."""
-    approved_review = await db_manager.admin_approve_review(review_id)
-    if not approved_review:
-        return False, "❌ Ошибка: отзыв не найден или уже обработан."
-    
-    user_id = approved_review.user_id
-    user = await db_manager.get_user(user_id)
-    
-    if user and user.referrer_id:
-        referrer = await db_manager.get_user(user.referrer_id)
-        if referrer and referrer.referral_path:
-            referral_reward = 0
-            
-            if referrer.referral_path == 'google' and approved_review.platform == 'google':
-                referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
-            
-            elif referrer.referral_path == 'yandex':
-                if referrer.referral_subpath == 'with_text' and approved_review.platform == 'yandex_with_text':
-                    referral_reward = Rewards.REFERRAL_YANDEX_WITH_TEXT
-                elif referrer.referral_subpath == 'without_text' and approved_review.platform == 'yandex_without_text':
-                    referral_reward = Rewards.REFERRAL_YANDEX_WITHOUT_TEXT
-            
-            if referral_reward > 0:
-                await db_manager.add_referral_earning(user_id, referral_reward)
-                try:
-                    await bot.send_message(
-                        referrer.id,
-                        f"🎉 Ваш реферал @{user.username} успешно завершил отзыв! "
-                        f"Вам начислено {referral_reward} ⭐ в копилку."
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
-
-    if approved_review.platform == 'google':
-        await check_and_apply_promo_reward(user_id, "google_review", bot)
-    elif 'yandex' in approved_review.platform:
-        await check_and_apply_promo_reward(user_id, "yandex_review", bot)
-    
-    try:
-        msg = await bot.send_message(user_id, f"✅ Ваш отзыв (ID: {review_id}) одобрен! +{approved_review.amount} ⭐ зачислены на баланс.")
-        await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении: {e}")
-        
-    return True, "✅ Отзыв одобрен!"
-
-
-async def reject_hold_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
-    """Логика для отклонения отзыва из холда."""
-    review_before = await db_manager.get_review_by_id(review_id)
-    if not review_before or review_before.status != 'on_hold':
-        return False, "❌ Ошибка: отзыв не найден или уже обработан."
-
-    rejected_review = await db_manager.admin_reject_review(review_id)
-    if not rejected_review:
-        return False, "❌ Не удалось отклонить отзыв."
-    
-    try:
-        user_message = f"❌ Ваш отзыв (ID: {review_id}) отклонен после проверки. Звезды списаны из холда."
-        await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {rejected_review.user_id} об отклонении: {e}")
-
-    return True, "❌ Отзыв отклонен!"
-
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ ФИНАЛЬНОЙ ВЕРИФИКАЦИИ ---
 
 async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
     """Логика для окончательного одобрения отзыва ПОСЛЕ ХОЛДА и начисления реферальных наград."""
@@ -435,8 +387,6 @@ async def reject_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, str
 
     return True, "❌ Отзыв отклонен, холд списан."
 
-# --- КОНЕЦ НОВЫХ ФУНКЦИЙ ---
-
 
 # --- ЛОГИКА ДЛЯ ВЫВОДА СРЕДСТВ ---
 
@@ -447,7 +397,7 @@ async def approve_withdrawal_logic(request_id: int, bot: Bot) -> tuple[bool, str
         return False, "❌ Запрос уже обработан или не найден.", None
     
     try:
-        await bot.send_message(request.user_id, f"✅ Ваш запрос на вывод {request.amount} ⭐ **подтвержден**.")
+        await bot.send_message(request.user_id, f"✅ Ваш запрос на вывод {request.amount} ⭐ <b>подтвержден</b>.")
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal approval: {e}")
 
@@ -461,7 +411,7 @@ async def reject_withdrawal_logic(request_id: int, bot: Bot) -> tuple[bool, str,
         return False, "❌ Запрос уже обработан или не найден.", None
 
     try:
-        await bot.send_message(request.user_id, f"❌ Ваш запрос на вывод {request.amount} ⭐ **отклонен**. Средства возвращены на баланс.")
+        await bot.send_message(request.user_id, f"❌ Ваш запрос на вывод {request.amount} ⭐ <b>отклонен</b>. Средства возвращены на баланс.")
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
 
@@ -474,25 +424,25 @@ async def get_user_hold_info_logic(identifier: str) -> str:
     """Возвращает отформатированную строку с информацией о холде пользователя."""
     user_id = await db_manager.find_user_by_identifier(identifier)
     if not user_id:
-        return f"Пользователь `{identifier}` не найден в базе данных."
+        return f"Пользователь <code>{identifier}</code> не найден в базе данных."
 
     user = await db_manager.get_user(user_id)
     reviews_in_hold = await db_manager.get_user_hold_reviews(user_id)
 
     if not reviews_in_hold:
-        return f"У пользователя @{user.username} (ID: `{user_id}`) нет отзывов в холде."
+        return f"У пользователя @{user.username} (ID: <code>{user_id}</code>) нет отзывов в холде."
 
     total_hold_amount = sum(review.amount for review in reviews_in_hold)
 
-    response_text = f"⏳ Отзывы в холде для @{user.username} (ID: `{user_id}`)\n"
-    response_text += f"Общая сумма в холде: **{total_hold_amount}** ⭐\n\n"
+    response_text = f"⏳ Отзывы в холде для @{user.username} (ID: <code>{user_id}</code>)<br>"
+    response_text += f"Общая сумма в холде: <b>{total_hold_amount}</b> ⭐<br><br>"
 
     for review in reviews_in_hold:
         hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
         response_text += (
-            f"🔹 **{review.amount} ⭐** ({review.platform})\n"
-            f"   - До: {hold_until_str} UTC\n"
-            f"   - ID отзыва: `{review.id}`\n\n"
+            f"🔹 <b>{review.amount} ⭐</b> ({review.platform})<br>"
+            f"   - До: {hold_until_str} UTC<br>"
+            f"   - ID отзыва: <code>{review.id}</code><br><br>"
         )
     return response_text
 

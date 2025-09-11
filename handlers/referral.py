@@ -2,9 +2,7 @@
 
 import logging
 from aiogram import Router, F, Bot
-# --- ДОБАВЬТЕ ЭТОТ ИМПОРТ ---
 from aiogram.filters import StateFilter
-# ----------------------------
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
@@ -37,11 +35,11 @@ async def show_selected_referral_path(message_or_callback: Message | CallbackQue
             path_description = f"Вы получаете <b>{Rewards.REFERRAL_YANDEX_WITHOUT_TEXT} ⭐</b> за каждый одобренный отзыв вашего реферала в Яндекс.Картах (без текста)."
 
     ref_text = (
-        f"🚀 <b>Ваша реферальная система</b>\n\n"
-        f"<b>Ваш выбор:</b> {path_description}\n\n"
-        f"🔗 <b>Ссылка для приглашений:</b>\n"
-        f"<code>{referral_link}</code>\n"
-        f"(Нажмите на ссылку выше, чтобы скопировать её)\n\n"
+        f"🚀 <b>Ваша реферальная система</b><br><br>"
+        f"<b>Ваш выбор:</b> {path_description}<br><br>"
+        f"🔗 <b>Ссылка для приглашений:</b><br>"
+        f"<code>{referral_link}</code><br>"
+        f"(Нажмите на ссылку выше, чтобы скопировать её)<br><br>"
         f"💰 Накоплено в копилке: <b>{referral_earnings:.2f} ⭐</b>"
     )
 
@@ -82,8 +80,6 @@ async def referral_entry_point(callback: CallbackQuery, state: FSMContext, bot: 
     else:
         await show_referral_path_selection(callback, state)
 
-# --- ИЗМЕНЕНИЕ: Добавлены новые обработчики ---
-
 @router.callback_query(F.data == 'profile_referrals_list')
 async def show_referrals_list(callback: CallbackQuery):
     """Показывает пользователю список его рефералов."""
@@ -92,7 +88,7 @@ async def show_referrals_list(callback: CallbackQuery):
     if not referrals:
         text = "У вас пока нет приглашенных пользователей."
     else:
-        text = "👥 Ваши рефералы:\n\n" + "\n".join([f"- @{username}" for username in referrals if username])
+        text = "👥 <b>Ваши рефералы:</b><br><br>" + "<br>".join([f"- @{username}" for username in referrals if username])
         
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_referral_menu_keyboard())
@@ -118,9 +114,9 @@ async def show_referral_path_selection(callback: CallbackQuery, state: FSMContex
     """Показывает меню выбора реферального пути."""
     await state.set_state(UserState.REFERRAL_PATH_SELECTION)
     selection_text = (
-        "🤝 <b>Добро пожаловать в реферальную систему!</b>\n\n"
+        "🤝 <b>Добро пожаловать в реферальную систему!</b><br><br>"
         "Выберите, как вы хотите зарабатывать звезды с приглашенных друзей. "
-        "Это поможет вам получать пассивный доход!\n\n"
+        "Это поможет вам получать пассивный доход!<br><br>"
         "❗️<b>ВНИМАНИЕ:</b> Вы можете выбрать путь только <b>один раз</b>. Изменить его будет невозможно."
     )
     if callback.message:
@@ -131,7 +127,7 @@ async def select_yandex_subpath(callback: CallbackQuery, state: FSMContext):
     """Показывает под-меню для выбора типа Яндекс.Отзывов."""
     await state.set_state(UserState.REFERRAL_YANDEX_SUBPATH_SELECTION)
     text = (
-        "Вы выбрали путь 'Яндекс.Карты'.\n\n"
+        "Вы выбрали путь 'Яндекс.Карты'.<br><br>"
         "Теперь уточните, за какие именно отзывы вы хотите получать награду:"
     )
     if callback.message:
@@ -143,7 +139,6 @@ async def back_to_main_selection(callback: CallbackQuery, state: FSMContext):
     await show_referral_path_selection(callback, state)
 
 
-# --- ВОТ ИСПРАВЛЕННАЯ СТРОКА ---
 @router.callback_query(F.data.startswith('confirm_ref_path:'), StateFilter(UserState.REFERRAL_PATH_SELECTION, UserState.REFERRAL_YANDEX_SUBPATH_SELECTION))
 async def confirm_referral_path(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Сохраняет выбор пользователя в БД и показывает финальное сообщение."""

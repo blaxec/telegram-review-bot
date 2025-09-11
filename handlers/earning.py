@@ -7,7 +7,7 @@ from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -15,7 +15,6 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-# ИСПРАВЛЕНИЕ: Импортируем ADMIN_ID_1 вместо жестко заданного значения
 from config import FINAL_CHECK_ADMIN, Durations, TESTER_IDS, ADMIN_ID_1
 from logic.user_notifications import (
     format_timedelta,
@@ -29,8 +28,6 @@ from utils.tester_filter import IsTester
 router = Router()
 logger = logging.getLogger(__name__)
 
-# ИСПРАВЛЕНИЕ: Убрали неверную переменную
-# TEXT_ADMIN = 1 
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Планирует удаление сообщения через заданную задержку."""
@@ -117,8 +114,7 @@ async def skip_timer_command_failed(message: Message):
         pass
         
     response_msg = await message.answer(
-        "❌ Команда `/skip` работает только на этапах с активным таймером.",
-        parse_mode="Markdown"
+        "❌ Команда <code>/skip</code> работает только на этапах с активным таймером."
     )
     asyncio.create_task(schedule_message_deletion(response_msg, 5))
 
@@ -175,9 +171,9 @@ async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.GOOGLE_REVIEW_INIT)
     if callback.message:
         prompt_msg = await callback.message.edit_text(
-            "⭐ За отзыв в Google.Картах начисляется 15 звезд.\n\n"
+            "⭐ За отзыв в Google.Картах начисляется 15 звезд.<br><br>"
             "💡 Для повышения проходимости вашего отзыва, пожалуйста, временно отключите "
-            "<i>\"Определение местоположения\"</i> в настройках приложения на вашем телефоне.",
+            "<i>«Определение местоположения»</i> в настройках приложения на вашем телефоне.",
             reply_markup=inline.get_google_init_keyboard()
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -190,7 +186,7 @@ async def process_google_review_done(callback: CallbackQuery, state: FSMContext)
         prompt_msg = await callback.message.edit_text(
             "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
             "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
-            "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
+            "Отзывы на новых аккаунтах не будут проходить проверку.<br><br>"
             "Отправьте фото следующим сообщением.",
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
@@ -201,9 +197,9 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
     if callback.message:
         try:
             await callback.message.edit_text(
-                "🤔 Как сделать скриншот вашего профиля Google.Карты:\n\n"
-                "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a>\n"
-                "2. Вас переведет на профиль Google Карты.\n"
+                "🤔 <b>Как сделать скриншот вашего профиля Google.Карты:</b><br><br>"
+                "1. Перейдите по ссылке: <a href='https://www.google.com/maps/contrib/'>Профиль Google Maps</a><br>"
+                "2. Вас переведет на профиль Google Карты.<br>"
                 "3. Сделайте скриншот вашего профиля (без замазывания и обрезания).",
                 reply_markup=inline.get_google_back_from_instructions_keyboard(),
                 disable_web_page_preview=True
@@ -219,7 +215,7 @@ async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext)
         await callback.message.edit_text(
             "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
             "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
-            "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
+            "Отзывы на новых аккаунтах не будут проходить проверку.<br><br>"
             "Отправьте фото следующим сообщением.",
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
@@ -238,7 +234,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     await state.set_state(UserState.GOOGLE_REVIEW_PROFILE_CHECK_PENDING)
     
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
+    caption = f"Проверьте имя и фамилию в профиле пользователя.<br>{user_info_text}"
     
     try:
         await bot.send_photo(
@@ -257,9 +253,9 @@ async def show_google_last_reviews_instructions(callback: CallbackQuery):
     if callback.message:
         try:
             await callback.message.edit_text(
-                "🤔 Как найти последние отзывы:\n\n"
-                "1. Откройте ваш профиль в Google Картах.\n"
-                "2. Перейдите во вкладку 'Отзывы'.\n"
+                "🤔 <b>Как найти последние отзывы:</b><br><br>"
+                "1. Откройте ваш профиль в Google Картах.<br>"
+                "2. Перейдите во вкладку 'Отзывы'.<br>"
                 "3. Сделайте скриншот, на котором видны даты ваших последних отзывов.",
                 reply_markup=inline.get_google_back_from_last_reviews_keyboard()
             )
@@ -289,7 +285,7 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     await state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK_PENDING)
     
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
+    caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.<br>{user_info_text}"
 
     try:
         await bot.send_photo(
@@ -318,9 +314,9 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
         return
 
     task_text = (
-        "Отлично! Следующий шаг:\n\n"
-        f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
-        "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.\n\n"
+        "<b>Отлично! Следующий шаг:</b><br><br>"
+        f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
+        "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.<br><br>"
         f"⏳ Для выполнения этого задания у вас есть <i>{Durations.TASK_GOOGLE_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS} минут."
     )
     if callback.message:
@@ -346,7 +342,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
     if callback.message:
         try:
-            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            response_msg = await callback.message.edit_text("✅ Отлично!<br><br>⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
             await schedule_message_deletion(response_msg, 25)
         except TelegramBadRequest: pass
             
@@ -362,7 +358,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         return
 
     admin_notification_text = (
-        f"Пользователь @{user_info.username} (ID: <code>{callback.from_user.id}</code>) прошел этап 'лайков' и ожидает текст для отзыва Google.\n\n"
+        f"Пользователь @{user_info.username} (ID: <code>{callback.from_user.id}</code>) прошел этап 'лайков' и ожидает текст для отзыва Google.<br><br>"
         f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
     )
     
@@ -370,17 +366,17 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
         if profile_screenshot_id:
             await bot.send_photo(
-                chat_id=ADMIN_ID_1, # ИСПРАВЛЕНИЕ
+                chat_id=ADMIN_ID_1,
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
                 reply_markup=keyboard
             )
         else:
-            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
+            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1}: {e}")
         keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
-        await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
+        await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
@@ -420,10 +416,10 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     link_url = link_object.url if link_object else "Ссылка не найдена"
 
     caption = (
-        f"🚨 Финальная проверка отзыва Google 🚨\n\n"
-        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)\n"
-        f"Ссылка: <code>{link_url}</code>\n\n"
-        f"Текст отзыва: «<i>{review_text}</i>»\n\n"
+        f"🚨 <b>Финальная проверка отзыва Google</b> 🚨<br><br>"
+        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)<br>"
+        f"Ссылка: <code>{link_url}</code><br><br>"
+        f"Текст отзыва: «<i>{review_text}</i>»<br><br>"
         "Скриншот прикреплен. Проверьте отзыв и примите решение."
     )
     
@@ -492,17 +488,17 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     
     if callback.message:
         await callback.message.edit_text(
-            f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward} звезд.\n\n"
-            "💡 Для проверки нам понадобится скриншот вашего профиля.\n"
-            "💡 Также выключите <i>\"Определение местоположения\"</i> для приложения в настройках телефона.\n"
-            "💡 Аккаунты принимаются не ниже <i>\"Знатока города\"</i> 3-го уровня.",
+            f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward} звезд.<br><br>"
+            "💡 Для проверки нам понадобится скриншот вашего профиля.<br>"
+            "💡 Также выключите <i>«Определение местоположения»</i> для приложения в настройках телефона.<br>"
+            "💡 Аккаунты принимаются не ниже <i>«Знатока города»</i> 3-го уровня.",
             reply_markup=inline.get_yandex_init_keyboard()
         )
 
 @router.callback_query(F.data == 'yandex_how_to_be_expert', UserState.YANDEX_REVIEW_INIT)
 async def show_yandex_instructions(callback: CallbackQuery):
-    text = ("💡 Чтобы повысить уровень \"Знатока города\", достаточно выполнять достижения.\n"
-            "Где их взять? В вашем профиле, нажав на <i>\"Знатока города\"</i>.")
+    text = ("💡 Чтобы повысить уровень <i>«Знатока города»</i>, достаточно выполнять достижения.<br>"
+            "Где их взять? В вашем профиле, нажав на <i>«Знатока города»</i>.")
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
@@ -511,11 +507,11 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
         prompt_msg = await callback.message.edit_text(
-            "Хорошо. Пожалуйста, сделайте и пришлите <i>скриншот вашего профиля</i> в Яндекс.Картах.\n\n"
-            "❗️<i>Требования к скриншоту:</i>\n"
-            "1. Скриншот должен быть <i>полным</i>, без обрезаний и замазывания.\n"
-            "2. На нем должен быть хорошо виден ваш уровень <i>\"Знатока города\"</i>.\n"
-            "3. Должна быть видна <i>дата вашего последнего отзыва</i>.\n\n"
+            "Хорошо. Пожалуйста, сделайте и пришлите <i>скриншот вашего профиля</i> в Яндекс.Картах.<br><br>"
+            "❗️<i>Требования к скриншоту:</i><br>"
+            "1. Скриншот должен быть <i>полным</i>, без обрезаний и замазывания.<br>"
+            "2. На нем должен быть хорошо виден ваш уровень <i>«Знатока города»</i>.<br>"
+            "3. Должна быть видна <i>дата вашего последнего отзыва</i>.<br><br>"
             "Отправьте фото следующим сообщением.",
             reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
         )
@@ -534,7 +530,7 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
     await state.set_state(UserState.YANDEX_REVIEW_PROFILE_SCREENSHOT_PENDING)
     
     user_info_text = f"Пользователь: @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)"
-    caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что уровень знатока не ниже 3 и видна дата последнего отзыва.\n"
+    caption = (f"Проверьте скриншот профиля Yandex. Убедитесь, что уровень знатока не ниже 3 и видна дата последнего отзыва.<br>"
                f"{user_info_text}")
     
     try:
@@ -571,10 +567,10 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     await state.update_data(username=callback.from_user.username, active_link_id=link.id)
     
     task_text = (
-        "Отлично! Ваш профиль одобрен. Теперь следующий шаг:\n\n"
-        f"🔗 <a href='{link.url}'>Перейти по ссылке</a>\n"
+        "<b>Отлично! Ваш профиль одобрен. Теперь следующий шаг:</b><br><br>"
+        f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
         "👀 <i>Действия</i>: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
-        "Это нужно для имитации активности перед написанием отзыва.\n\n"
+        "Это нужно для имитации активности перед написанием отзыва.<br><br>"
         f"⏳ На это задание у вас есть <i>{Durations.TASK_YANDEX_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS} минут."
     )
     if callback.message:
@@ -598,7 +594,7 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
     if review_type == "with_text":
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
         if callback.message:
-            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
+            response_msg = await callback.message.edit_text("✅ Отлично!<br><br>⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
             await schedule_message_deletion(response_msg, 25)
         
         user_id = callback.from_user.id
@@ -614,20 +610,20 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             return
 
         admin_notification_text = (
-            f"Пользователь @{user_info.username} (ID: <code>{user_id}</code>) прошел этап 'прогрева' и ожидает текст для отзыва Yandex (С ТЕКСТОМ).\n\n"
+            f"Пользователь @{user_info.username} (ID: <code>{user_id}</code>) прошел этап 'прогрева' и ожидает текст для отзыва Yandex (С ТЕКСТОМ).<br><br>"
             f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
         )
         
         try:
             keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
             if profile_screenshot_id:
-                await bot.send_photo(chat_id=ADMIN_ID_1, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
+                await bot.send_photo(chat_id=ADMIN_ID_1, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
             else:
-                await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True) # ИСПРАВЛЕНИЕ
+                await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1} for Yandex: {e}")
             keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
-            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard) # ИСПРАВЛЕНИЕ
+            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
     
     else: # review_type == "without_text"
         link_id = user_data.get('active_link_id')
@@ -640,10 +636,10 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             return
 
         task_text = (
-            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-            f"1. Перейдите по <a href='{link.url}'>ССЫЛКЕ</a>.\n"
-            "2. Поставьте <b>5 звезд</b>.\n"
-            "3. <b>Текст писать НЕ НУЖНО.</b>\n\n"
+            "<b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b><br><br>"
+            f"1. Перейдите по <a href='{link.url}'>ССЫЛКЕ</a>.<br>"
+            "2. Поставьте <b>5 звезд</b>.<br>"
+            "3. <b>Текст писать НЕ НУЖНО.</b><br><br>"
             "После этого сделайте скриншот опубликованного отзыва и отправьте его сюда."
         )
         if callback.message:
@@ -691,14 +687,14 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     link_url = link_object.url if link_object else "Ссылка не найдена"
     
     caption = (
-        f"🚨 Финальная проверка отзыва Yandex ({'С ТЕКСТОМ' if review_type == 'with_text' else 'БЕЗ ТЕКСТА'}) 🚨\n\n"
-        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)\n"
-        f"Ссылка: <code>{link_url}</code>\n\n"
+        f"🚨 <b>Финальная проверка отзыва Yandex</b> ({'С ТЕКСТОМ' if review_type == 'with_text' else 'БЕЗ ТЕКСТА'}) 🚨<br><br>"
+        f"Пользователь: @{user_data.get('username')} (ID: <code>{user_id}</code>)<br>"
+        f"Ссылка: <code>{link_url}</code><br><br>"
     )
     if review_text:
-        caption += f"Текст отзыва: «<i>{review_text}</i>»\n\n"
+        caption += f"Текст отзыва: «<i>{review_text}</i>»<br><br>"
     else:
-        caption += "Тип: Без текста (проверьте наличие 5 звезд).\n\n"
+        caption += "Тип: Без текста (проверьте наличие 5 звезд).<br><br>"
         
     caption += "Скриншот прикреплен. Проверьте отзыв и примите решение."
     
@@ -759,6 +755,15 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
         await message.answer("Произошла критическая ошибка: не найден оригинальный скриншот вашего отзыва. Обратитесь в поддержку.")
         await state.clear()
         return
+        
+    # Отменяем таймаут на ожидание скриншота
+    timeout_job_id = data.get('confirmation_timeout_job_id')
+    if timeout_job_id:
+        try:
+            scheduler.remove_job(timeout_job_id)
+        except Exception:
+            pass
+
 
     try:
         await message.delete()
@@ -771,24 +776,32 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
     await db_manager.save_confirmation_screenshot(review_id, new_screenshot_file_id)
     
     admin_text = (
-        f"🚨 **Подтверждение отзыва #{review_id}** 🚨\n\n"
-        f"**Пользователь:** @{message.from_user.username} (ID: `{message.from_user.id}`)\n"
-        f"**Ссылка на компанию:** `{review.link.url if review.link else 'Ссылка не найдена'}`\n\n"
+        f"🚨 <b>Подтверждение отзыва #{review_id}</b> 🚨<br><br>"
+        f"<b>Пользователь:</b> @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)<br>"
+        f"<b>Ссылка на компанию:</b> <code>{review.link.url if review.link else 'Ссылка не найдена'}</code><br><br>"
         "Сравните два скриншота и примите решение. "
-        "Сверху — **новый**, снизу — **старый** (при первоначальной сдаче)."
+        "Сверху — <b>новый</b>, снизу — <b>старый</b> (при первоначальной сдаче)."
     )
 
+    media_group = [
+        InputMediaPhoto(media=new_screenshot_file_id, caption=admin_text),
+        InputMediaPhoto(media=review.screenshot_file_id)
+    ]
+
     try:
-        await bot.send_photo(
+        # Отправляем медиагруппу
+        sent_messages = await bot.send_media_group(
             chat_id=FINAL_CHECK_ADMIN,
-            photo=new_screenshot_file_id,
-            caption=admin_text,
-            reply_markup=inline.get_admin_final_verification_keyboard(review_id)
+            media=media_group
         )
-        await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
-            photo=review.screenshot_file_id
-        )
+        
+        # Редактируем подпись первого сообщения, чтобы добавить кнопки
+        if sent_messages:
+            await bot.edit_message_reply_markup(
+                chat_id=FINAL_CHECK_ADMIN,
+                message_id=sent_messages[0].message_id,
+                reply_markup=inline.get_admin_final_verification_keyboard(review_id)
+            )
 
     except Exception as e:
         logger.error(f"Не удалось отправить файлы для финальной проверки отзыва {review_id} админу: {e}")

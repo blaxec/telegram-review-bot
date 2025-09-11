@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 async def format_stats_text(top_users: list) -> str:
     """Форматирует текст для сообщения со статистикой."""
     reward_settings = await db_manager.get_reward_settings()
-    rewards_map = {setting.place: setting.reward_amount for setting in reward_settings}
+    rewards_map = {setting.place: setting.reward_amount for setting in reward_settings if setting.reward_amount > 0}
 
     if not top_users:
-        return "📊 <i>Топ пользователей</i>\n\nПока в рейтинге никого нет."
+        return "📊 <i>Топ пользователей</i><br><br>Пока в рейтинге никого нет."
 
-    stats_text = "📊 <i>Топ-10 пользователей по балансу</i> 🏆\n\n"
+    stats_text = "📊 <i>Топ-10 пользователей по балансу</i> 🏆<br><br>"
     place_emojis = {
         1: "🥇", 2: "🥈", 3: "🥉",
         4: "4️⃣", 5: "5️⃣", 6: "6️⃣",
@@ -34,9 +34,9 @@ async def format_stats_text(top_users: list) -> str:
             reward_info = f" (🎁 Приз: {rewards_map[i]} ⭐)"
         
         stats_text += (
-            f"{place_emojis.get(i, '🔹')} <i>{user_display}</i>{reward_info}\n"
-            f"   - Баланс: <i>{balance:.2f}</i> ⭐\n"
-            f"   - Отзывов одобрено: <i>{review_count}</i>\n\n"
+            f"{place_emojis.get(i, '🔹')} <i>{user_display}</i>{reward_info}<br>"
+            f"   - Баланс: <i>{balance:.2f}</i> ⭐<br>"
+            f"   - Отзывов одобрено: <i>{review_count}</i><br><br>"
         )
     return stats_text
 
@@ -59,7 +59,7 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
 
         is_anonymous = user.is_anonymous_in_stats
         stats_text = await format_stats_text(top_users)
-        stats_text += f"\nВаш текущий статус в топе: <i>{'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}</i>"
+        stats_text += f"<br>Ваш текущий статус в топе: <i>{'🙈 Анонимный' if is_anonymous else '🐵 Публичный'}</i>"
         keyboard = inline.get_stats_keyboard(is_anonymous=is_anonymous)
 
         if isinstance(message_or_callback, Message):
@@ -84,17 +84,3 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
             await message_or_callback.answer(error_text)
         else:
             await message_or_callback.answer(error_text, show_alert=True)
-
-
-@router.message(F.text == '📊 Статистика', UserState.MAIN_MENU)
-async def stats_handler(message: Message):
-    """Обработчик для раздела 'Статистика'."""
-    await show_stats_menu(message)
-
-@router.callback_query(F.data == 'profile_toggle_anonymity')
-async def toggle_anonymity_handler(callback: CallbackQuery):
-    """Обрабатывает переключение анонимности из меню статистики."""
-    new_status = await db_manager.toggle_anonymity(callback.from_user.id)
-    status_text = "анонимным" if new_status else "публичным"
-    await callback.answer(f"Ваш профиль в топе теперь {status_text}.", show_alert=True)
-    await show_stats_menu(callback)
