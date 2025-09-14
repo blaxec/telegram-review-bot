@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- ЛОГИКА: Добавление ссылок ---
-async def process_add_links_logic(links_text: str, platform: str) -> str:
+async def process_add_links_logic(links_text: str, platform: str, is_fast_track: bool = False) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
@@ -37,7 +37,7 @@ async def process_add_links_logic(links_text: str, platform: str) -> str:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
             try:
-                if await db_manager.db_add_reference(stripped_link, platform):
+                if await db_manager.db_add_reference(stripped_link, platform, is_fast_track=is_fast_track):
                     added_count += 1
                 else:
                     skipped_count += 1
@@ -159,9 +159,6 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     try:
         sent_message = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
-        # Отменяем предыдущие джобы, если они есть. Это важно, чтобы кнопка появлялась вовремя.
-        # Например, если пользователь очень быстро нажал "Выполнено" на этапе лайков, а потом админ
-        # отправил текст, то старые джобы нужно отменить, чтобы не было конфликтов.
         user_data_prev = await user_state.get_data()
         prev_confirm_job_id = user_data_prev.get('confirm_job_id')
         prev_timeout_job_id = user_data_prev.get('timeout_job_id')
@@ -183,7 +180,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         username=user_info.username, 
         review_text=review_text, 
         platform_for_task=platform,
-        current_task_message_id=sent_message.message_id # Сохраняем ID сообщения для возможного удаления
+        current_task_message_id=sent_message.message_id
     )
 
     confirm_job = scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])

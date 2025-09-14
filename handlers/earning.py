@@ -15,7 +15,7 @@ from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import FINAL_CHECK_ADMIN, Durations, TESTER_IDS, ADMIN_ID_1
+from config import Durations, TESTER_IDS
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
@@ -24,6 +24,7 @@ from logic.user_notifications import (
     send_confirmation_button
 )
 from utils.tester_filter import IsTester
+from logic import admin_roles
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -237,8 +238,9 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     caption = f"Проверьте имя и фамилию в профиле пользователя.<br>{user_info_text}"
     
     try:
+        admin_id = await admin_roles.get_google_profile_admin()
         await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile")
@@ -288,8 +290,9 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.<br>{user_info_text}"
 
     try:
+        admin_id = await admin_roles.get_google_reviews_admin()
         await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(
@@ -302,6 +305,30 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
 
+async def start_google_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, link):
+    """Общая логика для начала этапа лайков или сразу основного задания (для быстрых ссылок)."""
+    user_id = callback.from_user.id
+    
+    if link.is_fast_track:
+        logger.info(f"Link {link.id} is a fast-track. Skipping liking step for user {user_id}.")
+        await process_liking_completion(callback, state, bot, scheduler)
+    else:
+        task_text = (
+            "<b>Отлично! Следующий шаг:</b><br><br>"
+            f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
+            "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.<br><br>"
+            f"⏳ Для выполнения этого задания у вас есть <i>{Durations.TASK_GOOGLE_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS} минут."
+        )
+        if callback.message:
+            await callback.message.edit_text(task_text, disable_web_page_preview=True)
+        await state.set_state(UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
+        await state.update_data(username=callback.from_user.username, active_link_id=link.id)
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+        timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков', scheduler])
+        await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
+
 @router.callback_query(F.data == 'google_continue_writing_review', UserState.GOOGLE_REVIEW_READY_TO_CONTINUE)
 async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = callback.from_user.id
@@ -313,21 +340,7 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
         await state.clear()
         return
 
-    task_text = (
-        "<b>Отлично! Следующий шаг:</b><br><br>"
-        f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
-        "👀 Просмотрите страницу и поставьте лайки на положительные отзывы.<br><br>"
-        f"⏳ Для выполнения этого задания у вас есть <i>{Durations.TASK_GOOGLE_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS} минут."
-    )
-    if callback.message:
-        await callback.message.edit_text(task_text, disable_web_page_preview=True)
-    await state.set_state(UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
-    await state.update_data(username=callback.from_user.username, active_link_id=link.id)
-    
-    now = datetime.datetime.now(datetime.timezone.utc)
-    confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков', scheduler])
-    await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
+    await start_google_liking_or_main_task(callback, state, bot, scheduler, link)
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -358,26 +371,24 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
         return
 
     admin_notification_text = (
-        f"Пользователь @{user_info.username} (ID: <code>{callback.from_user.id}</code>) прошел этап 'лайков' и ожидает текст для отзыва Google.<br><br>"
+        f"Пользователь @{user_info.username} (ID: <code>{callback.from_user.id}</code>) ожидает текст для отзыва Google.<br><br>"
         f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
     )
     
     try:
+        admin_id = await admin_roles.get_google_issue_admin()
         keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
         if profile_screenshot_id:
             await bot.send_photo(
-                chat_id=ADMIN_ID_1,
+                chat_id=admin_id,
                 photo=profile_screenshot_id,
                 caption=admin_notification_text,
                 reply_markup=keyboard
             )
         else:
-            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
+            await bot.send_message(admin_id, admin_notification_text, reply_markup=keyboard)
     except Exception as e:
-        logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1}: {e}")
-        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
-        await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
-
+        logger.error(f"Failed to send task to admin: {e}")
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
 async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
@@ -436,8 +447,9 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
 
+        admin_id = await admin_roles.get_google_final_admin()
         sent_message = await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
@@ -449,7 +461,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         await schedule_message_deletion(response_msg, 25)
 
     except Exception as e:
-        logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)
+        logger.error(f"Не удалось отправить финальный отзыв админу: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
     
     await state.clear()
@@ -534,8 +546,12 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
                f"{user_info_text}")
     
     try:
+        user_data = await state.get_data()
+        review_type = user_data.get("yandex_review_type", "with_text")
+        admin_id = await admin_roles.get_yandex_text_profile_admin() if review_type == "with_text" else await admin_roles.get_yandex_no_text_profile_admin()
+
         await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_verification_keyboard(
@@ -547,6 +563,32 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
         await state.clear()
+
+async def start_yandex_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, link, platform: str):
+    """Общая логика для начала этапа прогрева или сразу основного задания (для быстрых ссылок)."""
+    user_id = callback.from_user.id
+
+    if link.is_fast_track:
+        logger.info(f"Link {link.id} is a fast-track. Skipping liking step for user {user_id}.")
+        await process_yandex_liking_completion(callback, state, bot, scheduler)
+    else:
+        await state.set_state(UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
+        await state.update_data(username=callback.from_user.username, active_link_id=link.id)
+        
+        task_text = (
+            "<b>Отлично! Ваш профиль одобрен. Теперь следующий шаг:</b><br><br>"
+            f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
+            "👀 <i>Действия</i>: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
+            "Это нужно для имитации активности перед написанием отзыва.<br><br>"
+            f"⏳ На это задание у вас есть <i>{Durations.TASK_YANDEX_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS} минут."
+        )
+        if callback.message:
+            await callback.message.edit_text(task_text, disable_web_page_preview=True)
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+        timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева', scheduler])
+        await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
 
 @router.callback_query(F.data == 'yandex_continue_task', UserState.YANDEX_REVIEW_READY_TO_TASK)
@@ -563,23 +605,8 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
         await state.clear()
         return
 
-    await state.set_state(UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
-    await state.update_data(username=callback.from_user.username, active_link_id=link.id)
-    
-    task_text = (
-        "<b>Отлично! Ваш профиль одобрен. Теперь следующий шаг:</b><br><br>"
-        f"🔗 <a href='{link.url}'>Перейти по ссылке</a><br>"
-        "👀 <i>Действия</i>: Проложите маршрут, полистайте фотографии, посмотрите похожие места. "
-        "Это нужно для имитации активности перед написанием отзыва.<br><br>"
-        f"⏳ На это задание у вас есть <i>{Durations.TASK_YANDEX_LIKING_TIMEOUT} минут</i>. Кнопка для подтверждения появится через {Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS} минут."
-    )
-    if callback.message:
-        await callback.message.edit_text(task_text, disable_web_page_preview=True)
-    
-    now = datetime.datetime.now(datetime.timezone.utc)
-    confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
-    timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева', scheduler])
-    await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
+    await start_yandex_liking_or_main_task(callback, state, bot, scheduler, link, platform)
+
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -610,20 +637,19 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             return
 
         admin_notification_text = (
-            f"Пользователь @{user_info.username} (ID: <code>{user_id}</code>) прошел этап 'прогрева' и ожидает текст для отзыва Yandex (С ТЕКСТОМ).<br><br>"
+            f"Пользователь @{user_info.username} (ID: <code>{user_id}</code>) ожидает текст для отзыва Yandex (С ТЕКСТОМ).<br><br>"
             f"🔗 Ссылка для отзыва: <code>{link.url}</code>"
         )
         
         try:
+            admin_id = await admin_roles.get_yandex_text_issue_admin()
             keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
             if profile_screenshot_id:
-                await bot.send_photo(chat_id=ADMIN_ID_1, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
+                await bot.send_photo(chat_id=admin_id, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
             else:
-                await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
+                await bot.send_message(admin_id, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
         except Exception as e:
-            logger.error(f"Failed to send task to ADMIN_ID_1 {ADMIN_ID_1} for Yandex: {e}")
-            keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
-            await bot.send_message(ADMIN_ID_1, admin_notification_text, reply_markup=keyboard)
+            logger.error(f"Failed to send task to admin for Yandex: {e}")
     
     else: # review_type == "without_text"
         link_id = user_data.get('active_link_id')
@@ -711,8 +737,9 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
 
+        admin_id = await admin_roles.get_yandex_text_final_admin() if review_type == "with_text" else await admin_roles.get_yandex_no_text_final_admin()
         sent_message = await bot.send_photo(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             photo=photo_file_id,
             caption=caption,
             reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
@@ -723,7 +750,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
 
     except Exception as e:
-        logger.error(f"Не удалось отправить финальный отзыв админу {FINAL_CHECK_ADMIN}: {e}", exc_info=True)
+        logger.error(f"Не удалось отправить финальный отзыв админу: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
         await state.clear()
         return
@@ -789,23 +816,23 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
     ]
 
     try:
-        # Отправляем медиагруппу
+        admin_id = await admin_roles.get_other_hold_admin()
         sent_messages = await bot.send_media_group(
-            chat_id=FINAL_CHECK_ADMIN,
+            chat_id=admin_id,
             media=media_group
         )
         
-        # Редактируем подпись первого сообщения, чтобы добавить кнопки
         if sent_messages:
             await bot.edit_message_reply_markup(
-                chat_id=FINAL_CHECK_ADMIN,
+                chat_id=admin_id,
                 message_id=sent_messages[0].message_id,
                 reply_markup=inline.get_admin_final_verification_keyboard(review_id)
             )
 
     except Exception as e:
         logger.error(f"Не удалось отправить файлы для финальной проверки отзыва {review_id} админу: {e}")
-        await bot.send_message(FINAL_CHECK_ADMIN, f"Ошибка при отправке файлов для проверки отзыва #{review_id}. Проверьте логи.")
+        admin_id = await admin_roles.get_other_hold_admin()
+        await bot.send_message(admin_id, f"Ошибка при отправке файлов для проверки отзыва #{review_id}. Проверьте логи.")
 
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)

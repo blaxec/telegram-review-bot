@@ -12,7 +12,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from config import FINAL_CHECK_ADMIN
+from logic.admin_roles import (get_google_issue_admin, get_yandex_text_issue_admin)
+
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,6 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     user_data = await state.get_data()
     await reference_manager.release_reference_from_user(user_id, final_status='available')
     
-    # Устанавливаем кулдаун и сразу планируем уведомление о его окончании
     cooldown_hours = 72
     cooldown_end_time = await db_manager.set_platform_cooldown(user_id, platform, cooldown_hours)
     if cooldown_end_time:
@@ -113,10 +113,19 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     await state.clear()
     
     timeout_message = "Время, выделенное на выполнение работы, истекло. Следующая возможность написать отзыв будет через три дня (72:00:00)."
+    
     admin_notification = f"❗️ Пользователь @{user_data.get('username', '???')} (ID: {user_id}) не успел выполнить задание ({message_to_admins}) вовремя. Ссылка была возвращена в пул доступных."
     
     try:
+        # Определяем, какому админу слать уведомление
+        admin_id_to_notify = None
+        if 'google' in platform:
+            admin_id_to_notify = await get_google_issue_admin()
+        elif 'yandex' in platform:
+            admin_id_to_notify = await get_yandex_text_issue_admin()
+
         await bot.send_message(user_id, timeout_message, reply_markup=reply.get_main_menu_keyboard())
-        await bot.send_message(FINAL_CHECK_ADMIN, admin_notification)
+        if admin_id_to_notify:
+            await bot.send_message(admin_id_to_notify, admin_notification)
     except Exception as e:
         logger.error(f"Ошибка при обработке таймаута для {user_id}: {e}")

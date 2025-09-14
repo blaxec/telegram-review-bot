@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import ADMIN_ID_1, ADMIN_IDS, FINAL_CHECK_ADMIN, Durations
+from config import ADMIN_ID_1, ADMIN_IDS, Durations
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import (
@@ -33,16 +33,15 @@ from logic.admin_logic import (
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
-
+from logic import admin_roles
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 ADMINS = set(ADMIN_IDS)
-TEXT_ADMIN = ADMIN_ID_1
 
 # Хранилище для временной задачи добавления ссылок
-temp_admin_tasks = {}  # Хранит {user_id: platform}
+temp_admin_tasks = {}  # Хранит {user_id: {"platform": str, "is_fast": bool}}
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Вспомогательная функция для планирования удаления сообщения."""
@@ -142,12 +141,23 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    platform = callback.data.split(':')[2]
-    temp_admin_tasks[callback.from_user.id] = platform
-    logger.info(f"[NO_FSM_ADD_LINK] Task started for user {callback.from_user.id}. Platform: {platform}")
+    try:
+        _, _, add_type, platform = callback.data.split(':') # admin_refs:add:fast:google_maps
+    except ValueError:
+        await callback.answer("Ошибка в данных кнопки.", show_alert=True)
+        return
+        
+    is_fast = (add_type == 'fast')
+    link_type_text = "быстрые 🚀" if is_fast else "обычные"
+
+    temp_admin_tasks[callback.from_user.id] = {"platform": platform, "is_fast": is_fast}
+    logger.info(f"[NO_FSM_ADD_LINK] Task started for user {callback.from_user.id}. Platform: {platform}, Is Fast: {is_fast}")
+    
     if callback.message:
         await callback.message.edit_text(
-            f"Выбрана платформа: <i>{platform}</i>.\n\nОтправьте ссылки следующим сообщением.",
+            f"Выбрана платформа: <i>{platform}</i>.\n"
+            f"Тип добавляемых ссылок: <b>{link_type_text}</b>.\n\n"
+            f"Отправьте ссылки следующим сообщением.",
             reply_markup=inline.get_back_to_platform_refs_keyboard(platform)
         )
     await callback.answer()
@@ -159,11 +169,14 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
 )
 async def admin_add_links_handler(message: Message):
     user_id = message.from_user.id
-    platform = temp_admin_tasks.pop(user_id)
-    logger.info(f"[NO_FSM_ADD_LINK] Processing link submission for user {user_id}. Platform: {platform}")
+    task_data = temp_admin_tasks.pop(user_id)
+    platform = task_data["platform"]
+    is_fast = task_data["is_fast"]
+
+    logger.info(f"[NO_FSM_ADD_LINK] Processing link submission for user {user_id}. Platform: {platform}, Is Fast: {is_fast}")
     
     try:
-        result_text = await process_add_links_logic(message.text, platform)
+        result_text = await process_add_links_logic(message.text, platform, is_fast_track=is_fast)
         await message.answer(result_text)
         await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     except Exception as e:
@@ -207,7 +220,8 @@ async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMCont
 
     for link in all_links:
         user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
-        line = f"{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>\n\n"
+        fast_track_icon = "🚀" if link.is_fast_track else ""
+        line = f"{fast_track_icon}{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>\n\n"
         
         if len(chunks[-1] + line) > 4000:
             chunks.append("")
@@ -230,7 +244,11 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
     if callback.message:
-        prompt_msg = await callback.message.answer("Введите ID ссылки, которую хотите удалить:", reply_markup=inline.get_cancel_inline_keyboard())
+        prompt_msg = await callback.message.answer(
+            "Введите ID ссылок, которые хотите удалить.\n"
+            "Можно ввести несколько ID через пробел или запятую.", 
+            reply_markup=inline.get_cancel_inline_keyboard()
+        )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer()
 
@@ -238,35 +256,49 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
 async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
     await delete_previous_messages(message, state)
 
-    if not message.text or not message.text.isdigit():
-        msg = await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
+    if not message.text:
+        msg = await message.answer("❌ Пожалуйста, введите один или несколько ID.")
         asyncio.create_task(schedule_message_deletion(msg, 5))
         return
-    
-    link_id = int(message.text)
-    data = await state.get_data()
-    platform = data.get("platform_for_deletion")
-    
-    success, assigned_user_id = await reference_manager.delete_reference(link_id)
-    
-    if not success:
-        msg = await message.answer(f"❌ Ссылка с ID {link_id} не найдена.")
-    else:
-        msg = await message.answer(f"✅ Ссылка ID {link_id} удалена.")
-    
-    asyncio.create_task(schedule_message_deletion(msg, 10))
 
-    if assigned_user_id:
-        try:
-            user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
-            await user_state.clear()
-            await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
-            await user_state.set_state(UserState.MAIN_MENU)
-        except Exception as e: 
-            logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
+    link_ids_str = message.text.replace(',', ' ').split()
+    deleted_ids, not_found_ids = [], []
+    
+    for link_id_str in link_ids_str:
+        if not link_id_str.strip().isdigit():
+            continue
+        link_id = int(link_id_str.strip())
+        success, assigned_user_id = await reference_manager.delete_reference(link_id)
+        
+        if success:
+            deleted_ids.append(str(link_id))
+            if assigned_user_id:
+                try:
+                    user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=assigned_user_id, chat_id=assigned_user_id))
+                    await user_state.clear()
+                    await bot.send_message(assigned_user_id, "❗️ Ссылка для вашего задания была удалена администратором. Процесс остановлен.", reply_markup=reply.get_main_menu_keyboard())
+                    await user_state.set_state(UserState.MAIN_MENU)
+                except Exception as e: 
+                    logger.warning(f"Не удалось уведомить {assigned_user_id} об удалении ссылки: {e}")
+        else:
+            not_found_ids.append(str(link_id))
+
+    summary_text = ""
+    if deleted_ids:
+        summary_text += f"✅ Удалены ID: <code>{', '.join(deleted_ids)}</code>\n"
+    if not_found_ids:
+        summary_text += f"❌ Не найдены ID: <code>{', '.join(not_found_ids)}</code>"
+    if not summary_text:
+         summary_text = "Не найдено корректных ID для удаления."
+    
+    msg = await message.answer(summary_text)
+    asyncio.create_task(schedule_message_deletion(msg, 15))
 
     await state.clear()
     
+    data = await state.get_data()
+    platform = data.get("platform_for_deletion")
+
     temp_message = await message.answer("Обновляю список...")
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
@@ -413,9 +445,18 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             await user_state.set_state(UserState.YANDEX_REVIEW_READY_TO_TASK)
             await bot.send_message(user_id, "Профиль Yandex прошел проверку. Можете продолжить.", reply_markup=inline.get_yandex_continue_writing_keyboard())
         elif context == "gmail_device_model":
-            prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.<br>Введите данные для аккаунта:<br>Имя<br>Фамилия<br>Пароль<br>Почта (без @gmail.com)")
-            await admin_state.set_state(AdminState.ENTER_GMAIL_DATA)
-            await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
+            responsible_admin = await admin_roles.get_gmail_data_admin()
+            if callback.from_user.id != responsible_admin:
+                admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+                await callback.answer(f"Запрос на выдачу данных отправлен {admin_name}", show_alert=True)
+                try:
+                    user_info = await bot.get_chat(user_id)
+                    await bot.send_message(responsible_admin, f"❗️Пользователь @{user_info.username} (ID: {user_id}) ожидает данные для создания Gmail. Вы назначены ответственным.")
+                except Exception: pass
+            else:
+                prompt_msg = await bot.send_message(callback.from_user.id, "✅ Модель подтверждена.\nВведите данные для аккаунта:\nИмя\nФамилия\nПароль\nПочта (без @gmail.com)")
+                await admin_state.set_state(AdminState.ENTER_GMAIL_DATA)
+                await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
     
     elif action == "warn":
         action_text = f"⚠️ <b>ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ</b> (@{callback.from_user.username})"
@@ -454,10 +495,26 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 # --- БЛОК УПРАВЛЕНИЯ ТЕКСТОМ ОТЗЫВА ---
 
-@router.callback_query(F.data.startswith('admin_provide_text:'), F.from_user.id == TEXT_ADMIN)
-async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith('admin_provide_text:'))
+async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
+        
+        # ПРОВЕРКА РОЛИ
+        if platform == 'google':
+            responsible_admin = await admin_roles.get_google_issue_admin()
+        elif platform == 'yandex_with_text':
+            responsible_admin = await admin_roles.get_yandex_text_issue_admin()
+        else:
+            await callback.answer("Ошибка: неизвестная платформа для выдачи текста.", show_alert=True)
+            return
+
+        if callback.from_user.id != responsible_admin:
+            admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+            await callback.answer(f"Эту задачу выполняет {admin_name}", show_alert=True)
+            return
+        # КОНЕЦ ПРОВЕРКИ
+
         state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
         if platform not in state_map: await callback.answer("Ошибка платформы."); return
         
@@ -480,8 +537,8 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext)
         )
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.callback_query(F.data.startswith('admin_ai_generate_start:'), F.from_user.id == TEXT_ADMIN)
-async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith('admin_ai_generate_start:'))
+async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try:
         await callback.answer("Ожидаю сценарий...")
     except TelegramBadRequest:
@@ -490,6 +547,21 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
         
+        # ПРОВЕРКА РОЛИ
+        if platform == 'google':
+            responsible_admin = await admin_roles.get_google_issue_admin()
+        elif platform == 'yandex_with_text':
+            responsible_admin = await admin_roles.get_yandex_text_issue_admin()
+        else:
+            await callback.answer("Ошибка: неизвестная платформа для генерации текста.", show_alert=True)
+            return
+        
+        if callback.from_user.id != responsible_admin:
+            admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+            await callback.answer(f"Эту задачу выполняет {admin_name}", show_alert=True)
+            return
+        # КОНЕЦ ПРОВЕРКИ
+
         edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
         new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
         
@@ -513,7 +585,7 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext):
         if callback.message:
             await callback.message.answer("Произошла ошибка на старте генерации.", show_alert=True)
 
-@router.message(AdminState.AI_AWAITING_SCENARIO, F.from_user.id == TEXT_ADMIN)
+@router.message(AdminState.AI_AWAITING_SCENARIO, F.from_user.id.in_(ADMINS))
 async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Сценарий не может быть пустым. Пожалуйста, отправьте текст.")
@@ -565,7 +637,7 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
     await state.update_data(ai_scenario=scenario, ai_generated_text=generated_text)
 
 
-@router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, F.from_user.id == TEXT_ADMIN)
+@router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, F.from_user.id.in_(ADMINS))
 async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     action = callback.data.split(':')[1]
     data = await state.get_data()
@@ -635,14 +707,50 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
 @router.callback_query(F.data.startswith("admin_final_approve:"), F.from_user.id.in_(ADMINS))
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     review_id = int(callback.data.split(':')[1])
+    
+    review = await db_manager.get_review_by_id(review_id)
+    if not review:
+        await callback.answer("Ошибка: отзыв не найден.", show_alert=True)
+        return
+    
+    platform = review.platform
+    responsible_admin = ADMIN_ID_1
+
+    if platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
+    elif platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
+    elif platform == 'yandex_without_text': responsible_admin = await admin_roles.get_yandex_no_text_final_admin()
+        
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
+
     success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В <b>ХОЛДЕ</b> (@{callback.from_user.username})", reply_markup=None)
 
 @router.callback_query(F.data.startswith('admin_final_reject:'), F.from_user.id.in_(ADMINS))
-async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext):
+async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
     review_id = int(callback.data.split(':')[1])
+    
+    review = await db_manager.get_review_by_id(review_id)
+    if not review:
+        await callback.answer("Ошибка: отзыв не найден.", show_alert=True)
+        return
+        
+    platform = review.platform
+    responsible_admin = ADMIN_ID_1
+
+    if platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
+    elif platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
+    elif platform == 'yandex_without_text': responsible_admin = await admin_roles.get_yandex_no_text_final_admin()
+        
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
+
     await state.set_state(AdminState.PROVIDE_FINAL_REJECTION_REASON)
     await state.update_data(review_id_to_reject=review_id)
     
@@ -672,8 +780,13 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     try:
         review = await db_manager.get_review_by_id(review_id)
         if review and review.admin_message_id:
+            responsible_admin = ADMIN_ID_1 # ID того, кто получил сообщение (мы не знаем кто это, но это не важно для edit)
+            if review.platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
+            elif review.platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
+            elif review.platform == 'yandex_without_text': responsible_admin = await admin_roles.get_yandex_no_text_final_admin()
+
             original_message = await bot.edit_message_caption(
-                chat_id=message.from_user.id,
+                chat_id=responsible_admin, # Отправляем тому, кто должен был проверить
                 message_id=review.admin_message_id,
                 caption=f"{(review.review_text or '')}\n\n❌ <b>ОТКЛОНЕН</b> (@{message.from_user.username})\nПричина: {reason}",
                 reply_markup=None
@@ -688,24 +801,26 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
 async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     """Админ одобряет отзыв после холда и выплачивает награду."""
     review_id = int(callback.data.split(':')[1])
+    
+    responsible_admin = await admin_roles.get_other_hold_admin()
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
+
     success, message_text = await approve_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n✅ <b>ОДОБРЕН И ВЫПЛАЧЕН</b> (@{callback.from_user.username})"
         try:
-            # Для медиагруппы нужно удалить старые фото, а потом отправить новую
-            # Или просто отредактировать подпись у первого сообщения в группе
-            if callback.message.media_group_id: # Это медиагруппа
-                # Если это медиагруппа, Telegram не позволяет редактировать текст, кроме подписи
-                # у первого фото, и нельзя удалить/изменить другие медиа.
-                # Поэтому редактируем подпись у первого фото.
+            if callback.message.media_group_id:
                 await bot.edit_message_caption(
                     chat_id=callback.message.chat.id,
                     message_id=callback.message.message_id,
                     caption=new_caption,
                     reply_markup=None
                 )
-            else: # Одно фото
+            else: 
                 await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         except TelegramBadRequest:
             pass
@@ -714,19 +829,26 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
 async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
     """Админ отклоняет отзыв после холда."""
     review_id = int(callback.data.split(':')[1])
+    
+    responsible_admin = await admin_roles.get_other_hold_admin()
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
+
     success, message_text = await reject_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
         try:
-            if callback.message.media_group_id: # Это медиагруппа
+            if callback.message.media_group_id:
                 await bot.edit_message_caption(
                     chat_id=callback.message.chat.id,
                     message_id=callback.message.message_id,
                     caption=new_caption,
                     reply_markup=None
                 )
-            else: # Одно фото
+            else:
                 await callback.message.edit_caption(caption=new_caption, reply_markup=None)
         except TelegramBadRequest:
             pass
@@ -740,7 +862,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"<br><br><i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором ]</i>"
+            new_text = (callback.message.text or "") + f"<br><br><i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором @{callback.from_user.username} ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -752,7 +874,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"<br><br><i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором ]</i>"
+            new_text = (callback.message.text or "") + f"<br><br><i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором @{callback.from_user.username} ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -1011,8 +1133,8 @@ async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot
 
     await state.clear()
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
-@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, F.from_user.id == TEXT_ADMIN)
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, F.from_user.id.in_(ADMINS))
+@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, F.from_user.id.in_(ADMINS))
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text: return
     await delete_previous_messages(message, state)

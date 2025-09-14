@@ -50,7 +50,6 @@ class Review(Base):
     user_id = Column(BigInteger, ForeignKey('users.id'))
     platform = Column(String)
     link_id = Column(Integer, ForeignKey('links.id'), nullable=True)
-    # ИЗМЕНЕНИЕ: Добавляем новые статусы в комментарий для ясности
     # Статусы: pending, on_hold, awaiting_confirmation, approved, rejected
     status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -59,11 +58,9 @@ class Review(Base):
     
     review_text = Column(String, nullable=True)
     admin_message_id = Column(BigInteger, nullable=True)
-    screenshot_file_id = Column(String, nullable=True) # Оригинальный скриншот
+    screenshot_file_id = Column(String, nullable=True)
     
-    # --- НОВОЕ ПОЛЕ ---
-    confirmation_screenshot_file_id = Column(String, nullable=True) # Скриншот для подтверждения
-    # ------------------
+    confirmation_screenshot_file_id = Column(String, nullable=True)
     
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")
@@ -78,6 +75,8 @@ class Link(Base):
     status = Column(Enum('available', 'assigned', 'used', 'expired', name='link_status_enum'), default='available')
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
+    is_fast_track = Column(Boolean, default=False, nullable=False)
+
 
 class WithdrawalRequest(Base):
     __tablename__ = 'withdrawal_requests'
@@ -139,7 +138,6 @@ class SupportTicket(Base):
 
     user = relationship("User", back_populates="support_tickets")
 
-# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ НАСТРОЕК НАГРАД ---
 class RewardSetting(Base):
     __tablename__ = 'reward_settings'
     place = Column(Integer, primary_key=True)

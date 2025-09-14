@@ -6,18 +6,17 @@ import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
-from config import REDIS_HOST, REDIS_PORT, Durations, TESTER_IDS, ADMIN_IDS
+from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, BotCommandScopeDefault
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN
-from handlers import start, profile, support, earning, admin, gmail, stats, promo, other, ban_system, referral
+from handlers import (start, profile, support, earning, admin, gmail, 
+                      stats, promo, other, ban_system, referral, admin_roles)
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 from logic.reward_logic import distribute_rewards
-# ИЗМЕНЕНИЕ: Импортируем обе функции из файла
 from logic.cleanup_logic import check_and_expire_links, process_expired_holds
 
 logging.basicConfig(
@@ -39,6 +38,7 @@ async def set_bot_commands(bot: Bot):
     ]
     
     admin_commands = user_commands + [
+        BotCommand(command="roles", description="🛠️ Управление ролями админов"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
         BotCommand(command="viewhold", description="⏳ Холд пользователя"),
@@ -59,22 +59,23 @@ async def set_bot_commands(bot: Bot):
 
     for admin_id in ADMIN_IDS:
         try:
-            commands_to_set = admin_commands
-            if admin_id in TESTER_IDS:
-                commands_to_set = admin_commands + [cmd for cmd in tester_commands if cmd not in admin_commands]
+            commands_to_set = admin_commands.copy()
+            if admin_id == ADMIN_ID_1 and admin_id in TESTER_IDS:
+                tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
+                commands_to_set.extend(tester_only_commands)
             
             await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
             logger.info(f"Admin commands set for admin ID: {admin_id}")
         except Exception as e:
             logger.error(f"Failed to set commands for admin {admin_id}: {e}")
             
-    for tester_id in TESTER_IDS:
-        if tester_id not in ADMIN_IDS:
-            try:
-                await bot.set_my_commands(tester_commands, scope=BotCommandScopeChat(chat_id=tester_id))
-                logger.info(f"Tester commands set for tester ID: {tester_id}")
-            except Exception as e:
-                logger.error(f"Failed to set commands for tester {tester_id}: {e}")
+    non_admin_testers = [tid for tid in TESTER_IDS if tid not in ADMIN_IDS]
+    for tester_id in non_admin_testers:
+        try:
+            await bot.set_my_commands(tester_commands, scope=BotCommandScopeChat(chat_id=tester_id))
+            logger.info(f"Tester commands set for tester ID: {tester_id}")
+        except Exception as e:
+            logger.error(f"Failed to set commands for tester {tester_id}: {e}")
 
 
 async def handle_telegram_bad_request(event: ErrorEvent):
@@ -113,6 +114,7 @@ async def main():
 
     dp.include_router(start.router)
     dp.include_router(admin.router)
+    dp.include_router(admin_roles.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
     dp.include_router(earning.router)
@@ -125,11 +127,8 @@ async def main():
     
     dp.errors.register(handle_telegram_bad_request)
 
-    # Добавляем фоновую задачу для проверки и выдачи наград
     scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
-    # ИЗМЕНЕНИЕ: Добавляем фоновую задачу для очистки просроченных ссылок
     scheduler.add_job(check_and_expire_links, 'interval', hours=6, args=[bot, dp.storage])
-    # --- НОВАЯ ЗАДАЧА: Проверка истекших холдов ---
     scheduler.add_job(process_expired_holds, 'interval', minutes=1, args=[bot, dp.storage, scheduler])
 
 

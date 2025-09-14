@@ -32,9 +32,9 @@ class UserState(StatesGroup):
     GOOGLE_REVIEW_TASK_ACTIVE = State()
     GOOGLE_REVIEW_AWAITING_SCREENSHOT = State()
     
-    # --- НОВОЕ СОСТОЯНИЕ ---
+    # --- НОВОЕ СОСТОЯНИЕ ДЛЯ ХОЛДА ---
     AWAITING_CONFIRMATION_SCREENSHOT = State()
-    # ----------------------
+    # ---------------------------------
 
     # Состояния для отзыва в Yandex
     YANDEX_REVIEW_INIT = State()

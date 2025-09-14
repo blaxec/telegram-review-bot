@@ -12,7 +12,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from database import db_manager
 from keyboards import reply, inline
 from states.user_states import UserState
-from config import Durations, FINAL_CHECK_ADMIN
+from config import Durations
+from logic.admin_roles import get_other_hold_admin
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
     """
     logger.info("Starting scheduled job: check_and_expire_links")
     try:
-        # Находим и обновляем ссылки в одной транзакции, получаем список "пострадавших"
         expired_links = await db_manager.db_find_and_expire_old_assigned_links(hours_threshold=24)
         
         if not expired_links:
@@ -33,17 +33,14 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
 
         logger.warning(f"Found {len(expired_links)} links to mark as expired.")
 
-        # Уведомляем каждого пользователя, чье задание было отменено
         for link in expired_links:
             user_id = link.assigned_to_user_id
             if not user_id:
                 continue
 
-            # Сбрасываем состояние пользователя (FSM)
             state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
             await state.clear()
 
-            # Отправляем уведомление
             try:
                 await bot.send_message(
                     user_id,
@@ -79,8 +76,9 @@ async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, st
                 user_id,
                 f"⏳ К сожалению, время на подтверждение отзыва истекло. Холд для отзыва #{review_id} был отменен."
             )
+            admin_id = await get_other_hold_admin()
             await bot.send_message(
-                FINAL_CHECK_ADMIN,
+                admin_id,
                 f"⚠️ Пользователь @{review.user.username} (ID: <code>{user_id}</code>) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
             )
         except Exception as e:
@@ -101,7 +99,10 @@ async def process_expired_holds(bot: Bot, storage: BaseStorage, scheduler: Async
         user_id = review.user_id
         review_id = review.id
         
-        await db_manager.update_review_status(review_id, 'awaiting_confirmation')
+        success = await db_manager.update_review_status(review_id, 'awaiting_confirmation')
+        if not success:
+            logger.warning(f"Failed to update status for review {review_id} to awaiting_confirmation. Skipping.")
+            continue
         
         user_state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
         await user_state.set_state(UserState.AWAITING_CONFIRMATION_SCREENSHOT)
@@ -109,9 +110,8 @@ async def process_expired_holds(bot: Bot, storage: BaseStorage, scheduler: Async
         
         run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.CONFIRMATION_TIMEOUT_MINUTES)
         
-        # Планируем задачу таймаута
         timeout_job = scheduler.add_job(handle_confirmation_timeout, 'date', run_date=run_date, args=[bot, user_id, review_id, user_state])
-        await user_state.update_data(confirmation_timeout_job_id=timeout_job.id) # Сохраняем ID задачи в FSM
+        await user_state.update_data(confirmation_timeout_job_id=timeout_job.id)
         
         try:
             await bot.send_message(
@@ -126,3 +126,4 @@ async def process_expired_holds(bot: Bot, storage: BaseStorage, scheduler: Async
             logger.error(f"Failed to request confirmation from user {user_id} for review {review_id}: {e}")
             await db_manager.cancel_hold(review_id)
             await user_state.clear()
+            scheduler.remove_job(timeout_job.id)

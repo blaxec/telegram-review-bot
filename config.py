@@ -21,7 +21,17 @@ TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if teste
 
 # ID канала, куда будут отправляться заявки на вывод.
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
-FINAL_CHECK_ADMIN = ADMIN_ID_2 # Админ для финальной проверки
+
+# --- НОВЫЙ РАЗДЕЛ: Роли администраторов по умолчанию ---
+# Эти значения используются, если в базе данных не заданы конкретные роли.
+class Defaults:
+    # Администратор, ответственный за большинство проверок скриншотов
+    DEFAULT_SCREENSHOT_CHECK_ADMIN = ADMIN_ID_1
+    # Администратор, ответственный за выдачу текстов и данных
+    DEFAULT_TEXT_PROVIDER_ADMIN = ADMIN_ID_1
+    # Администратор для финальной, самой ответственной проверки
+    DEFAULT_FINAL_VERDICT_ADMIN = ADMIN_ID_2
+
 
 # --- Ключи для Google Gemini ---
 GOOGLE_API_KEY_1 = os.getenv("GOOGLE_API_KEY_1")
@@ -29,7 +39,7 @@ GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
 GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
 
 # --- ИЗМЕНЕНИЕ: Добавляем настройку модели Groq ---
-GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama3-70b-8192") # Актуальная модель Groq
+GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile") # Актуальная модель Groq
 
 
 if not GOOGLE_API_KEYS:
@@ -76,8 +86,8 @@ class Durations:
     HOLD_GOOGLE_MINUTES = 5
     HOLD_YANDEX_WITH_TEXT_MINUTES = 24 * 60  # 1 день
     HOLD_YANDEX_WITHOUT_TEXT_MINUTES = 72 * 60 # 3 дня
-    # --- ДОБАВЛЕНО: Отдельный холд для тестеров ---
-    HOLD_TESTER_MINUTES = 5 # 5 минут для тестеров
+    # --- ИЗМЕНЕНИЕ: Отдельный холд для тестеров ---
+    HOLD_TESTER_MINUTES = 1 # 1 минута для тестеров
 
     # Длительность кулдаунов (в часах)
     COOLDOWN_GOOGLE_REVIEW_HOURS = 5 / 60  # 5 минут
@@ -90,7 +100,7 @@ class Durations:
     # Кулдаун для запроса на разбан (в минутах)
     COOLDOWN_UNBAN_REQUEST_MINUTES = 30
     
-    # --- ДОБАВЛЕНО: Таймаут ожидания подтверждающего скриншота ---
+    # --- ИЗМЕНЕНИЕ: Таймаут ожидания подтверждающего скриншота ---
     CONFIRMATION_TIMEOUT_MINUTES = 30 # 30 минут
 
     # Тайминги для FSM-задач (в минутах)

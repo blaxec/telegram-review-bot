@@ -13,9 +13,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
-from config import FINAL_CHECK_ADMIN, Rewards, Durations
+from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
+from logic import admin_roles
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -87,17 +88,14 @@ async def initiate_gmail_creation(callback: CallbackQuery, state: FSMContext):
             )
         return
 
-    # --- ИЗМЕНЕНИЕ: Динамически определяем награду ---
-    reward_amount = Rewards.GMAIL_ACCOUNT # Стандартная награда по умолчанию
+    reward_amount = Rewards.GMAIL_ACCOUNT
     if user.referrer_id:
         referrer = await db_manager.get_user(user.referrer_id)
         if referrer and referrer.referral_path == 'gmail':
-            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER # Особая награда для реферала
-    # -----------------------------------------------
-
+            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
+    
     await state.set_state(UserState.GMAIL_ENTER_DEVICE_MODEL)
     if callback.message:
-        # --- ИЗМЕНЕНИЕ: Используем переменную reward_amount в тексте ---
         prompt_msg = await callback.message.edit_text(
             f"За создание аккаунта выдается <i>{reward_amount} звезд</i>.<br><br>"
             "Пожалуйста, укажите <i>модель вашего устройства</i> (например, iPhone 13 Pro или Samsung Galaxy S22), "
@@ -149,15 +147,16 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         admin_notification += "<br><br><i>Это запрос на создание со второго устройства (пользователь на кулдауне).</i>"
 
     try:
+        admin_id = await admin_roles.get_gmail_device_admin()
         await bot.send_message(
-            FINAL_CHECK_ADMIN,
+            admin_id,
             admin_notification,
             reply_markup=inline.get_admin_verification_keyboard(user_id, context)
         )
     except Exception as e:
         await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
         await state.clear()
-        logger.error(f"Ошибка отправки модели устройства админу {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Ошибка отправки модели устройства админу: {e}")
 
 @router.message(UserState.GMAIL_ENTER_DEVICE_MODEL)
 async def process_device_model(message: Message, state: FSMContext, bot: Bot):
@@ -189,7 +188,6 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     except TelegramBadRequest:
         pass
 
-    # Удаляем таймер отмены, так как пользователь успел нажать кнопку
     data = await state.get_data()
     timeout_job_id = data.get("gmail_timeout_job_id")
     if timeout_job_id:
@@ -228,14 +226,15 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         f"3. <i>Обязательно отключите устройство пользователя от аккаунта после проверки.</i>"
     )
     try:
+        admin_id = await admin_roles.get_gmail_final_admin()
         await bot.send_message(
-            FINAL_CHECK_ADMIN,
+            admin_id,
             admin_notification,
             reply_markup=inline.get_admin_gmail_final_check_keyboard(user_id)
         )
     except Exception as e:
         await callback.message.answer("Не удалось отправить аккаунт на проверку. Попробуйте позже.")
-        logger.error(f"Failed to send Gmail for verification to admin {FINAL_CHECK_ADMIN}: {e}")
+        logger.error(f"Failed to send Gmail for verification to admin: {e}")
     
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
@@ -294,7 +293,7 @@ async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext)
 @router.message(AdminState.ENTER_GMAIL_DATA)
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text: return
-    await delete_previous_messages(message, state) # Удаляем сообщение админа с данными
+    await delete_previous_messages(message, state)
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     
@@ -324,7 +323,6 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     await user_state.set_state(UserState.GMAIL_AWAITING_VERIFICATION)
     await user_state.set_data(user_current_data)
     
-    # Запускаем таймер для пользователя
     run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.TASK_GMAIL_VERIFICATION_TIMEOUT)
     job = scheduler.add_job(cancel_gmail_verification_timeout, 'date', run_date=run_date, args=[bot, user_id, user_state])
     await user_state.update_data(gmail_timeout_job_id=job.id)
@@ -340,20 +338,26 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data.startswith('admin_gmail_confirm_account:'))
 async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = int(callback.data.split(':')[1])
+    
+    responsible_admin = await admin_roles.get_gmail_final_admin()
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
+        
     try:
         await callback.answer("Аккаунт подтвержден. Пользователю начислены звезды и установлен кулдаун.", show_alert=True)
     except TelegramBadRequest:
         pass
         
-    user_id = int(callback.data.split(':')[1])
-    
     user = await db_manager.get_user(user_id)
-    reward_amount = Rewards.GMAIL_ACCOUNT # Стандартная награда
+    reward_amount = Rewards.GMAIL_ACCOUNT
 
     if user and user.referrer_id:
         referrer = await db_manager.get_user(user.referrer_id)
         if referrer and referrer.referral_path == 'gmail':
-            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER # Особая награда для реферала
+            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
             await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
             try:
                 await bot.send_message(
@@ -393,8 +397,13 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
 @router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
 async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
+    
+    responsible_admin = await admin_roles.get_gmail_final_admin()
+    if callback.from_user.id != responsible_admin:
+        admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
+        await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
+        return
 
-    # Сразу устанавливаем кулдаун при отклонении и планируем уведомление
     cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
     if cooldown_end_time:
         scheduler.add_job(
@@ -409,7 +418,6 @@ async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext,
     except TelegramBadRequest:
         pass
         
-    # Сохраняем ID оригинального сообщения для последующего удаления
     if callback.message:
         await state.update_data(original_verification_message_id=callback.message.message_id)
         

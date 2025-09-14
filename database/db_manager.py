@@ -671,14 +671,12 @@ async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
 
 # --- Функции для системы бана и просроченных ссылок ---
 
-# ИЗМЕНЕНИЕ: Новая функция для поиска и обновления старых "зависших" ссылок
 async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> List[Link]:
     """Находит все ссылки в статусе 'assigned' дольше N часов, меняет их статус на 'expired' и возвращает их."""
     async with async_session() as session:
         async with session.begin():
             threshold_time = datetime.datetime.utcnow() - datetime.timedelta(hours=hours_threshold)
             
-            # 1. Находим ID ссылок, которые нужно обновить
             select_stmt = select(Link.id).where(
                 Link.status == 'assigned',
                 Link.assigned_at < threshold_time
@@ -689,17 +687,15 @@ async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> Li
             if not link_ids_to_expire:
                 return []
             
-            # 2. Получаем полные объекты этих ссылок ДО обновления, чтобы вернуть их для уведомления
             select_objects_stmt = select(Link).where(Link.id.in_(link_ids_to_expire))
             result_objects = await session.execute(select_objects_stmt)
             expired_links = result_objects.scalars().all()
 
-            # 3. Обновляем их статус на 'expired'
             update_stmt = update(Link).where(
                 Link.id.in_(link_ids_to_expire)
             ).values(
                 status='expired',
-                assigned_to_user_id=None, # Сбрасываем привязку к пользователю
+                assigned_to_user_id=None,
                 assigned_at=None
             )
             await session.execute(update_stmt)
@@ -750,7 +746,7 @@ async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
-            if not user or user.referral_path: # Нельзя изменить, если уже установлено
+            if not user or user.referral_path:
                 return False
             user.referral_path = path
             user.referral_subpath = subpath
@@ -768,11 +764,8 @@ async def update_reward_settings(settings: List[Dict[str, Union[int, float]]]):
     """Полностью перезаписывает настройки наград."""
     async with async_session() as session:
         async with session.begin():
-            # Сначала удаляем все старые настройки
             await session.execute(delete(RewardSetting))
-            # Затем добавляем новые
             if settings:
-                # Используем ORM-объекты для вставки
                 objects = [RewardSetting(**s) for s in settings]
                 session.add_all(objects)
 

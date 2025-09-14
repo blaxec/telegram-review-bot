@@ -19,6 +19,7 @@ async def assign_reference_to_user(user_id: int, platform: str) -> Link | None:
 
     active_assignments[user_id] = link.id
     
+    # Мы возвращаем сам объект, чтобы можно было проверить is_fast_track
     link.status = 'assigned'
     link.assigned_to_user_id = user_id
     link.assigned_at = datetime.datetime.utcnow()
@@ -79,12 +80,10 @@ async def force_release_reference(link_id: int) -> tuple[bool, int | None]:
     
     assigned_user_id = link.assigned_to_user_id
     
-    # Удаляем из кэша активных заданий, если есть
     if assigned_user_id and assigned_user_id in active_assignments:
         if active_assignments[assigned_user_id] == link_id:
             active_assignments.pop(assigned_user_id)
     
-    # Обновляем статус в БД
     await db_manager.db_update_link_status(link.id, 'available', user_id=None)
     logger.info(f"Admin force-released link {link_id} from user {assigned_user_id}.")
     return True, assigned_user_id

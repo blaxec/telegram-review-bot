@@ -3,6 +3,9 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import Rewards, GOOGLE_API_KEYS
+# НОВЫЕ ИМПОРТЫ
+from aiogram import Bot
+from logic import admin_roles
 
 # --- /start и навигация ---
 
@@ -246,7 +249,6 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     
     ocr_contexts = ['yandex_profile_screenshot', 'google_last_reviews', 'google_profile']
     if context in ocr_contexts and GOOGLE_API_KEYS:
-        # file_id больше не передаем, он будет взят из сообщения
         builder.button(text="🤖 Проверить с ИИ", callback_data=f"admin_ocr:{context}:{user_id}")
 
     builder.button(text="✅ Подтвердить", callback_data=f"admin_verify:confirm:{context}:{user_id}")
@@ -284,7 +286,6 @@ def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Google Карты", callback_data="admin_refs:select_platform:google_maps")
     builder.button(text="Яндекс (с текстом)", callback_data="admin_refs:select_platform:yandex_with_text")
     builder.button(text="Яндекс (без текста)", callback_data="admin_refs:select_platform:yandex_without_text")
-    # ИЗМЕНЕНИЕ: Текст кнопки
     builder.button(text="🔄 Найти и пометить просроченные", callback_data="admin_refs:expire_manual")
     builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
     builder.adjust(1)
@@ -425,3 +426,81 @@ def get_support_photo_choice_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✉️ Нет, отправить как есть", callback_data="support_add_photo:no")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- НОВЫЙ РАЗДЕЛ: Клавиатуры для управления ролями ---
+
+async def get_roles_main_menu() -> InlineKeyboardMarkup:
+    """Главное меню управления ролями."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📍 Яндекс.Карты", callback_data="roles_cat:yandex")
+    builder.button(text="🌍 Google Maps", callback_data="roles_cat:google")
+    builder.button(text="📧 Gmail", callback_data="roles_cat:gmail")
+    builder.button(text="📦 Другие задачи", callback_data="roles_cat:other")
+    builder.button(text="⚙ Текущие настройки", callback_data="roles_show_current")
+    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
+    builder.adjust(2, 2, 1, 1)
+    return builder.as_markup()
+
+async def get_roles_yandex_menu() -> InlineKeyboardMarkup:
+    """Меню выбора типа задач для Яндекс."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 С текстом", callback_data="roles_subcat:yandex_text")
+    builder.button(text="🚫 Без текста", callback_data="roles_subcat:yandex_no_text")
+    builder.button(text="◀ Назад", callback_data="roles_back:main")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+async def get_task_switching_keyboard(bot: Bot, category: str, subcategory: str = None) -> InlineKeyboardMarkup:
+    """Создает клавиатуру с кнопками для переключения задач в категории."""
+    builder = InlineKeyboardBuilder()
+    
+    tasks_to_show = []
+    if category == "yandex" and subcategory == "text":
+        tasks_to_show = [
+            (admin_roles.YANDEX_TEXT_PROFILE_CHECK_ADMIN, await admin_roles.get_yandex_text_profile_admin()),
+            (admin_roles.YANDEX_TEXT_ISSUE_TEXT_ADMIN, await admin_roles.get_yandex_text_issue_admin()),
+            (admin_roles.YANDEX_TEXT_FINAL_CHECK_ADMIN, await admin_roles.get_yandex_text_final_admin()),
+        ]
+    elif category == "yandex" and subcategory == "no_text":
+        tasks_to_show = [
+            (admin_roles.YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, await admin_roles.get_yandex_no_text_profile_admin()),
+            (admin_roles.YANDEX_NO_TEXT_FINAL_CHECK_ADMIN, await admin_roles.get_yandex_no_text_final_admin()),
+        ]
+    elif category == "google":
+         tasks_to_show = [
+            (admin_roles.GOOGLE_PROFILE_CHECK_ADMIN, await admin_roles.get_google_profile_admin()),
+            (admin_roles.GOOGLE_LAST_REVIEWS_CHECK_ADMIN, await admin_roles.get_google_reviews_admin()),
+            (admin_roles.GOOGLE_ISSUE_TEXT_ADMIN, await admin_roles.get_google_issue_admin()),
+            (admin_roles.GOOGLE_FINAL_CHECK_ADMIN, await admin_roles.get_google_final_admin()),
+        ]
+    elif category == "gmail":
+        tasks_to_show = [
+            (admin_roles.GMAIL_DEVICE_MODEL_CHECK_ADMIN, await admin_roles.get_gmail_device_admin()),
+            (admin_roles.GMAIL_ISSUE_DATA_ADMIN, await admin_roles.get_gmail_data_admin()),
+            (admin_roles.GMAIL_FINAL_CHECK_ADMIN, await admin_roles.get_gmail_final_admin()),
+        ]
+    elif category == "other":
+        tasks_to_show = [
+            (admin_roles.OTHER_HOLD_REVIEW_ADMIN, await admin_roles.get_other_hold_admin())
+        ]
+    
+    for key, admin_id in tasks_to_show:
+        description = admin_roles.ROLE_DESCRIPTIONS.get(key, "Неизвестная задача")
+        admin_name = await admin_roles.get_admin_username(bot, admin_id)
+        builder.button(text=f"{description}: {admin_name}", callback_data=f"roles_switch:{key}")
+    
+    back_target = "yandex" if category == "yandex" and subcategory else "main"
+    if category == "yandex" and not subcategory:
+        back_target = "main"
+    elif category == "yandex" and subcategory:
+        back_target = "yandex"
+        
+    builder.button(text="◀ Назад", callback_data=f"roles_back:{back_target}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_current_settings_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под сообщением с текущими настройками."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Удалить сообщение", callback_data="roles_delete_msg")
+    return builder.as_markup()
