@@ -87,8 +87,8 @@ async def send_ticket_to_admins(bot: Bot, state: FSMContext, user_id: int, usern
     # 1. Отправляем сообщения админам и собираем их ID
     sent_messages = {}
     admin_text = (
-        f"🚨 <b>Новый вопрос в поддержку</b> от @{username} (ID: <code>{user_id}</code>)<br><br>"
-        f"<b>Вопрос:</b><br><i>{question}</i>"
+        f"🚨 <b>Новый вопрос в поддержку</b> от @{username} (ID: <code>{user_id}</code>)\n\n"
+        f"<b>Вопрос:</b>\n<i>{question}</i>"
     )
 
     for i, admin_id in enumerate(ADMIN_IDS):
@@ -196,19 +196,19 @@ async def admin_claim_question(callback: CallbackQuery, state: FSMContext, bot: 
                 # Определяем, было ли фото
                 if ticket.photo_file_id:
                     await bot.edit_message_caption(
-                        caption=f"{callback.message.caption}<br><br><b>Взят в работу администратором @{admin_username}</b>",
+                        caption=f"{callback.message.caption}\n\n<b>Взят в работу администратором @{admin_username}</b>",
                         chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
                     )
                 else:
                     await bot.edit_message_text(
-                        text=f"{callback.message.text}<br><br><b>Взят в работу администратором @{admin_username}</b>",
+                        text=f"{callback.message.text}\n\n<b>Взят в работу администратором @{admin_username}</b>",
                         chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
                     )
             except Exception as e:
                 logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id}: {e}")
 
     # Редактируем сообщение у того, кто нажал
-    new_text = (callback.message.caption or callback.message.text) + "<br><br>✅ Вы отвечаете на этот вопрос. Отправьте ответ следующим сообщением."
+    new_text = (callback.message.caption or callback.message.text) + "\n\n✅ Вы отвечаете на этот вопрос. Отправьте ответ следующим сообщением."
     
     if ticket.photo_file_id:
         await callback.message.edit_caption(caption=new_text, reply_markup=None)
@@ -243,7 +243,7 @@ async def admin_send_answer(message: Message, state: FSMContext, bot: Bot):
         return
 
     user_text = (
-        f"📩 <b>Вам пришел ответ от поддержки:</b><br><br>"
+        f"📩 <b>Вам пришел ответ от поддержки:</b>\n\n"
         f"{message.text}"
     )
     
@@ -296,12 +296,12 @@ async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, b
             try:
                 if ticket.photo_file_id:
                     await bot.edit_message_caption(
-                        caption=f"{callback.message.caption}<br><br><b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
+                        caption=f"{callback.message.caption}\n\n<b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
                         chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
                     )
                 else:
                     await bot.edit_message_text(
-                        text=f"{callback.message.text}<br><br><b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
+                        text=f"{callback.message.text}\n\n<b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
                         chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
                     )
             except Exception as e:
@@ -309,7 +309,7 @@ async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, b
 
     # 4. Редактируем сообщение у себя и переходим в FSM
     try:
-        new_text = (callback.message.caption or callback.message.text) + "<br><br>⚠️ Вы собираетесь выдать предупреждение. Введите причину следующим сообщением."
+        new_text = (callback.message.caption or callback.message.text) + "\n\n⚠️ Вы собираетесь выдать предупреждение. Введите причину следующим сообщением."
         if ticket.photo_file_id:
             await callback.message.edit_caption(caption=new_text, reply_markup=None)
         else:
@@ -346,14 +346,14 @@ async def admin_process_support_warn_reason(message: Message, state: FSMContext,
     if new_warnings_count == 1:
         # Первое предупреждение, просто выдаем
         await db_manager.add_support_warning_and_cooldown(user_id)
-        await bot.send_message(user_id, f"⚠️ <b>Вам выдано предупреждение от службы поддержки.</b><br><br><b>Причина:</b> {warn_reason}<br><br>Пожалуйста, задавайте вопросы по теме, чтобы избежать дальнейших ограничений.")
+        await bot.send_message(user_id, f"⚠️ <b>Вам выдано предупреждение от службы поддержки.</b>\n\n<b>Причина:</b> {warn_reason}\n\nПожалуйста, задавайте вопросы по теме, чтобы избежать дальнейших ограничений.")
         await message.answer(f"✅ Предупреждение (№{new_warnings_count}) отправлено пользователю {user_id}.")
         await db_manager.close_support_ticket(ticket_id)
         await state.clear()
     elif new_warnings_count == 2:
         # Второе, выдаем кулдаун на 1 час
         await db_manager.add_support_warning_and_cooldown(user_id, hours=1)
-        await bot.send_message(user_id, f"❗️ <b>Вы получили второе предупреждение от службы поддержки.</b><br><br><b>Причина:</b> {warn_reason}<br><br>За повторное нарушение доступ к поддержке заблокирован на 1 час.")
+        await bot.send_message(user_id, f"❗️ <b>Вы получили второе предупреждение от службы поддержки.</b>\n\n<b>Причина:</b> {warn_reason}\n\nЗа повторное нарушение доступ к поддержке заблокирован на 1 час.")
         await message.answer(f"✅ Предупреждение (№{new_warnings_count}) отправлено пользователю {user_id}. Доступ к поддержке заблокирован на 1 час.")
         await db_manager.close_support_ticket(ticket_id)
         await state.clear()
@@ -381,7 +381,7 @@ async def admin_set_support_cooldown(message: Message, state: FSMContext, bot: B
     
     current_warnings = await db_manager.add_support_warning_and_cooldown(user_id, hours=hours)
 
-    await bot.send_message(user_id, f"❗️ <b>Вы получили очередное предупреждение от службы поддержки.</b><br><br><b>Причина:</b> {warn_reason}<br><br>Доступ к поддержке заблокирован на {hours} часов.")
+    await bot.send_message(user_id, f"❗️ <b>Вы получили очередное предупреждение от службы поддержки.</b>\n\n<b>Причина:</b> {warn_reason}\n\nДоступ к поддержке заблокирован на {hours} часов.")
     await message.answer(f"✅ Предупреждение (№{current_warnings}) отправлено. Доступ к поддержке для пользователя {user_id} заблокирован на {hours} часов.")
     
     await db_manager.close_support_ticket(ticket_id)

@@ -1,4 +1,3 @@
-# file: handlers/admin.py
 
 import datetime
 import logging
@@ -618,7 +617,7 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
 
     if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
         await message.answer(
-            f"❌ {generated_text}<br><br>Попробуйте снова или напишите вручную.", 
+            f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
             reply_markup=inline.get_ai_error_keyboard()
         )
         await state.update_data(ai_scenario=scenario)
@@ -626,8 +625,8 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
         return
 
     moderation_text = (
-        "📄 <b>Сгенерированный текст отзыва:</b><br><br>"
-        f"<i>{generated_text}</i><br><br>"
+        "📄 <b>Сгенерированный текст отзыва:</b>\n\n"
+        f"<i>{generated_text}</i>\n\n"
         "Выберите следующее действие:"
     )
     
@@ -652,7 +651,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
             user_id=data['target_user_id'], link_id=data['target_link_id'],
             platform=data['platform'], review_text=review_text
         )
-        await callback.message.edit_text(f"Текст отправлен пользователю.<br>Статус: {response_text}", reply_markup=None)
+        await callback.message.edit_text(f"Текст отправлен пользователю.\nСтатус: {response_text}", reply_markup=None)
         await state.clear()
 
     elif action == 'regenerate':
@@ -677,14 +676,14 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
 
         if "ошибка" in generated_text.lower() or "ai-сервис" in generated_text.lower() or "ai-модель" in generated_text.lower():
             await callback.message.edit_text(
-                f"❌ {generated_text}<br><br>Попробуйте снова или напишите вручную.", 
+                f"❌ {generated_text}\n\nПопробуйте снова или напишите вручную.", 
                 reply_markup=inline.get_ai_error_keyboard()
             )
             return
 
         new_moderation_text = (
-            "📄 <b>Новый сгенерированный текст отзыва:</b><br><br>"
-            f"<i>{generated_text}</i><br><br>"
+            "📄 <b>Новый сгенерированный текст отзыва:</b>\n\n"
+            f"<i>{generated_text}</i>\n\n"
             "Выберите следующее действие:"
         )
         await callback.message.edit_text(new_moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
@@ -862,7 +861,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"<br><br><i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором @{callback.from_user.username} ]</i>"
+            new_text = (callback.message.text or "") + f"\n\n<i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором @{callback.from_user.username} ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -874,7 +873,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         try:
-            new_text = (callback.message.text or "") + f"<br><br><i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором @{callback.from_user.username} ]</i>"
+            new_text = (callback.message.text or "") + f"\n\n<i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором @{callback.from_user.username} ]</i>"
             await callback.message.edit_text(new_text, reply_markup=None)
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
@@ -978,14 +977,14 @@ async def show_reward_settings_menu(message_or_callback: Message | CallbackQuery
     timer_hours_str = await db_manager.get_system_setting("reward_timer_hours")
     timer_hours = int(timer_hours_str) if timer_hours_str and timer_hours_str.isdigit() else 24
     
-    text = "⚙️ <b>Управление наградами для топа статистики</b><br><br><b>Текущие настройки:</b><br>"
+    text = "⚙️ <b>Управление наградами для топа статистики</b>\n\n<b>Текущие настройки:</b>\n"
     if not settings:
-        text += "Призовые места не настроены.<br>"
+        text += "Призовые места не настроены.\n"
     else:
         for setting in settings:
-            text += f" • {setting.place}-е место: {setting.reward_amount} ⭐<br>"
+            text += f" • {setting.place}-е место: {setting.reward_amount} ⭐\n"
     
-    text += f"<br><b>Период выдачи:</b> раз в {timer_hours} часов."
+    text += f"\n<b>Период выдачи:</b> раз в {timer_hours} часов."
     
     markup = inline.get_reward_settings_menu_keyboard(timer_hours)
 
@@ -1029,7 +1028,7 @@ async def process_places_count(message: Message, state: FSMContext):
 async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.REWARD_SET_AMOUNT_FOR_PLACE)
     prompt_msg = await callback.message.edit_text(
-        "Введите данные для изменения награды в формате: <code>МЕСТО СУММА</code><br>Например: <code>1 50.5</code> или <code>3 15</code>",
+        "Введите данные для изменения награды в формате: <code>МЕСТО СУММА</code>\nНапример: <code>1 50.5</code> или <code>3 15</code>",
         reply_markup=inline.get_cancel_inline_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -1216,7 +1215,7 @@ async def promo_uses_entered(message: Message, state: FSMContext):
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     await state.update_data(promo_uses=uses)
-    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.<br><br>Теперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
+    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard())
     await state.set_state(AdminState.PROMO_REWARD)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -1232,7 +1231,7 @@ async def promo_reward_entered(message: Message, state: FSMContext):
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     await state.update_data(promo_reward=reward)
-    await message.answer(f"Принято. Награда: {reward} ⭐.<br><br>Теперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
+    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
     await state.set_state(AdminState.PROMO_CONDITION)
 
 @router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, F.from_user.id.in_(ADMINS))
@@ -1263,14 +1262,14 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     success = await db_manager.ban_user(user_id_to_ban)
 
     if not success:
-        await message.answer("❌ Произошла ошибка при бане пользователя.")
+        await message.answer("❌ Произошла при бане пользователя.")
         await state.clear()
         return
 
     try:
         user_notification = (
-            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b><br><br>"
-            f"<b>Причина:</b> {ban_reason}<br><br>"
+            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b>\n\n"
+            f"<b>Причина:</b> {ban_reason}\n\n"
             "Вам закрыт доступ ко всем функциям бота. "
             "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
         )

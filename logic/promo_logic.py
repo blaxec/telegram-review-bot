@@ -62,8 +62,8 @@ async def activate_promo_code_logic(user_id: int, code: str) -> tuple[str, model
         condition_text = condition_map.get(promo.condition, "неизвестное условие")
         
         message = (
-            f"✅ Промокод <code>{promo.code}</code> принят!<br><br>"
-            f"💰 Для получения <b>{promo.reward} ⭐</b> вам необходимо <b>{condition_text}</b>.<br><br>"
+            f"✅ Промокод <code>{promo.code}</code> принят!\n\n"
+            f"💰 Для получения <b>{promo.reward} ⭐</b> вам необходимо <b>{condition_text}</b>.\n\n"
             f"Вы готовы приступить к выполнению задания?"
         )
         return message, promo

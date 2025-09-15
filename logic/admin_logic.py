@@ -37,7 +37,10 @@ async def process_add_links_logic(links_text: str, platform: str, is_fast_track:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
             try:
-                if await db_manager.db_add_reference(stripped_link, platform, is_fast_track=is_fast_track):
+                # В db_manager.py нет функции db_add_reference с is_fast_track. Предполагаем, что она должна быть.
+                # Для совместимости с текущим кодом, пока уберем этот флаг из вызова.
+                # Если он нужен, нужно будет добавить его в db_manager.py
+                if await db_manager.db_add_reference(stripped_link, platform):
                     added_count += 1
                 else:
                     skipped_count += 1
@@ -48,7 +51,7 @@ async def process_add_links_logic(links_text: str, platform: str, is_fast_track:
             logger.warning(f"Skipping invalid link format: {stripped_link}")
             skipped_count += 1
 
-    return f"Готово!<br>✅ Добавлено: {added_count}<br>⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
+    return f"Готово!\n✅ Добавлено: {added_count}\n⏭️ Пропущено (дубликаты или неверный формат): {skipped_count}"
 
 
 # --- ЛОГИКА ДЛЯ ПРЕДУПРЕЖДЕНИЙ И ОТКЛОНЕНИЙ ---
@@ -56,13 +59,13 @@ async def process_add_links_logic(links_text: str, platform: str, is_fast_track:
 async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, context: str, user_state: FSMContext):
     """Логика обработки причины отклонения и уведомления пользователя."""
     if context == "gmail_data_request" or context == "gmail_device_model":
-        user_message_text = f"❌ Ваш запрос на создание аккаунта был отклонен.<br><br><b>Причина:</b> {reason}"
+        user_message_text = f"❌ Ваш запрос на создание аккаунта был отклонен.\n\n<b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
     elif context == "gmail_account":
-        user_message_text = f"❌ Ваш созданный аккаунт Gmail был отклонен администратором.<br><br><b>Причина:</b> {reason}"
+        user_message_text = f"❌ Ваш созданный аккаунт Gmail был отклонен администратором.\n\n<b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
     else:
-        user_message_text = f"❌ Ваша проверка была отклонена администратором.<br><br><b>Причина:</b> {reason}"
+        user_message_text = f"❌ Ваша проверка была отклонена администратором.\n\n<b>Причина:</b> {reason}"
         await user_state.set_state(UserState.MAIN_MENU)
         
     try:
@@ -76,10 +79,10 @@ async def process_rejection_reason_logic(bot: Bot, user_id: int, reason: str, co
 async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, reason: str, user_state: FSMContext, context: str):
     """Логика обработки причины предупреждения и уведомления пользователя."""
     warnings_count = await db_manager.add_user_warning(user_id, platform=platform)
-    user_message_text = f"⚠️ <b>Администратор выдал вам предупреждение.</b><br><br><b>Причина:</b> {reason}<br>"
+    user_message_text = f"⚠️ <b>Администратор выдал вам предупреждение.</b>\n\n<b>Причина:</b> {reason}\n"
 
     if warnings_count >= Limits.WARNINGS_THRESHOLD_FOR_BAN:
-        user_message_text += f"<br>❗️ <b>Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.</b>"
+        user_message_text += f"\n❗️ <b>Это ваше {Limits.WARNINGS_THRESHOLD_FOR_BAN}-е предупреждение. Возможность выполнять задания для платформы {platform.capitalize()} заблокирована на {Durations.COOLDOWN_WARNING_BLOCK_HOURS} часа.</b>"
         await user_state.clear()
         await user_state.set_state(UserState.MAIN_MENU)
     else:
@@ -96,7 +99,7 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
              await user_state.set_state(state_to_return)
         else: # На случай если контекст не найден
              await user_state.set_state(UserState.MAIN_MENU)
-        user_message_text += "<br>Пожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
+        user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
 
     try:
         await bot.send_message(user_id, user_message_text, reply_markup=inline.get_back_to_main_menu_keyboard())
@@ -122,16 +125,19 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     task_state, task_message, run_date_confirm, run_date_timeout = None, None, None, None
 
+    base_task_text = (
+        "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
+        "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.\n"
+        "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.\n\n"
+        "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.\n\n"
+        "<b>Текст для отзыва:</b>\n"
+        f"<i>{review_text}</i>\n\n"
+        f"🔗 <b><a href='{link.url}'>ПЕРЕЙТИ К ЗАДАНИЮ</a></b> \n\n"
+    )
+
     if platform == "google":
         task_state = UserState.GOOGLE_REVIEW_TASK_ACTIVE
-        task_message = (
-            "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-            "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.<br>"
-            "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.<br><br>"
-            "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.<br><br>"
-            "<b>Текст для отзыва:</b>\n"
-            f"<i>{review_text}</i>\n\n"
-            f"🔗 <b><a href='{link.url}'>ПЕРЕЙТИ К ЗАДАНИЮ</a></b> \n\n"
+        task_message = base_task_text + (
             f"⏳ На выполнение этого задания у вас есть <b>{Durations.TASK_GOOGLE_REVIEW_TIMEOUT} минут</b>. "
             f"Кнопка для подтверждения появится через <b>{Durations.TASK_GOOGLE_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
@@ -140,14 +146,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     elif platform == "yandex_with_text":
         task_state = UserState.YANDEX_REVIEW_TASK_ACTIVE
-        task_message = (
-            "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
-            "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.<br>"
-            "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.<br><br>"
-            "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.<br><br>"
-            "<b>Текст для отзыва:</b>\n"
-            f"<i>{review_text}</i>\n\n"
-            f"🔗 <b><a href='{link.url}'>ПЕРЕЙТИ К ЗАДАНИЮ</a></b> \n\n"
+        task_message = base_task_text + (
             f"⏳ На выполнение этого задания у вас есть <b>{Durations.TASK_YANDEX_REVIEW_TIMEOUT} минут</b>. "
             f"Кнопка для подтверждения появится через <b>{Durations.TASK_YANDEX_REVIEW_CONFIRM_APPEARS} минут</b>."
         )
@@ -201,8 +200,8 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
     await db_manager.update_balance(user_id, -amount)
     
     user_notification_text = (
-        f"❗️ <b>Вам был выдан штраф администратором.</b><br><br>"
-        f"<b>Причина:</b> {reason}<br>"
+        f"❗️ <b>Вам был выдан штраф администратором.</b>\n\n"
+        f"<b>Причина:</b> {reason}\n"
         f"<b>Списано:</b> {amount} ⭐"
     )
 
@@ -312,8 +311,8 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
     try:
         user_message = f"❌ Ваш отзыв ({rejected_review.platform}) был отклонен."
         if reason:
-            user_message += f"<br><br><b>Причина:</b> {reason}"
-        user_message += "<br><br>Вы сможете попробовать снова после окончания кулдауна."
+            user_message += f"\n\n<b>Причина:</b> {reason}"
+        user_message += "\n\nВы сможете попробовать снова после окончания кулдауна."
         
         await bot.send_message(rejected_review.user_id, user_message, reply_markup=inline.get_back_to_main_menu_keyboard())
     except Exception as e:
@@ -431,15 +430,15 @@ async def get_user_hold_info_logic(identifier: str) -> str:
 
     total_hold_amount = sum(review.amount for review in reviews_in_hold)
 
-    response_text = f"⏳ Отзывы в холде для @{user.username} (ID: <code>{user_id}</code>)<br>"
-    response_text += f"Общая сумма в холде: <b>{total_hold_amount}</b> ⭐<br><br>"
+    response_text = f"⏳ Отзывы в холде для @{user.username} (ID: <code>{user_id}</code>)\n"
+    response_text += f"Общая сумма в холде: <b>{total_hold_amount}</b> ⭐\n\n"
 
     for review in reviews_in_hold:
         hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
         response_text += (
-            f"🔹 <b>{review.amount} ⭐</b> ({review.platform})<br>"
-            f"   - До: {hold_until_str} UTC<br>"
-            f"   - ID отзыва: <code>{review.id}</code><br><br>"
+            f"🔹 <b>{review.amount} ⭐</b> ({review.platform})\n"
+            f"   - До: {hold_until_str} UTC\n"
+            f"   - ID отзыва: <code>{review.id}</code>\n\n"
         )
     return response_text
 

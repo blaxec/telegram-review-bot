@@ -47,7 +47,7 @@ async def request_unban(message: Message, bot: Bot):
             return
     
     admin_notification = (
-        f"🚨 <b>Запрос на амнистию!</b> 🚨<br><br>"
+        f"🚨 <b>Запрос на амнистию!</b> 🚨\n\n"
         f"Пользователь @{user.username} (ID: <code>{user.id}</code>) просит о разбане."
     )
     
@@ -113,16 +113,16 @@ async def approve_unban_request(callback: CallbackQuery, bot: Bot):
         return
 
     try:
-        await bot.send_message(user_id_to_unban, "🎉 <b>Хорошие новости!</b><br><br>Главный администратор одобрил ваш запрос. Вы были разблокированы и снова можете пользоваться ботом.")
+        await bot.send_message(user_id_to_unban, "🎉 <b>Хорошие новости!</b>\n\nГлавный администратор одобрил ваш запрос. Вы были разблокированы и снова можете пользоваться ботом.")
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id_to_unban} о разбане: {e}")
 
     await callback.answer("✅ Пользователь разбанен.", show_alert=True)
     if callback.message:
-        await callback.message.edit_text(f"{callback.message.text}<br><br><b>Статус: РАЗБАНЕН</b>", reply_markup=None)
+        await callback.message.edit_text(f"{callback.message.text}\n\n<b>Статус: РАЗБАНЕН</b>", reply_markup=None)
 
 @router.callback_query(F.data.startswith("unban_reject:"))
 async def reject_unban_request(callback: CallbackQuery):
     await callback.answer("Запрос на разбан отклонен.", show_alert=True)
     if callback.message:
-        await callback.message.edit_text(f"{callback.message.text}<br><br><b>Статус: ОТКЛОНЕНО</b>", reply_markup=None)
+        await callback.message.edit_text(f"{callback.message.text}\n\n<b>Статус: ОТКЛОНЕНО</b>", reply_markup=None)
