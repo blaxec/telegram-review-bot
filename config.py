@@ -2,10 +2,9 @@
 
 import os
 import logging
-from dotenv import load_dotenv
 from urllib.parse import urlparse
 
-load_dotenv()
+# УДАЛЕНО: load_dotenv() больше не нужен в Docker-окружении
 logger = logging.getLogger(__name__)
 
 # --- Основные настройки бота ---
