@@ -1,3 +1,5 @@
+# file: telegram-review-bot-main/handlers/admin.py
+
 
 import datetime
 import logging
@@ -136,6 +138,17 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
 
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_refs:add_choose_type:"), F.from_user.id.in_(ADMINS))
+async def admin_add_ref_choose_type(callback: CallbackQuery):
+    """Показывает выбор типа ссылок для добавления."""
+    platform = callback.data.split(':')[2]
+    await callback.message.edit_text(
+        "Выберите тип ссылок, которые вы хотите добавить:",
+        reply_markup=inline.get_admin_add_link_type_keyboard(platform)
+    )
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("admin_refs:add:"), F.from_user.id.in_(ADMINS))
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):

@@ -1,4 +1,4 @@
-# file: logic/admin_logic.py
+# file: telegram-review-bot-main/logic/admin_logic.py
 
 import logging
 import datetime
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- ЛОГИКА: Добавление ссылок ---
-async def process_add_links_logic(links_text: str, platform: str, is_fast_track: bool = False) -> str:
+async def process_add_links_logic(links_text: str, platform: str, is_fast_track: bool = False, requires_photo: bool = False) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
@@ -37,10 +37,7 @@ async def process_add_links_logic(links_text: str, platform: str, is_fast_track:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
             try:
-                # В db_manager.py нет функции db_add_reference с is_fast_track. Предполагаем, что она должна быть.
-                # Для совместимости с текущим кодом, пока уберем этот флаг из вызова.
-                # Если он нужен, нужно будет добавить его в db_manager.py
-                if await db_manager.db_add_reference(stripped_link, platform):
+                if await db_manager.db_add_reference(stripped_link, platform, is_fast_track=is_fast_track, requires_photo=requires_photo):
                     added_count += 1
                 else:
                     skipped_count += 1
@@ -125,10 +122,13 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     task_state, task_message, run_date_confirm, run_date_timeout = None, None, None, None
 
+    photo_instruction = "\n3. <b>Прикрепите к отзыву фотографию</b> (любую подходящую, например, из интерьера или связанную с тематикой места)." if link.requires_photo else ""
+
     base_task_text = (
         "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
         "1. Внимательно перепишите текст ниже. Ваш отзыв должен быть <b>абсолютно идентичен</b> предоставленному тексту.\n"
-        "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту.\n\n"
+        "2. Перейдите по ссылке и оставьте отзыв на <b>5 звезд</b>, точно следуя тексту."
+        f"{photo_instruction}\n\n"
         "❗❗❗ <b>ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ:</b> Не изменяйте текст, не добавляйте и не убирайте символы, эмодзи или знаки препинания. Отзыв должен быть копией. <b>КОПИРОВАНИЕ И ВСТАВКА ТЕКСТА КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО</b>, пишите вручную.\n\n"
         "<b>Текст для отзыва:</b>\n"
         f"<i>{review_text}</i>\n\n"

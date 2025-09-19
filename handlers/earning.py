@@ -1,4 +1,4 @@
-# file: handlers/earning.py
+# file: telegram-review-bot-main/handlers/earning.py
 
 import datetime
 import logging
@@ -803,11 +803,10 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
     await db_manager.save_confirmation_screenshot(review_id, new_screenshot_file_id)
     
     admin_text = (
-        f"🚨 <b>Подтверждение отзыва #{review_id}</b> 🚨\n\n"
+        f"🚨 <b>Подтверждение отзыва</b> 🚨\n\n"
         f"<b>Пользователь:</b> @{message.from_user.username} (ID: <code>{message.from_user.id}</code>)\n"
-        f"<b>Ссылка на компанию:</b> <code>{review.link.url if review.link else 'Ссылка не найдена'}</code>\n\n"
-        "Сравните два скриншота и примите решение. "
-        "Сверху — <b>новый</b>, снизу — <b>старый</b> (при первоначальной сдаче)."
+        f"<b>Ссылка на место:</b> <a href='{review.link.url if review.link else ''}'>Перейти</a>\n\n"
+        "Пожалуйста, сравните два скриншота (старый и новый) и примите решение."
     )
 
     media_group = [
@@ -823,11 +822,18 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
         )
         
         if sent_messages:
-            await bot.edit_message_reply_markup(
-                chat_id=admin_id,
-                message_id=sent_messages[0].message_id,
-                reply_markup=inline.get_admin_final_verification_keyboard(review_id)
-            )
+            # Оборачиваем в try-except для подавления ошибки "message is not modified"
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=admin_id,
+                    message_id=sent_messages[0].message_id,
+                    reply_markup=inline.get_admin_final_verification_keyboard(review_id)
+                )
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    raise e # Если ошибка другая, пробрасываем ее дальше
+                else:
+                    logger.warning("Ignored 'message is not modified' error when adding keyboard to media group.")
 
     except Exception as e:
         logger.error(f"Не удалось отправить файлы для финальной проверки отзыва {review_id} админу: {e}")

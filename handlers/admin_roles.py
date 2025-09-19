@@ -1,4 +1,4 @@
-# file: handlers/admin_roles.py
+# file: telegram-review-bot-main/handlers/admin_roles.py
 
 import logging
 from aiogram import Router, F, Bot
@@ -103,21 +103,27 @@ async def roles_switch_admin(callback: CallbackQuery, bot: Bot):
     
     await callback.answer("Ответственный изменен!")
 
-    # Обновляем клавиатуру
-    parts = callback.message.reply_markup.inline_keyboard[0][0].callback_data.split(":")
+    # --- ИСПРАВЛЕННАЯ ЛОГИКА ОБНОВЛЕНИЯ КЛАВИАТУРЫ ---
     category = "unknown"
-    if "yandex" in role_key: category = "yandex"
-    elif "google" in role_key: category = "google"
-    elif "gmail" in role_key: category = "gmail"
-    elif "other" in role_key: category = "other"
-
     subcategory = None
-    if "text" in role_key: subcategory = "text"
-    elif "no_text" in role_key: subcategory = "no_text"
+    
+    if "yandex" in role_key:
+        category = "yandex"
+        if "no_text" in role_key:
+            subcategory = "no_text"
+        else:
+            subcategory = "text"
+    elif "google" in role_key:
+        category = "google"
+    elif "gmail" in role_key:
+        category = "gmail"
+    elif "other" in role_key:
+        category = "other"
     
     await callback.message.edit_reply_markup(
         reply_markup=await inline.get_task_switching_keyboard(bot, category, subcategory)
     )
+    # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
     
     # Отправляем уведомления
     task_description = admin_roles.ROLE_DESCRIPTIONS.get(role_key, "Неизвестная задача")

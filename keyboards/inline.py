@@ -295,9 +295,25 @@ def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📊 Статистика", callback_data=f"admin_refs:stats:{platform}")
     builder.button(text="📄 Показать список", callback_data=f"admin_refs:list:{platform}")
-    builder.button(text="➕ Добавить ссылки", callback_data=f"admin_refs:add:{platform}")
+    builder.button(text="➕ Добавить ссылки", callback_data=f"admin_refs:add_choose_type:{platform}")
     builder.button(text="⬅️ Назад к выбору платформ", callback_data="admin_refs:back_to_selection")
     builder.adjust(1)
+    return builder.as_markup()
+    
+def get_admin_add_link_type_keyboard(platform: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Обычные", callback_data=f"admin_refs:ask_photo:regular:{platform}")
+    builder.button(text="➕ Быстрые 🚀", callback_data=f"admin_refs:ask_photo:fast:{platform}")
+    builder.button(text="⬅️ Назад", callback_data=f"admin_refs:select_platform:{platform}")
+    builder.adjust(2,1)
+    return builder.as_markup()
+
+def get_admin_add_link_photo_keyboard(platform: str, link_type: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="С фото 📸", callback_data=f"admin_refs:add:{link_type}:with_photo:{platform}")
+    builder.button(text="Без фото 📝", callback_data=f"admin_refs:add:{link_type}:without_photo:{platform}")
+    builder.button(text="⬅️ Назад", callback_data=f"admin_refs:add_choose_type:{platform}")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 def get_back_to_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
@@ -494,6 +510,8 @@ async def get_task_switching_keyboard(bot: Bot, category: str, subcategory: str 
         back_target = "main"
     elif category == "yandex" and subcategory:
         back_target = "yandex"
+    elif category != "yandex":
+        back_target = "main"
         
     builder.button(text="◀ Назад", callback_data=f"roles_back:{back_target}")
     builder.adjust(1)

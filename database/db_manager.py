@@ -185,7 +185,7 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = Durat
                 user.warnings = 0
     return current_warnings
 
-async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int, screenshot_file_id: str = None) -> int:
+async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int, screenshot_file_id: str = None, attached_photo_file_id: str = None) -> int:
     review_id = 0
     async with async_session() as session:
         async with session.begin():
@@ -196,7 +196,8 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
                 status='pending',
                 review_text=text,
                 admin_message_id=admin_message_id,
-                screenshot_file_id=screenshot_file_id
+                screenshot_file_id=screenshot_file_id,
+                attached_photo_file_id=attached_photo_file_id
             )
             session.add(new_review)
             await session.flush()
@@ -288,10 +289,10 @@ async def get_all_hold_reviews() -> list[Review]:
         result = await session.execute(query)
         return result.scalars().all()
 
-async def db_add_reference(url: str, platform: str) -> bool:
+async def db_add_reference(url: str, platform: str, is_fast_track: bool = False, requires_photo: bool = False) -> bool:
     async with async_session() as session:
         async with session.begin():
-            new_link = Link(url=url, platform=platform)
+            new_link = Link(url=url, platform=platform, is_fast_track=is_fast_track, requires_photo=requires_photo)
             session.add(new_link)
         return True
 

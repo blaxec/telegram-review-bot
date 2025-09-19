@@ -76,6 +76,7 @@ class Link(Base):
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
     is_fast_track = Column(Boolean, default=False, nullable=False)
+    requires_photo = Column(Boolean, default=False, nullable=False)
 
 
 class WithdrawalRequest(Base):
