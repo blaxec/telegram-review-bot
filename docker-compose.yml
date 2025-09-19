@@ -1,16 +1,11 @@
 # file: docker-compose.yml
 
-# --- ИЗМЕНЕНИЕ 1: Определяем общую сеть ---
-networks:
-  telegram_bot_net:
-    driver: bridge
-
 services:
   postgres_db:
     image: postgres:15-alpine
     container_name: my_telegram_bot_postgres
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASS:-password}
       POSTGRES_DB: ${DB_NAME:-telegram_bot_db}
     ports:
@@ -23,7 +18,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    # --- ИЗМЕНЕНИЕ 2: Подключаем сервис к нашей сети ---
     networks:
       - telegram_bot_net
 
@@ -33,7 +27,6 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
-    # --- ИЗМЕНЕНИЕ 3: Подключаем сервис к нашей сети ---
     networks:
       - telegram_bot_net
 
@@ -48,9 +41,12 @@ services:
     volumes:
       - .:/app
     command: sh -c "alembic upgrade head && python main.py"
-    # --- ИЗМЕНЕНИЕ 4: Подключаем сервис к нашей сети ---
     networks:
       - telegram_bot_net
 
 volumes:
   postgres_data:
+
+networks:
+  telegram_bot_net:
+    driver: bridge
