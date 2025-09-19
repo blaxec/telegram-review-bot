@@ -13,13 +13,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
-    # --- ВОТ ИЗМЕНЕНИЕ: ДОБАВЛЕНА ПРОВЕРКА ГОТОВНОСТИ ---
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-telegram_bot_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
-    # ----------------------------------------------------
 
   redis_db:
     image: redis:7-alpine
@@ -31,16 +29,17 @@ services:
   bot:
     build: .
     container_name: my_telegram_bot_app
-    # --- ВОТ ИЗМЕНЕНИЕ: БОТ ТЕПЕРЬ ЖДЕТ, ПОКА БАЗА НЕ СТАНЕТ "ЗДОРОВОЙ" ---
     depends_on:
       postgres_db:
         condition: service_healthy
-    # -----------------------------------------------------------------------
     env_file:
       - .env
     volumes:
       - .:/app
-    command: sh -c "alembic upgrade head && python main.py"
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Убираем миграцию из основной команды, чтобы она не выполнялась при каждом запуске
+    command: python main.py
+    # -----------------------
 
 volumes:
   postgres_data:
