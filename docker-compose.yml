@@ -32,14 +32,13 @@ services:
     depends_on:
       postgres_db:
         condition: service_healthy
-    env_file:
-      - .env
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Явно указываем Docker использовать .env файл из текущей директории
+    env_file: .env
+    # -----------------------
     volumes:
       - .:/app
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    # Убираем миграцию из основной команды, чтобы она не выполнялась при каждом запуске
-    command: python main.py
-    # -----------------------
+    command: sh -c "alembic upgrade head && python main.py"
 
 volumes:
   postgres_data:
