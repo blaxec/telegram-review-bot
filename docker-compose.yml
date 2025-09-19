@@ -36,11 +36,30 @@ services:
     depends_on:
       postgres_db:
         condition: service_healthy
-    env_file:
-      - .env
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Убираем env_file и передаем переменные напрямую для теста
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_ID_1=${ADMIN_ID_1}
+      - ADMIN_ID_2=${ADMIN_ID_2}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_URL=${REDIS_URL}
+      - WITHDRAWAL_CHANNEL_ID=${WITHDRAWAL_CHANNEL_ID}
+      - TESTER_IDS=${TESTER_IDS}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GOOGLE_API_KEY_1=${GOOGLE_API_KEY_1}
+      - GOOGLE_API_KEY_2=${GOOGLE_API_KEY_2}
+      - GROQ_MODEL_NAME=${GROQ_MODEL_NAME}
+    # -----------------------
     volumes:
       - .:/app
-    # Возвращаем рабочую команду
     command: python main.py
     networks:
       - telegram_bot_net
