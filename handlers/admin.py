@@ -38,7 +38,8 @@ from logic.admin_logic import (
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
-from logic import admin_roles, notification_manager
+from logic import admin_roles
+# ИЗМЕНЕНИЕ: Удаляем импорт 'notification_manager' из шапки файла
 from utils.access_filters import IsAdmin, IsSuperAdmin
 
 router = Router()
@@ -487,6 +488,8 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_verify:'), IsAdmin())
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await callback.answer()
     
     try:
@@ -1123,16 +1126,13 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     
     if identifier.isdigit():
         promo_id = int(identifier)
-        # В db_manager нет функции get_promo_by_id, поэтому ищем по коду.
-        # Это допущение, что ID промокода может совпадать с его кодом.
         promo_to_delete = await db_manager.get_promo_by_code(str(promo_id))
     else:
         promo_to_delete = await db_manager.get_promo_by_code(identifier)
 
     if not promo_to_delete:
         await message.answer(f"❌ Промокод '{identifier}' не найден.")
-        await state.clear()
-        # Возвращаемся к списку
+        await state.set_state(AdminState.PROMO_LIST_VIEW)
         await show_promo_codes_page(message, state, 1)
         return
 
@@ -1142,8 +1142,7 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     else:
         await message.answer(f"❌ Произошла ошибка при удалении промокода `{promo_to_delete.code}`.")
         
-    await state.clear()
-    # Возвращаемся к списку
+    await state.set_state(AdminState.PROMO_LIST_VIEW)
     await show_promo_codes_page(message, state, 1)
 
 
