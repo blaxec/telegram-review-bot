@@ -17,7 +17,6 @@ from config import GOOGLE_API_KEYS, ADMIN_ID_1
 
 logger = logging.getLogger(__name__)
 
-# ИЗМЕНЕНИЕ: Новые, более конкретные типы задач
 AnalysisTask = Literal['yandex_profile_check', 'google_profile_check', 'google_reviews_check']
 almaty_tz = pytz.timezone('Asia/Almaty')
 
@@ -79,12 +78,10 @@ async def analyze_screenshot(bot: Bot, file_id: str, task: AnalysisTask) -> Dict
 
     image_for_api = {'mime_type': 'image/jpeg', 'data': image_bytes.getvalue()}
     
-    # ИСПОЛЬЗУЕМ ЧАСОВОЙ ПОЯС АЛМАТЫ (UTC+5)
     today_in_almaty = datetime.datetime.now(pytz.timezone('Asia/Almaty')).date()
     today_str = today_in_almaty.strftime('%d.%m.%Y')
     
     prompt = ""
-    # --- НОВЫЕ СПЕЦИАЛИЗИРОВАННЫЕ ПРОМПТЫ ---
     if task == 'google_profile_check':
         prompt = f"""
         Ты — ассистент-аналитик, проверяющий скриншоты профилей Google. Твоя задача — проверить имя и фамилию пользователя на соответствие правилам.

@@ -4,53 +4,56 @@ import os
 import logging
 from urllib.parse import urlparse
 
-# УДАЛЕНО: load_dotenv() больше не нужен в Docker-окружении
 logger = logging.getLogger(__name__)
 
-# --- Основные настройки ролей и ID ---
-# ГЛАВНЫЙ АДМИНИСТРАТОР (полный доступ)
-SUPER_ADMIN_ID = int(os.getenv("ADMIN_ID_1", 0))
-# СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного, для общей рассылки и фильтров)
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", str(SUPER_ADMIN_ID))
-ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
-if SUPER_ADMIN_ID and SUPER_ADMIN_ID not in ADMIN_IDS:
-    ADMIN_IDS.insert(0, SUPER_ADMIN_ID) # Гарантируем, что главный админ всегда в списке
-
-# --- Основные настройки бота ---
+# --- Основные настройки бота и ролей ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# --- НОВАЯ НАСТРОЙКА: ID Тестировщиков для команды /skip ---
+# ID Главного Администратора (полный доступ)
+# Используется для эксклюзивных команд и как получатель критических уведомлений
+ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 0))
+SUPER_ADMIN_ID = ADMIN_ID_1 # Создаем псевдоним для нового кода с фильтрами
+
+# ID второго администратора (если есть) для ролей по умолчанию
+ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 0))
+
+# СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного) для общей логики
+# Сначала берем ID из ADMIN_IDS, если их нет, формируем из ADMIN_ID_1 и ADMIN_ID_2
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS")
+if ADMIN_IDS_STR:
+    ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
+else:
+    ADMIN_IDS = [admin_id for admin_id in [ADMIN_ID_1, ADMIN_ID_2] if admin_id != 0]
+
+# Гарантируем, что главный админ всегда в списке ADMIN_IDS
+if ADMIN_ID_1 and ADMIN_ID_1 not in ADMIN_IDS:
+    ADMIN_IDS.insert(0, ADMIN_ID_1)
+
+# ID Тестировщиков для команды /skip
 TESTER_IDS_STR = os.getenv("TESTER_IDS", "")
 TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if tester_id.strip().isdigit()]
 
-
-# ID канала, куда будут отправляться заявки на вывод.
+# ID канала, куда будут отправляться заявки на вывод
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 
-# --- НОВЫЙ РАЗДЕЛ: Роли администраторов по умолчанию ---
-# Эти значения используются, если в базе данных не заданы конкретные роли.
+# --- Роли администраторов по умолчанию ---
 class Defaults:
     # Администратор, ответственный за большинство проверок скриншотов
-    DEFAULT_SCREENSHOT_CHECK_ADMIN = int(os.getenv("ADMIN_ID_1", 0))
+    DEFAULT_SCREENSHOT_CHECK_ADMIN = ADMIN_ID_1
     # Администратор, ответственный за выдачу текстов и данных
-    DEFAULT_TEXT_PROVIDER_ADMIN = int(os.getenv("ADMIN_ID_1", 0))
+    DEFAULT_TEXT_PROVIDER_ADMIN = ADMIN_ID_1
     # Администратор для финальной, самой ответственной проверки
-    DEFAULT_FINAL_VERDICT_ADMIN = int(os.getenv("ADMIN_ID_2", 0)) if os.getenv("ADMIN_ID_2") else int(os.getenv("ADMIN_ID_1", 0))
+    DEFAULT_FINAL_VERDICT_ADMIN = ADMIN_ID_2 if ADMIN_ID_2 else ADMIN_ID_1
 
-
-# --- Ключи для Google Gemini ---
+# --- Ключи для внешних API ---
 GOOGLE_API_KEY_1 = os.getenv("GOOGLE_API_KEY_1")
 GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
 GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
-
-# --- ИЗМЕНЕНИЕ: Добавляем настройку модели Groq ---
-GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile") # Актуальная модель Groq
-
+GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile")
 
 if not GOOGLE_API_KEYS:
     logger.warning("!!! КОНФИГУРАЦИЯ: Не найдены GOOGLE_API_KEY_1 и GOOGLE_API_KEY_2 в .env файле.")
     logger.warning("!!! Функция автоматической проверки скриншотов (OCR) будет отключена.")
-
 
 if WITHDRAWAL_CHANNEL_ID > 0:
     logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")
@@ -59,56 +62,35 @@ if WITHDRAWAL_CHANNEL_ID > 0:
 
 # --- Награды (в звездах) ---
 class Rewards:
-    # Стандартные награды
     GOOGLE_REVIEW = 15.0
     YANDEX_WITH_TEXT = 50.0
     YANDEX_WITHOUT_TEXT = 15.0
-    GMAIL_ACCOUNT = 5.0 # Стандартная награда
-    ADMIN_ADD_STARS = 999.0 # Награда для админ-команды /addstars. Убрал *
-
-    # Награды для реферальной системы
-    # ПУТЬ 1: Google
+    GMAIL_ACCOUNT = 5.0
+    ADMIN_ADD_STARS = 999.0
     REFERRAL_GOOGLE_REVIEW = 0.45
-    # ПУТЬ 2: Gmail
-    GMAIL_FOR_REFERRAL_USER = 4.5 # Сколько получает сам реферал
-    REFERRAL_GMAIL_ACCOUNT = 0.5 # Сколько получает реферер
-    # ПУТЬ 3: Yandex
+    GMAIL_FOR_REFERRAL_USER = 4.5
+    REFERRAL_GMAIL_ACCOUNT = 0.5
     REFERRAL_YANDEX_WITH_TEXT = 1.2
     REFERRAL_YANDEX_WITHOUT_TEXT = 0.6
-
-    # --- ДОБАВЛЕНО: Награды для топа пользователей ---
-    # Ключ - место в топе, значение - сумма награды
     TOP_USER_REWARDS = {
-        1: 50.0,  # 1-е место
-        2: 30.0,  # 2-е место
-        3: 15.0   # 3-е место
+        1: 50.0,
+        2: 30.0,
+        3: 15.0
     }
-
 
 # --- Длительности и тайминги ---
 class Durations:
-    # Длительность холда для отзывов (в минутах)
     HOLD_GOOGLE_MINUTES = 5
-    HOLD_YANDEX_WITH_TEXT_MINUTES = 24 * 60  # 1 день
-    HOLD_YANDEX_WITHOUT_TEXT_MINUTES = 72 * 60 # 3 дня
-    # --- ИЗМЕНЕНИЕ: Отдельный холд для тестеров ---
-    HOLD_TESTER_MINUTES = 1 # 1 минута для тестеров
-
-    # Длительность кулдаунов (в часах)
-    COOLDOWN_GOOGLE_REVIEW_HOURS = 5 / 60  # 5 минут
-    COOLDOWN_YANDEX_WITH_TEXT_HOURS = 5 / 60  # 5 минут
-    COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS = 5 / 60 # 5 минут
-    
+    HOLD_YANDEX_WITH_TEXT_MINUTES = 24 * 60
+    HOLD_YANDEX_WITHOUT_TEXT_MINUTES = 72 * 60
+    HOLD_TESTER_MINUTES = 1
+    COOLDOWN_GOOGLE_REVIEW_HOURS = 5 / 60
+    COOLDOWN_YANDEX_WITH_TEXT_HOURS = 5 / 60
+    COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS = 5 / 60
     COOLDOWN_GMAIL_HOURS = 24
     COOLDOWN_WARNING_BLOCK_HOURS = 24
-
-    # Кулдаун для запроса на разбан (в минутах)
     COOLDOWN_UNBAN_REQUEST_MINUTES = 30
-    
-    # --- ИЗМЕНЕНИЕ: Таймаут ожидания подтверждающего скриншота ---
-    CONFIRMATION_TIMEOUT_MINUTES = 30 # 30 минут
-
-    # Тайминги для FSM-задач (в минутах)
+    CONFIRMATION_TIMEOUT_MINUTES = 30
     TASK_GOOGLE_LIKING_TIMEOUT = 10
     TASK_GOOGLE_LIKING_CONFIRM_APPEARS = 5
     TASK_GOOGLE_REVIEW_TIMEOUT = 17
@@ -117,18 +99,13 @@ class Durations:
     TASK_YANDEX_LIKING_CONFIRM_APPEARS = 5
     TASK_YANDEX_REVIEW_TIMEOUT = 25
     TASK_YANDEX_REVIEW_CONFIRM_APPEARS = 10
-    TASK_GMAIL_VERIFICATION_TIMEOUT = 5 # Таймер на отправку созданного Gmail на проверку
-
-    # --- ДОБАВЛЕНО: Таймаут ожидания текста от администратора ---
+    TASK_GMAIL_VERIFICATION_TIMEOUT = 5
     AWAIT_ADMIN_TEXT_TIMEOUT_MINUTES = 60
-
-    # Время жизни информационных сообщений (в секундах)
     DELETE_WELCOME_MESSAGE_DELAY = 15
     DELETE_INFO_MESSAGE_DELAY = 25
     DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY = 10
     DELETE_ADMIN_REPLY_DELAY = 10
     DELETE_UNBAN_REQUEST_DELAY = 15
-
 
 # --- Лимиты и пороги ---
 class Limits:
@@ -136,9 +113,8 @@ class Limits:
     MIN_TRANSFER_AMOUNT = 1.0
     WARNINGS_THRESHOLD_FOR_BAN = 3
 
-# --- ИСПРАВЛЕНИЕ: Добавляем недостающую переменную ---
+# --- Комиссия за перевод ---
 TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 0.0))
-
 
 # --- Настройки подключения к базам данных ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -154,7 +130,6 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
      DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-
 
 REDIS_URL = os.getenv("REDIS_URL")
 if REDIS_URL:
