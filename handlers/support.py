@@ -12,6 +12,8 @@ from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from config import ADMIN_IDS
 from database import db_manager
+from logic import notification_manager # НОВЫЙ ИМПОРТ
+from utils.access_filters import IsAdmin # НОВЫЙ ФИЛЬТР
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -84,54 +86,67 @@ async def send_ticket_to_admins(bot: Bot, state: FSMContext, user_id: int, usern
     question = data.get("support_question")
     photo_file_id = data.get("support_photo_id")
 
-    # 1. Отправляем сообщения админам и собираем их ID
-    sent_messages = {}
+    # 1. Формируем сообщение для админов
     admin_text = (
         f"🚨 <b>Новый вопрос в поддержку</b> от @{username} (ID: <code>{user_id}</code>)\n\n"
         f"<b>Вопрос:</b>\n<i>{question}</i>"
     )
 
-    for i, admin_id in enumerate(ADMIN_IDS):
+    # 2. Отправляем уведомления всем активным админам и собираем их message_id
+    # notification_manager возвращает None, если все админы в DND или нет активных.
+    # Для support_ticket нам нужно отправить всем, кто не в DND, и получить их message_id.
+    
+    active_admins = await db_manager.get_active_admins(ADMIN_IDS)
+    sent_messages_map = {} # {admin_id: message_id}
+    
+    for admin_id in active_admins:
         try:
             if photo_file_id:
                 sent_msg = await bot.send_photo(admin_id, photo=photo_file_id, caption=admin_text)
             else:
                 sent_msg = await bot.send_message(admin_id, admin_text)
-            sent_messages[i] = sent_msg.message_id
+            sent_messages_map[ADMIN_IDS.index(admin_id)] = sent_msg.message_id # Используем индекс для сохранения, как в модели
         except Exception as e:
             logger.error(f"Не удалось отправить тикет админу {admin_id}: {e}")
-            sent_messages[i] = None
-    
-    # 2. Если удалось отправить хотя бы одному, создаем тикет в БД
-    if any(sent_messages.values()):
+            sent_messages_map[ADMIN_IDS.index(admin_id)] = None # Указываем None, если не удалось отправить
+
+    # Преобразуем sent_messages_map в dict с индексами 0 и 1 для модели
+    admin_message_ids_for_db = {
+        0: sent_messages_map.get(0), # admin_id_1
+        1: sent_messages_map.get(1)  # admin_id_2 (если есть)
+    }
+
+    # 3. Если удалось отправить хотя бы одному, создаем тикет в БД
+    if any(sent_messages_map.values()):
         ticket = await db_manager.create_support_ticket(
             user_id=user_id,
             username=username,
             question=question,
-            admin_message_ids=sent_messages,
+            admin_message_ids=admin_message_ids_for_db,
             photo_file_id=photo_file_id
         )
         
-        # 3. Теперь обновляем сообщения у админов, добавляя клавиатуру с ID тикета
-        for i, admin_id in enumerate(ADMIN_IDS):
-            if sent_messages.get(i):
+        # 4. Теперь обновляем сообщения у админов, добавляя клавиатуру с ID тикета
+        for i, admin_id_in_config in enumerate(ADMIN_IDS): # Проходим по всем админам из config
+            msg_id_to_edit = sent_messages_map.get(i) # Берем message_id, если оно было отправлено
+            if msg_id_to_edit:
                 try:
                     if photo_file_id:
                         await bot.edit_message_reply_markup(
-                            chat_id=admin_id, message_id=sent_messages[i],
+                            chat_id=admin_id_in_config, message_id=msg_id_to_edit,
                             reply_markup=inline.get_support_admin_keyboard(ticket.id, user_id)
                         )
                     else:
                         await bot.edit_message_reply_markup(
-                            chat_id=admin_id, message_id=sent_messages[i],
+                            chat_id=admin_id_in_config, message_id=msg_id_to_edit,
                             reply_markup=inline.get_support_admin_keyboard(ticket.id, user_id)
                         )
                 except Exception as e:
-                    logger.error(f"Не удалось обновить клавиатуру у админа {admin_id} для тикета {ticket.id}: {e}")
+                    logger.error(f"Не удалось обновить клавиатуру у админа {admin_id_in_config} для тикета {ticket.id}: {e}")
         
         await bot.send_message(user_id, "Ваш вопрос отправлен администраторам. Пожалуйста, ожидайте ответа.")
     else:
-        await bot.send_message(user_id, "❌ К сожалению, не удалось связаться с поддержкой. Попробуйте снова позже.")
+        await bot.send_message(user_id, "❌ К сожалению, не удалось связаться с поддержкой. Все администраторы сейчас в «ночном режиме». Попробуйте снова позже.")
 
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
@@ -171,7 +186,7 @@ async def process_support_photo(message: Message, state: FSMContext, bot: Bot):
 
 # --- Админские обработчики ---
 
-@router.callback_query(F.data.startswith("support_answer:"))
+@router.callback_query(F.data.startswith("support_answer:"), IsAdmin()) # Изменен фильтр
 async def admin_claim_question(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Админ нажимает кнопку, чтобы ответить на вопрос."""
     ticket_id = int(callback.data.split(":")[1])
@@ -188,24 +203,31 @@ async def admin_claim_question(callback: CallbackQuery, state: FSMContext, bot: 
         return
 
     # Уведомляем других админов
-    other_admin_ids = [aid for aid in ADMIN_IDS if aid != admin_id]
-    for other_admin_id in other_admin_ids:
-        msg_id_to_edit = ticket.admin_message_id_1 if ADMIN_IDS.index(other_admin_id) == 0 else ticket.admin_message_id_2
+    # Используем db_manager.get_active_admins для учета DND, но отправляем всем, кто НЕ взял в работу.
+    other_admins_to_notify = [aid for aid in ADMIN_IDS if aid != admin_id]
+    
+    for other_admin_id_in_config in other_admins_to_notify:
+        msg_id_to_edit = None
+        if ADMIN_IDS.index(other_admin_id_in_config) == 0:
+            msg_id_to_edit = ticket.admin_message_id_1
+        elif ADMIN_IDS.index(other_admin_id_in_config) == 1:
+            msg_id_to_edit = ticket.admin_message_id_2
+
         if msg_id_to_edit:
             try:
                 # Определяем, было ли фото
                 if ticket.photo_file_id:
                     await bot.edit_message_caption(
                         caption=f"{callback.message.caption}\n\n<b>Взят в работу администратором @{admin_username}</b>",
-                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                        chat_id=other_admin_id_in_config, message_id=msg_id_to_edit, reply_markup=None
                     )
                 else:
                     await bot.edit_message_text(
                         text=f"{callback.message.text}\n\n<b>Взят в работу администратором @{admin_username}</b>",
-                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                        chat_id=other_admin_id_in_config, message_id=msg_id_to_edit, reply_markup=None
                     )
             except Exception as e:
-                logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id}: {e}")
+                logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id_in_config}: {e}")
 
     # Редактируем сообщение у того, кто нажал
     new_text = (callback.message.caption or callback.message.text) + "\n\n✅ Вы отвечаете на этот вопрос. Отправьте ответ следующим сообщением."
@@ -225,7 +247,7 @@ async def admin_claim_question(callback: CallbackQuery, state: FSMContext, bot: 
     
     await callback.answer()
 
-@router.message(AdminState.SUPPORT_AWAITING_ANSWER)
+@router.message(AdminState.SUPPORT_AWAITING_ANSWER, IsAdmin()) # Изменен фильтр
 async def admin_send_answer(message: Message, state: FSMContext, bot: Bot):
     """Админ отправляет ответ, который пересылается пользователю."""
     await delete_previous_messages(message, state)
@@ -260,7 +282,7 @@ async def admin_send_answer(message: Message, state: FSMContext, bot: Bot):
 
 # --- ИЗМЕНЕННЫЙ ОБРАБОТЧИК ДЛЯ ПРЕДУПРЕЖДЕНИЙ В ПОДДЕРЖКЕ ---
 
-@router.callback_query(F.data.startswith("support_warn:"))
+@router.callback_query(F.data.startswith("support_warn:"), IsAdmin()) # Изменен фильтр
 async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Админ нажимает кнопку 'Выдать предупреждение'."""
     try:
@@ -289,23 +311,29 @@ async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, b
         return # Прекращаем выполнение
 
     # 3. Если получилось, уведомляем других админов
-    other_admin_ids = [aid for aid in ADMIN_IDS if aid != admin_id]
-    for other_admin_id in other_admin_ids:
-        msg_id_to_edit = ticket.admin_message_id_1 if ADMIN_IDS.index(other_admin_id) == 0 else ticket.admin_message_id_2
+    other_admins_to_notify = [aid for aid in ADMIN_IDS if aid != admin_id]
+    
+    for other_admin_id_in_config in other_admins_to_notify:
+        msg_id_to_edit = None
+        if ADMIN_IDS.index(other_admin_id_in_config) == 0:
+            msg_id_to_edit = ticket.admin_message_id_1
+        elif ADMIN_IDS.index(other_admin_id_in_config) == 1:
+            msg_id_to_edit = ticket.admin_message_id_2
+
         if msg_id_to_edit:
             try:
                 if ticket.photo_file_id:
                     await bot.edit_message_caption(
                         caption=f"{callback.message.caption}\n\n<b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
-                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                        chat_id=other_admin_id_in_config, message_id=msg_id_to_edit, reply_markup=None
                     )
                 else:
                     await bot.edit_message_text(
                         text=f"{callback.message.text}\n\n<b>Взят в работу (для предупреждения) администратором @{admin_username}</b>",
-                        chat_id=other_admin_id, message_id=msg_id_to_edit, reply_markup=None
+                        chat_id=other_admin_id_in_config, message_id=msg_id_to_edit, reply_markup=None
                     )
             except Exception as e:
-                logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id} (warn): {e}")
+                logger.warning(f"Не удалось отредактировать сообщение у админа {other_admin_id_in_config} (warn): {e}")
 
     # 4. Редактируем сообщение у себя и переходим в FSM
     try:
@@ -328,7 +356,7 @@ async def admin_start_support_warn(callback: CallbackQuery, state: FSMContext, b
     await callback.answer()
 
 
-@router.message(AdminState.SUPPORT_AWAITING_WARN_REASON, F.text)
+@router.message(AdminState.SUPPORT_AWAITING_WARN_REASON, F.text, IsAdmin()) # Изменен фильтр
 async def admin_process_support_warn_reason(message: Message, state: FSMContext, bot: Bot):
     """Админ ввел причину, выдаем предупреждение и решаем, нужен ли кулдаун."""
     await delete_previous_messages(message, state) # Удаляем только сообщение с причиной
@@ -363,7 +391,7 @@ async def admin_process_support_warn_reason(message: Message, state: FSMContext,
         prompt_msg = await message.answer(f"Это уже {new_warnings_count}-е предупреждение для пользователя. Введите срок блокировки доступа к поддержке в часах:")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(AdminState.SUPPORT_AWAITING_COOLDOWN_HOURS, F.text)
+@router.message(AdminState.SUPPORT_AWAITING_COOLDOWN_HOURS, F.text, IsAdmin()) # Изменен фильтр
 async def admin_set_support_cooldown(message: Message, state: FSMContext, bot: Bot):
     """Админ вводит срок блокировки."""
     await delete_previous_messages(message, state)

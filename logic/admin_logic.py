@@ -3,6 +3,8 @@
 import logging
 import datetime
 import asyncio
+from math import ceil
+
 from aiogram.types import Message
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
@@ -197,12 +199,12 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
     if not user:
         return f"❌ Пользователь с ID <code>{user_id}</code> не найден."
 
-    await db_manager.update_balance(user_id, -amount)
+    await db_manager.update_balance(user_id, -amount, op_type="FINE", description=f"Админ {admin_id}: {reason}")
     
     user_notification_text = (
         f"❗️ <b>Вам был выдан штраф администратором.</b>\n\n"
         f"<b>Причина:</b> {reason}\n"
-        f"<b>Списано:</b> {amount} ⭐"
+        f"<b>Списано:</b> {amount:.2f} ⭐"
     )
 
     try:
@@ -212,7 +214,7 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
         return f"✅ Штраф успешно применен к пользователю <b>{username}</b>."
     except Exception as e:
         logger.error(f"Failed to notify user {user_id} about the fine: {e}")
-        await db_manager.update_balance(user_id, amount)
+        await db_manager.update_balance(user_id, amount) # Возвращаем деньги, если не удалось уведомить
         return f"❌ Не удалось уведомить пользователя {user_id} о штрафе. Штраф был отменен. Ошибка: {e}"
 
 
@@ -271,7 +273,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
     await reference_manager.release_reference_from_user(review.user_id, 'used')
     
     try:
-        msg = await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) прошел проверку и отправлен в холд. +{amount} ⭐ в холд.")
+        msg = await bot.send_message(review.user_id, f"✅ Ваш отзыв ({review.platform}) прошел проверку и отправлен в холд. +{amount:.2f} ⭐ в холд.")
         await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {review.user_id} об одобрении в холд: {e}")
@@ -350,7 +352,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
                     await bot.send_message(
                         referrer.id,
                         f"🎉 Ваш реферал @{user.username} успешно завершил отзыв! "
-                        f"Вам начислено {referral_reward} ⭐ в копилку."
+                        f"Вам начислено {referral_reward:.2f} ⭐ в копилку."
                     )
                 except Exception as e:
                     logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
@@ -361,7 +363,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
         await check_and_apply_promo_reward(user_id, "yandex_review", bot)
     
     try:
-        await bot.send_message(user_id, f"✅ Ваш подтверждающий скриншот одобрен! Награда за отзыв #{review_id} ({approved_review.amount} ⭐) зачислена на основной баланс.")
+        await bot.send_message(user_id, f"✅ Ваш подтверждающий скриншот одобрен! Награда за отзыв #{review_id} ({approved_review.amount:.2f} ⭐) зачислена на основной баланс.")
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id} об окончательном одобрении: {e}")
         
@@ -393,7 +395,7 @@ async def approve_withdrawal_logic(request_id: int, bot: Bot) -> tuple[bool, str
         return False, "❌ Запрос уже обработан или не найден.", None
     
     try:
-        await bot.send_message(request.user_id, f"✅ Ваш запрос на вывод {request.amount} ⭐ <b>подтвержден</b>.")
+        await bot.send_message(request.user_id, f"✅ Ваш запрос на вывод {request.amount:.2f} ⭐ <b>подтвержден</b>.")
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal approval: {e}")
 
@@ -407,7 +409,7 @@ async def reject_withdrawal_logic(request_id: int, bot: Bot) -> tuple[bool, str,
         return False, "❌ Запрос уже обработан или не найден.", None
 
     try:
-        await bot.send_message(request.user_id, f"❌ Ваш запрос на вывод {request.amount} ⭐ <b>отклонен</b>. Средства возвращены на баланс.")
+        await bot.send_message(request.user_id, f"❌ Ваш запрос на вывод {request.amount:.2f} ⭐ <b>отклонен</b>. Средства возвращены на баланс.")
     except Exception as e:
         logger.error(f"Failed to notify user {request.user_id} about withdrawal rejection: {e}")
 
@@ -431,12 +433,12 @@ async def get_user_hold_info_logic(identifier: str) -> str:
     total_hold_amount = sum(review.amount for review in reviews_in_hold)
 
     response_text = f"⏳ Отзывы в холде для @{user.username} (ID: <code>{user_id}</code>)\n"
-    response_text += f"Общая сумма в холде: <b>{total_hold_amount}</b> ⭐\n\n"
+    response_text += f"Общая сумма в холде: <b>{total_hold_amount:.2f}</b> ⭐\n\n"
 
     for review in reviews_in_hold:
         hold_until_str = review.hold_until.strftime('%d.%m.%Y %H:%M') if review.hold_until else 'N/A'
         response_text += (
-            f"🔹 <b>{review.amount} ⭐</b> ({review.platform})\n"
+            f"🔹 <b>{review.amount:.2f} ⭐</b> ({review.platform})\n"
             f"   - До: {hold_until_str} UTC\n"
             f"   - ID отзыва: <code>{review.id}</code>\n\n"
         )
@@ -451,3 +453,48 @@ async def schedule_message_deletion(message: Message, delay: int):
         except TelegramBadRequest:
             pass
     asyncio.create_task(delete_after_delay())
+
+# --- НОВАЯ ЛОГИКА ДЛЯ СПИСКА ЗАБАНЕННЫХ ---
+async def format_banned_user_page(users: list, current_page: int, total_pages: int) -> str:
+    if not users:
+        return "📜 <b>Список забаненных пользователей:</b>\n\nПока никого нет в бане.\n\n" \
+               f"Страница {current_page}/{total_pages}"
+    
+    text = "📜 <b>Список забаненных пользователей:</b>\n\n"
+    for user in users:
+        username = f"@{user.username}" if user.username else f"ID: {user.id}"
+        ban_date = user.banned_at.strftime('%d.%m.%Y %H:%M') if user.banned_at else 'N/A'
+        text += (
+            f"🚫 {username} (ID: <code>{user.id}</code>)\n"
+            f"   - <b>Причина:</b> {user.ban_reason or 'Не указана'}\n"
+            f"   - <b>Дата бана:</b> {ban_date} UTC\n\n"
+        )
+    text += f"Страница {current_page}/{total_pages}"
+    return text
+
+# --- НОВАЯ ЛОГИКА ДЛЯ СПИСКА ПРОМОКОДОВ ---
+async def format_promo_code_page(promos: list, current_page: int, total_pages: int) -> str:
+    if not promos:
+        return "📝 <b>Список промокодов:</b>\n\nПромокодов не найдено.\n\n" \
+               f"Страница {current_page}/{total_pages}"
+    
+    text = "📝 <b>Список промокодов:</b>\n\n"
+    for promo in promos:
+        condition_map = {
+            'no_condition': 'Без условия',
+            'google_review': 'Отзыв Google',
+            'yandex_review': 'Отзыв Yandex',
+            'gmail_account': 'Создание Gmail'
+        }
+        condition_text = condition_map.get(promo.condition, 'Неизвестно')
+        created_at = promo.created_at.strftime('%d.%m.%Y %H:%M') if promo.created_at else 'N/A'
+        
+        text += (
+            f"🎁 <b>Код:</b> <code>{promo.code}</code>\n"
+            f"   - <b>Награда:</b> {promo.reward:.2f} ⭐\n"
+            f"   - <b>Использований:</b> {promo.current_uses}/{promo.total_uses}\n"
+            f"   - <b>Условие:</b> {condition_text}\n"
+            f"   - <b>Создан:</b> {created_at} UTC\n\n"
+        )
+    text += f"Страница {current_page}/{total_pages}"
+    return text

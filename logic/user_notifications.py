@@ -12,7 +12,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-from logic.admin_roles import (get_google_issue_admin, get_yandex_text_issue_admin)
+# --- ИЗМЕНЕНИЕ: Импортируем новый менеджер уведомлений ---
+from logic import notification_manager
 
 
 logger = logging.getLogger(__name__)
@@ -117,15 +118,18 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     admin_notification = f"❗️ Пользователь @{user_data.get('username', '???')} (ID: {user_id}) не успел выполнить задание ({message_to_admins}) вовремя. Ссылка была возвращена в пул доступных."
     
     try:
-        # Определяем, какому админу слать уведомление
-        admin_id_to_notify = None
-        if 'google' in platform:
-            admin_id_to_notify = await get_google_issue_admin()
-        elif 'yandex' in platform:
-            admin_id_to_notify = await get_yandex_text_issue_admin()
-
         await bot.send_message(user_id, timeout_message, reply_markup=reply.get_main_menu_keyboard())
-        if admin_id_to_notify:
-            await bot.send_message(admin_id_to_notify, admin_notification)
+        
+        # --- ИЗМЕНЕНИЕ: Используем централизованный менеджер уведомлений ---
+        # Он сам определит ответственного и проверит его DND-статус
+        task_type = None
+        if 'google' in platform:
+            task_type = "google_issue_text"
+        elif 'yandex' in platform:
+            task_type = "yandex_with_text_issue_text"
+
+        if task_type:
+            await notification_manager.send_notification_to_admins(bot, text=admin_notification, task_type=task_type)
+
     except Exception as e:
         logger.error(f"Ошибка при обработке таймаута для {user_id}: {e}")

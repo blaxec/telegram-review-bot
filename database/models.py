@@ -31,16 +31,25 @@ class User(Base):
     blocked_until = Column(DateTime, nullable=True)
     
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
+    
+    # --- Поля для системы бана ---
     is_banned = Column(Boolean, default=False, nullable=False)
+    banned_at = Column(DateTime, nullable=True)
+    ban_reason = Column(String, nullable=True)
     last_unban_request_at = Column(DateTime, nullable=True)
+    
     phone_number = Column(String, nullable=True)
 
     support_warnings = Column(Integer, default=0, nullable=False)
     support_cooldown_until = Column(DateTime, nullable=True)
+    
+    # --- Поле для режима DND ---
+    dnd_enabled = Column(Boolean, default=False, nullable=False)
 
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
+    operations = relationship("OperationHistory", back_populates="user")
 
 
 class Review(Base):
@@ -61,6 +70,7 @@ class Review(Base):
     screenshot_file_id = Column(String, nullable=True)
     
     confirmation_screenshot_file_id = Column(String, nullable=True)
+    attached_photo_file_id = Column(String, nullable=True)
     
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")
@@ -148,3 +158,19 @@ class SystemSetting(Base):
     __tablename__ = 'system_settings'
     key = Column(String, primary_key=True)
     value = Column(String, nullable=True)
+    
+class OperationHistory(Base):
+    __tablename__ = 'operation_history'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    operation_type = Column(Enum(
+        'REVIEW_APPROVED', 'PROMO_ACTIVATED', 'WITHDRAWAL', 'FINE', 
+        'TRANSFER_SENT', 'TRANSFER_RECEIVED', 'TOP_REWARD',
+        name='operation_type_enum'
+    ), nullable=False)
+    amount = Column(Float, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="operations")

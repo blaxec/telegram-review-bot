@@ -103,11 +103,16 @@ class AdminState(StatesGroup):
     SUPPORT_AWAITING_COOLDOWN_HOURS = State()
 
     # Состояния для управления ссылками
+    ADD_LINKS = State() # Новый стейт для добавления ссылок
     DELETE_LINK_ID = State()
     RETURN_LINK_ID = State()
 
     # Состояния для процесса бана
     BAN_REASON = State()
+
+    # Состояния для списков
+    BAN_LIST_VIEW = State()
+    PROMO_LIST_VIEW = State()
 
     # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
     REWARD_SETTINGS_MENU = State()

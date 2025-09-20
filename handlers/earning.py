@@ -11,7 +11,7 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from states.user_states import UserState
+from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
@@ -25,6 +25,7 @@ from logic.user_notifications import (
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
+from logic import notification_manager # НОВЫЙ ИМПОРТ
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -238,12 +239,13 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
     
     try:
-        admin_id = await admin_roles.get_google_profile_admin()
-        await bot.send_photo(
-            chat_id=admin_id,
-            photo=photo_file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile")
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=caption,
+            photo_id=photo_file_id,
+            keyboard=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile"),
+            task_type="google_profile"
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото профиля админу: {e}")
@@ -290,15 +292,13 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
 
     try:
-        admin_id = await admin_roles.get_google_reviews_admin()
-        await bot.send_photo(
-            chat_id=admin_id,
-            photo=photo_file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(
-                user_id=message.from_user.id, 
-                context="google_last_reviews"
-            )
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=caption,
+            photo_id=photo_file_id,
+            keyboard=inline.get_admin_verification_keyboard(message.from_user.id, "google_last_reviews"),
+            task_type="google_last_reviews"
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
@@ -376,17 +376,14 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     )
     
     try:
-        admin_id = await admin_roles.get_google_issue_admin()
-        keyboard = inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id)
-        if profile_screenshot_id:
-            await bot.send_photo(
-                chat_id=admin_id,
-                photo=profile_screenshot_id,
-                caption=admin_notification_text,
-                reply_markup=keyboard
-            )
-        else:
-            await bot.send_message(admin_id, admin_notification_text, reply_markup=keyboard)
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=admin_notification_text,
+            photo_id=profile_screenshot_id, # Может быть None
+            keyboard=inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id),
+            task_type="google_issue_text"
+        )
     except Exception as e:
         logger.error(f"Failed to send task to admin: {e}")
 
@@ -447,15 +444,22 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
 
-        admin_id = await admin_roles.get_google_final_admin()
-        sent_message = await bot.send_photo(
-            chat_id=admin_id,
-            photo=photo_file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        sent_message = await notification_manager.send_notification_to_admins(
+            bot,
+            text=caption,
+            photo_id=photo_file_id,
+            keyboard=inline.get_admin_final_verdict_keyboard(review_id),
+            task_type="google_final_verdict"
         )
-        
-        await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        # notification_manager возвращает None, если уведомление не отправлено ни одному админу.
+        # Если оно отправлено, то это будет список сообщений (хотя мы ожидаем одно).
+        if sent_message and isinstance(sent_message, list) and sent_message:
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message[0].message_id) # Предполагаем, что отправлено одно сообщение и берем его ID
+        elif sent_message: # Если это не список, но что-то есть
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        else:
+            logger.warning(f"No admin received notification for review {review_id}. Review ID in DB might be incorrect.")
 
         response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
         await schedule_message_deletion(response_msg, 25)
@@ -548,16 +552,19 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
     try:
         user_data = await state.get_data()
         review_type = user_data.get("yandex_review_type", "with_text")
-        admin_id = await admin_roles.get_yandex_text_profile_admin() if review_type == "with_text" else await admin_roles.get_yandex_no_text_profile_admin()
-
-        await bot.send_photo(
-            chat_id=admin_id,
-            photo=photo_file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_verification_keyboard(
+        
+        task_type = "yandex_with_text_profile_screenshot" if review_type == "with_text" else "yandex_without_text_profile_screenshot"
+        
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=caption,
+            photo_id=photo_file_id,
+            keyboard=inline.get_admin_verification_keyboard(
                 user_id=message.from_user.id,
-                context="yandex_profile_screenshot"
-            )
+                context="yandex_profile_screenshot" # Для контекста кнопки, не для DND
+            ),
+            task_type=task_type
         )
     except Exception as e:
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
@@ -642,12 +649,14 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         )
         
         try:
-            admin_id = await admin_roles.get_yandex_text_issue_admin()
-            keyboard = inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id)
-            if profile_screenshot_id:
-                await bot.send_photo(chat_id=admin_id, photo=profile_screenshot_id, caption=admin_notification_text, reply_markup=keyboard)
-            else:
-                await bot.send_message(admin_id, admin_notification_text, reply_markup=keyboard, disable_web_page_preview=True)
+            # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+            await notification_manager.send_notification_to_admins(
+                bot,
+                text=admin_notification_text,
+                photo_id=profile_screenshot_id, # Может быть None
+                keyboard=inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id),
+                task_type="yandex_with_text_issue_text"
+            )
         except Exception as e:
             logger.error(f"Failed to send task to admin for Yandex: {e}")
     
@@ -736,16 +745,24 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
+        
+        task_type = "yandex_with_text_final_verdict" if review_type == "with_text" else "yandex_without_text_final_verdict"
 
-        admin_id = await admin_roles.get_yandex_text_final_admin() if review_type == "with_text" else await admin_roles.get_yandex_no_text_final_admin()
-        sent_message = await bot.send_photo(
-            chat_id=admin_id,
-            photo=photo_file_id,
-            caption=caption,
-            reply_markup=inline.get_admin_final_verdict_keyboard(review_id)
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        sent_message = await notification_manager.send_notification_to_admins(
+            bot,
+            text=caption,
+            photo_id=photo_file_id,
+            keyboard=inline.get_admin_final_verdict_keyboard(review_id),
+            task_type=task_type
         )
         
-        await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        if sent_message and isinstance(sent_message, list) and sent_message:
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message[0].message_id) # Предполагаем, что отправлено одно сообщение и берем его ID
+        elif sent_message: # Если это не список, но что-то есть
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        else:
+            logger.warning(f"No admin received notification for review {review_id}. Review ID in DB might be incorrect.")
         
         await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
 
@@ -816,24 +833,32 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
 
     try:
         admin_id = await admin_roles.get_other_hold_admin()
-        sent_messages = await bot.send_media_group(
-            chat_id=admin_id,
-            media=media_group
-        )
         
-        if sent_messages:
-            # Оборачиваем в try-except для подавления ошибки "message is not modified"
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=admin_id,
-                    message_id=sent_messages[0].message_id,
-                    reply_markup=inline.get_admin_final_verification_keyboard(review_id)
-                )
-            except TelegramBadRequest as e:
-                if "message is not modified" not in str(e).lower():
-                    raise e # Если ошибка другая, пробрасываем ее дальше
-                else:
-                    logger.warning("Ignored 'message is not modified' error when adding keyboard to media group.")
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager, но для media_group нужно обернуть ---
+        # notification_manager не поддерживает media_group напрямую, поэтому делаем вручную
+        # с проверкой DND для admin_id
+        admin_obj = await db_manager.get_user(admin_id)
+        if admin_obj and not admin_obj.dnd_enabled:
+            sent_messages = await bot.send_media_group(
+                chat_id=admin_id,
+                media=media_group
+            )
+            
+            if sent_messages:
+                # Оборачиваем в try-except для подавления ошибки "message is not modified"
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=admin_id,
+                        message_id=sent_messages[0].message_id,
+                        reply_markup=inline.get_admin_final_verification_keyboard(review_id)
+                    )
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in str(e).lower():
+                        raise e # Если ошибка другая, пробрасываем ее дальше
+                    else:
+                        logger.warning("Ignored 'message is not modified' error when adding keyboard to media group.")
+        else:
+            logger.warning(f"Admin {admin_id} is in DND mode. Notification for confirmation screenshot for review {review_id} not sent.")
 
     except Exception as e:
         logger.error(f"Не удалось отправить файлы для финальной проверки отзыва {review_id} админу: {e}")

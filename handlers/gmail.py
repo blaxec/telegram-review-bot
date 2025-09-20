@@ -17,6 +17,8 @@ from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
 from logic import admin_roles
+from logic import notification_manager # НОВЫЙ ИМПОРТ
+from utils.access_filters import IsAdmin # НОВЫЙ ФИЛЬТР
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -147,11 +149,12 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         admin_notification += "\n\n<i>Это запрос на создание со второго устройства (пользователь на кулдауне).</i>"
 
     try:
-        admin_id = await admin_roles.get_gmail_device_admin()
-        await bot.send_message(
-            admin_id,
-            admin_notification,
-            reply_markup=inline.get_admin_verification_keyboard(user_id, context)
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=admin_notification,
+            keyboard=inline.get_admin_verification_keyboard(user_id, context),
+            task_type="gmail_device_model"
         )
     except Exception as e:
         await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
@@ -226,11 +229,12 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         f"3. <i>Обязательно отключите устройство пользователя от аккаунта после проверки.</i>"
     )
     try:
-        admin_id = await admin_roles.get_gmail_final_admin()
-        await bot.send_message(
-            admin_id,
-            admin_notification,
-            reply_markup=inline.get_admin_gmail_final_check_keyboard(user_id)
+        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
+        await notification_manager.send_notification_to_admins(
+            bot,
+            text=admin_notification,
+            keyboard=inline.get_admin_gmail_final_check_keyboard(user_id),
+            task_type="gmail_final_check"
         )
     except Exception as e:
         await callback.message.answer("Не удалось отправить аккаунт на проверку. Попробуйте позже.")
@@ -290,7 +294,7 @@ async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext)
 
 # --- ХЭНДЛЕРЫ АДМИНА ДЛЯ УПРАВЛЕНИЯ GMAIL ---
 
-@router.message(AdminState.ENTER_GMAIL_DATA)
+@router.message(AdminState.ENTER_GMAIL_DATA, IsAdmin()) # Изменен фильтр
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -336,7 +340,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     await state.clear()
 
 
-@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'))
+@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'), IsAdmin()) # Изменен фильтр
 async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
     
@@ -354,32 +358,39 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
     user = await db_manager.get_user(user_id)
     reward_amount = Rewards.GMAIL_ACCOUNT
 
-    if user and user.referrer_id:
-        referrer = await db_manager.get_user(user.referrer_id)
-        if referrer and referrer.referral_path == 'gmail':
-            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
-            await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
-            try:
-                await bot.send_message(
-                    referrer.id,
-                    f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
-                    f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT} ⭐ в копилку."
-                )
-            except Exception as e:
-                logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
+    async with db_manager.async_session() as session:
+        async with session.begin():
+            if user and user.referrer_id:
+                referrer = await session.get(db_manager.User, user.referrer_id) # Используем сессию
+                if referrer and referrer.referral_path == 'gmail':
+                    reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
+                    # add_referral_earning теперь не принимает сессию, так как она создает свою.
+                    # Это может быть проблемой для атомарности, но для упрощения пока так.
+                    # В идеале, db_manager.add_referral_earning тоже должен принимать session.
+                    await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
+                    try:
+                        await bot.send_message(
+                            referrer.id,
+                            f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
+                            f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT} ⭐ в копилку."
+                        )
+                    except Exception as e:
+                        logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
 
-    await db_manager.update_balance(user_id, reward_amount)
-    
-    cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
-    if cooldown_end_time:
-        scheduler.add_job(
-            send_cooldown_expired_notification, 
-            'date', 
-            run_date=cooldown_end_time, 
-            args=[bot, user_id, "gmail"]
-        )
-    
-    await check_and_apply_promo_reward(user_id, "gmail_account", bot)
+            await db_manager.update_balance(user_id, reward_amount, op_type="GMAIL_ACCOUNT", description="Создание Gmail аккаунта")
+            
+            cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+            if cooldown_end_time:
+                scheduler.add_job(
+                    send_cooldown_expired_notification, 
+                    'date', 
+                    run_date=cooldown_end_time, 
+                    args=[bot, user_id, "gmail"]
+                )
+            
+            # check_and_apply_promo_reward также должен был бы работать через сессию
+            # но его логика сложнее, поэтому пока оставляем как есть, это отдельная транзакция
+            await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
     try:
         msg = await bot.send_message(user_id, f"✅ Ваш аккаунт успешно прошел проверку. +{reward_amount} звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
@@ -394,7 +405,7 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
             pass
 
 
-@router.callback_query(F.data.startswith('admin_gmail_reject_account:'))
+@router.callback_query(F.data.startswith('admin_gmail_reject_account:'), IsAdmin()) # Изменен фильтр
 async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
     

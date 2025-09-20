@@ -1,155 +1,170 @@
-# file: logic/admin_roles.py
+# file: telegram-review-bot-main/handlers/admin_roles.py
 
 import logging
-from aiogram import Bot
-from database import db_manager
-from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS, Defaults
+from aiogram import Router, F, Bot
+from aiogram.filters import Command
+from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 
+from config import SUPER_ADMIN_ID, ADMIN_IDS
+from keyboards import inline
+from database import db_manager
+from logic import admin_roles
+from utils.access_filters import IsSuperAdmin # НОВЫЙ ФИЛЬТР
+
+router = Router()
 logger = logging.getLogger(__name__)
 
-# --- Константы ключей для хранения в БД ---
-# Yandex (с текстом)
-YANDEX_TEXT_PROFILE_CHECK_ADMIN = "yandex_text_profile_check_admin"
-YANDEX_TEXT_ISSUE_TEXT_ADMIN = "yandex_text_issue_text_admin"
-YANDEX_TEXT_FINAL_CHECK_ADMIN = "yandex_text_final_check_admin"
-# Yandex (без текста)
-YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN = "yandex_no_text_profile_check_admin"
-YANDEX_NO_TEXT_FINAL_CHECK_ADMIN = "yandex_no_text_final_check_admin"
-# Google
-GOOGLE_PROFILE_CHECK_ADMIN = "google_profile_check_admin"
-GOOGLE_LAST_REVIEWS_CHECK_ADMIN = "google_last_reviews_check_admin"
-GOOGLE_ISSUE_TEXT_ADMIN = "google_issue_text_admin"
-GOOGLE_FINAL_CHECK_ADMIN = "google_final_check_admin"
-# Gmail
-GMAIL_DEVICE_MODEL_CHECK_ADMIN = "gmail_device_model_check_admin"
-GMAIL_ISSUE_DATA_ADMIN = "gmail_issue_data_admin"
-GMAIL_FINAL_CHECK_ADMIN = "gmail_final_check_admin"
-# Другое
-OTHER_HOLD_REVIEW_ADMIN = "other_hold_review_admin"
 
+# --- Команда /roles ---
+@router.message(Command("roles"), IsSuperAdmin()) # Изменен фильтр
+async def cmd_roles(message: Message):
+    """Точка входа в управление ролями."""
+    await message.answer(
+        "🛠️ <b>Управление ролями администраторов</b>\n\n"
+        "Выберите категорию для настройки ответственных.",
+        reply_markup=await inline.get_roles_main_menu()
+    )
 
-# --- Словарь для сопоставления ключей и описаний ---
-ROLE_DESCRIPTIONS = {
-    YANDEX_TEXT_PROFILE_CHECK_ADMIN: "Проверка скрина профиля",
-    YANDEX_TEXT_ISSUE_TEXT_ADMIN: "Выдача текста",
-    YANDEX_TEXT_FINAL_CHECK_ADMIN: "Финальная проверка",
-    YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN: "Проверка скрина профиля",
-    YANDEX_NO_TEXT_FINAL_CHECK_ADMIN: "Финальная проверка",
-    GOOGLE_PROFILE_CHECK_ADMIN: "Проверка скрина профиля",
-    GOOGLE_LAST_REVIEWS_CHECK_ADMIN: "Проверка последних отзывов",
-    GOOGLE_ISSUE_TEXT_ADMIN: "Выдача текста",
-    GOOGLE_FINAL_CHECK_ADMIN: "Финальная проверка",
-    GMAIL_DEVICE_MODEL_CHECK_ADMIN: "Проверка модели устройства",
-    GMAIL_ISSUE_DATA_ADMIN: "Выдача данных",
-    GMAIL_FINAL_CHECK_ADMIN: "Финальная проверка аккаунта",
-    OTHER_HOLD_REVIEW_ADMIN: "Проверка скрина после холда",
-}
+# --- Навигация по меню ---
 
-# --- Вспомогательные функции ---
+@router.callback_query(F.data == "roles_back:main", IsSuperAdmin()) # Изменен фильтр
+async def roles_back_to_main(callback: CallbackQuery):
+    """Возврат в главное меню ролей."""
+    await callback.message.edit_text(
+        "🛠️ <b>Управление ролями администраторов</b>\n\n"
+        "Выберите категорию для настройки ответственных.",
+        reply_markup=await inline.get_roles_main_menu()
+    )
 
-async def get_admin_username(bot: Bot, admin_id: int) -> str:
-    """Получает username администратора по его ID."""
-    if not admin_id:
-        return "Не назначен"
+@router.callback_query(F.data.startswith("roles_cat:"), IsSuperAdmin()) # Изменен фильтр
+async def roles_select_category(callback: CallbackQuery, bot: Bot):
+    """Выбор основной категории (Яндекс, Google и т.д.)."""
+    category = callback.data.split(":")[1]
+    
+    if category == "yandex":
+        await callback.message.edit_text(
+            "<b>📍 Яндекс.Карты</b>\n\nВыберите тип задачи для настройки.",
+            reply_markup=await inline.get_roles_yandex_menu()
+        )
+    elif category == "google":
+        await callback.message.edit_text(
+            "<b>🌍 Google Maps</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            reply_markup=await inline.get_task_switching_keyboard(bot, "google")
+        )
+    elif category == "gmail":
+        await callback.message.edit_text(
+            "<b>📧 Gmail</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            reply_markup=await inline.get_task_switching_keyboard(bot, "gmail")
+        )
+    elif category == "other":
+        await callback.message.edit_text(
+            "<b>📦 Другие задачи</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            reply_markup=await inline.get_task_switching_keyboard(bot, "other")
+        )
+
+@router.callback_query(F.data.startswith("roles_subcat:"), IsSuperAdmin()) # Изменен фильтр
+async def roles_select_subcategory(callback: CallbackQuery, bot: Bot):
+    """Выбор подкатегории (например, Яндекс с текстом/без)."""
+    subcategory = callback.data.split(":")[1] # yandex_text или yandex_no_text
+    category, sub_type = subcategory.split("_", 1) # yandex, text
+
+    title_map = {
+        "text": "📝 Яндекс (с текстом)",
+        "no_text": "🚫 Яндекс (без текста)",
+    }
+    
+    await callback.message.edit_text(
+        f"<b>{title_map.get(sub_type)}</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+        reply_markup=await inline.get_task_switching_keyboard(bot, category, sub_type)
+    )
+
+@router.callback_query(F.data == "roles_back:yandex", IsSuperAdmin()) # Изменен фильтр
+async def roles_back_to_yandex_cat(callback: CallbackQuery):
+    """Возврат к выбору типа Яндекс задач."""
+    await callback.message.edit_text(
+        "<b>📍 Яндекс.Карты</b>\n\nВыберите тип задачи для настройки.",
+        reply_markup=await inline.get_roles_yandex_menu()
+    )
+    
+# --- Логика переключения и отображения ---
+
+@router.callback_query(F.data.startswith("roles_switch:"), IsSuperAdmin()) # Изменен фильтр
+async def roles_switch_admin(callback: CallbackQuery, bot: Bot):
+    """Переключает администратора для выбранной задачи."""
+    role_key = callback.data.split(":", 1)[1]
+    
+    current_admin_id_str = await db_manager.get_system_setting(role_key)
+    current_admin_id = int(current_admin_id_str) if current_admin_id_str else SUPER_ADMIN_ID
+    
+    # Определяем нового администратора
+    # Переключаем между SUPER_ADMIN_ID и ADMIN_ID_2 (если ADMIN_ID_2 существует), иначе между SUPER_ADMIN_ID и собой
+    if len(ADMIN_IDS) > 1 and current_admin_id == SUPER_ADMIN_ID:
+        # Пытаемся найти второго админа, отличного от главного
+        other_admin_id = next((aid for aid in ADMIN_IDS if aid != SUPER_ADMIN_ID), SUPER_ADMIN_ID)
+        new_admin_id = other_admin_id
+    elif len(ADMIN_IDS) > 1 and current_admin_id != SUPER_ADMIN_ID:
+        new_admin_id = SUPER_ADMIN_ID
+    else: # Если только один админ
+        new_admin_id = SUPER_ADMIN_ID
+    
+    await db_manager.set_system_setting(role_key, str(new_admin_id))
+    
+    await callback.answer("Ответственный изменен!")
+
+    # --- ИСПРАВЛЕННАЯ ЛОГИКА ОБНОВЛЕНИЯ КЛАВИАТУРЫ ---
+    category = "unknown"
+    subcategory = None
+    
+    if "yandex_text" in role_key:
+        category = "yandex"
+        subcategory = "text"
+    elif "yandex_no_text" in role_key:
+        category = "yandex"
+        subcategory = "no_text"
+    elif "google" in role_key:
+        category = "google"
+    elif "gmail" in role_key:
+        category = "gmail"
+    elif "other" in role_key:
+        category = "other"
+    
+    await callback.message.edit_reply_markup(
+        reply_markup=await inline.get_task_switching_keyboard(bot, category, subcategory)
+    )
+    # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
+    
+    # Отправляем уведомления
+    task_description = admin_roles.ROLE_DESCRIPTIONS.get(role_key, "Неизвестная задача")
+    new_admin_name = await admin_roles.get_admin_username(bot, new_admin_id)
+    old_admin_name = await admin_roles.get_admin_username(bot, current_admin_id)
+
+    notification_text = (
+        f"🔄 <b>Смена ролей!</b>\n\n"
+        f"Задача «<b>{task_description}</b>» была передана от {old_admin_name} к {new_admin_name}."
+    )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, notification_text)
+        except Exception as e:
+            logger.warning(f"Не удалось уведомить админа {admin_id} о смене роли: {e}")
+
+@router.callback_query(F.data == "roles_show_current", IsSuperAdmin()) # Изменен фильтр
+async def roles_show_current_settings(callback: CallbackQuery, bot: Bot):
+    """Показывает отдельное сообщение с текущими настройками."""
+    await callback.answer()
+    settings_text = await admin_roles.get_all_roles_readable(bot)
+    await callback.message.answer(
+        settings_text,
+        reply_markup=inline.get_current_settings_keyboard()
+    )
+
+@router.callback_query(F.data == "roles_delete_msg", IsSuperAdmin()) # Изменен фильтр
+async def roles_delete_settings_msg(callback: CallbackQuery):
+    """Удаляет сообщение с настройками."""
     try:
-        admin_chat = await bot.get_chat(admin_id)
-        return f"@{admin_chat.username}" if admin_chat.username else f"ID: {admin_id}"
-    except Exception:
-        return f"ID: {admin_id} (ошибка)"
-
-async def _get_role_holder_id(key: str, default: int) -> int:
-    """
-    Базовая функция для получения ID администратора для конкретной роли.
-    Иерархия: БД -> config.py (default) -> ADMIN_ID_1.
-    """
-    admin_id_str = await db_manager.get_system_setting(key)
-    if admin_id_str and admin_id_str.isdigit():
-        return int(admin_id_str)
-    return default or ADMIN_ID_1
-
-# --- Основные функции для получения ID ответственных ---
-
-async def get_yandex_text_profile_admin() -> int:
-    return await _get_role_holder_id(YANDEX_TEXT_PROFILE_CHECK_ADMIN, Defaults.DEFAULT_SCREENSHOT_CHECK_ADMIN)
-
-async def get_yandex_text_issue_admin() -> int:
-    return await _get_role_holder_id(YANDEX_TEXT_ISSUE_TEXT_ADMIN, Defaults.DEFAULT_TEXT_PROVIDER_ADMIN)
-
-async def get_yandex_text_final_admin() -> int:
-    return await _get_role_holder_id(YANDEX_TEXT_FINAL_CHECK_ADMIN, Defaults.DEFAULT_FINAL_VERDICT_ADMIN)
-
-async def get_yandex_no_text_profile_admin() -> int:
-    return await _get_role_holder_id(YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, Defaults.DEFAULT_SCREENSHOT_CHECK_ADMIN)
-
-async def get_yandex_no_text_final_admin() -> int:
-    return await _get_role_holder_id(YANDEX_NO_TEXT_FINAL_CHECK_ADMIN, Defaults.DEFAULT_FINAL_VERDICT_ADMIN)
-
-async def get_google_profile_admin() -> int:
-    return await _get_role_holder_id(GOOGLE_PROFILE_CHECK_ADMIN, Defaults.DEFAULT_SCREENSHOT_CHECK_ADMIN)
-
-async def get_google_reviews_admin() -> int:
-    return await _get_role_holder_id(GOOGLE_LAST_REVIEWS_CHECK_ADMIN, Defaults.DEFAULT_SCREENSHOT_CHECK_ADMIN)
-
-async def get_google_issue_admin() -> int:
-    return await _get_role_holder_id(GOOGLE_ISSUE_TEXT_ADMIN, Defaults.DEFAULT_TEXT_PROVIDER_ADMIN)
-
-async def get_google_final_admin() -> int:
-    return await _get_role_holder_id(GOOGLE_FINAL_CHECK_ADMIN, Defaults.DEFAULT_FINAL_VERDICT_ADMIN)
-
-async def get_gmail_device_admin() -> int:
-    return await _get_role_holder_id(GMAIL_DEVICE_MODEL_CHECK_ADMIN, Defaults.DEFAULT_SCREENSHOT_CHECK_ADMIN)
-
-async def get_gmail_data_admin() -> int:
-    return await _get_role_holder_id(GMAIL_ISSUE_DATA_ADMIN, Defaults.DEFAULT_TEXT_PROVIDER_ADMIN)
-
-async def get_gmail_final_admin() -> int:
-    return await _get_role_holder_id(GMAIL_FINAL_CHECK_ADMIN, Defaults.DEFAULT_FINAL_VERDICT_ADMIN)
-
-async def get_other_hold_admin() -> int:
-    return await _get_role_holder_id(OTHER_HOLD_REVIEW_ADMIN, Defaults.DEFAULT_FINAL_VERDICT_ADMIN)
-
-# --- Логика для отображения и обновления ---
-
-async def get_all_roles_readable(bot: Bot) -> str:
-    """Формирует читабельное сообщение со всеми текущими настройками ролей."""
-    
-    yandex_text_tasks = {
-        YANDEX_TEXT_PROFILE_CHECK_ADMIN: await get_yandex_text_profile_admin(),
-        YANDEX_TEXT_ISSUE_TEXT_ADMIN: await get_yandex_text_issue_admin(),
-        YANDEX_TEXT_FINAL_CHECK_ADMIN: await get_yandex_text_final_admin(),
-    }
-    yandex_no_text_tasks = {
-        YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN: await get_yandex_no_text_profile_admin(),
-        YANDEX_NO_TEXT_FINAL_CHECK_ADMIN: await get_yandex_no_text_final_admin(),
-    }
-    google_tasks = {
-        GOOGLE_PROFILE_CHECK_ADMIN: await get_google_profile_admin(),
-        GOOGLE_LAST_REVIEWS_CHECK_ADMIN: await get_google_reviews_admin(),
-        GOOGLE_ISSUE_TEXT_ADMIN: await get_google_issue_admin(),
-        GOOGLE_FINAL_CHECK_ADMIN: await get_google_final_admin(),
-    }
-    gmail_tasks = {
-        GMAIL_DEVICE_MODEL_CHECK_ADMIN: await get_gmail_device_admin(),
-        GMAIL_ISSUE_DATA_ADMIN: await get_gmail_data_admin(),
-        GMAIL_FINAL_CHECK_ADMIN: await get_gmail_final_admin(),
-    }
-    other_tasks = {
-        OTHER_HOLD_REVIEW_ADMIN: await get_other_hold_admin(),
-    }
-
-    async def format_task_block(tasks: dict) -> str:
-        lines = []
-        for key, admin_id in tasks.items():
-            description = ROLE_DESCRIPTIONS.get(key, key)
-            admin_name = await get_admin_username(bot, admin_id)
-            lines.append(f"- {description}: <b>{admin_name}</b>")
-        return "\n".join(lines)
-
-    text = "<b>⚙ Текущие настройки админов</b>\n\n"
-    text += "<b>📍 Яндекс (с текстом)</b>\n" + await format_task_block(yandex_text_tasks) + "\n\n"
-    text += "<b>📍 Яндекс (без текста)</b>\n" + await format_task_block(yandex_no_text_tasks) + "\n\n"
-    text += "<b>🌍 Google Maps</b>\n" + await format_task_block(google_tasks) + "\n\n"
-    text += "<b>📧 Gmail</b>\n" + await format_task_block(gmail_tasks) + "\n\n"
-    text += "<b>📦 Другие задачи</b>\n" + await format_task_block(other_tasks)
-    
-    return text
+        await callback.message.delete()
+        await callback.answer("Сообщение удалено.")
+    except TelegramBadRequest:
+        await callback.answer("Не удалось удалить сообщение.", show_alert=True)

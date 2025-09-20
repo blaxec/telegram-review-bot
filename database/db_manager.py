@@ -10,8 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from database.models import (Base, User, Review, Link, WithdrawalRequest, 
                              PromoCode, PromoActivation, SupportTicket,
-                             RewardSetting, SystemSetting)
-from config import DATABASE_URL, Durations, Limits
+                             RewardSetting, SystemSetting, OperationHistory)
+from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,36 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+# --- Операции с историей ---
+async def log_operation(session, user_id: int, op_type: str, amount: float, description: str):
+    """Записывает операцию в историю. Использует переданную сессию."""
+    new_op = OperationHistory(
+        user_id=user_id,
+        operation_type=op_type,
+        amount=amount,
+        description=description
+    )
+    session.add(new_op)
+
+async def get_operation_history(user_id: int, limit: int = 6) -> List[OperationHistory]:
+    """Получает последние N операций пользователя за 24 часа."""
+    async with async_session() as session:
+        time_threshold = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+        query = (
+            select(OperationHistory)
+            .where(
+                and_(
+                    OperationHistory.user_id == user_id,
+                    OperationHistory.created_at >= time_threshold
+                )
+            )
+            .order_by(desc(OperationHistory.created_at))
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+# --- Операции с пользователями ---
 async def ensure_user_exists(user_id: int, username: str, referrer_id: int = None):
     async with async_session() as session:
         async with session.begin():
@@ -70,12 +100,16 @@ async def toggle_anonymity(user_id: int) -> bool:
             new_status = user.is_anonymous_in_stats
             return new_status
 
-async def update_balance(user_id: int, amount: float):
+async def update_balance(user_id: int, amount: float, op_type: str = None, description: str = None):
+    """Обновляет баланс и опционально логирует операцию."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
             if user:
                 user.balance += amount
+                if op_type:
+                    await log_operation(session, user_id, op_type, amount, description)
+
 
 async def update_username(user_id: int, new_username: str):
     async with async_session() as session:
@@ -120,14 +154,27 @@ async def find_user_by_identifier(identifier: str) -> Union[int, None]:
         return result.scalar_one_or_none()
 
 async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bool:
+    """Переводит звезды с учетом комиссии."""
     async with async_session() as session:
         async with session.begin():
             sender = await session.get(User, sender_id)
             recipient = await session.get(User, recipient_id)
-            if not sender or not recipient or sender.balance < amount:
+            
+            commission = amount * (TRANSFER_COMMISSION_PERCENT / 100)
+            total_to_deduct = amount + commission
+            
+            if not sender or not recipient or sender.balance < total_to_deduct:
                 return False
-            sender.balance -= amount
+                
+            sender.balance -= total_to_deduct
             recipient.balance += amount
+            
+            # Логируем операции
+            await log_operation(session, sender_id, "TRANSFER_SENT", -amount, f"Получатель: {recipient.username or recipient_id}")
+            if commission > 0:
+                await log_operation(session, sender_id, "FINE", -commission, f"Комиссия за перевод")
+            await log_operation(session, recipient_id, "TRANSFER_RECEIVED", amount, f"Отправитель: {sender.username or sender_id}")
+
         return True
 
 async def get_referrals(user_id: int) -> list:
@@ -145,8 +192,11 @@ async def claim_referral_earnings(user_id: int):
         async with session.begin():
             user = await session.get(User, user_id)
             if user and user.referral_earnings > 0:
-                user.balance += user.referral_earnings
+                earnings = user.referral_earnings
+                user.balance += earnings
                 user.referral_earnings = 0
+                await log_operation(session, user_id, "TOP_REWARD", earnings, "Сбор реферальных наград")
+
 
 async def check_platform_cooldown(user_id: int, platform: str) -> Union[datetime.timedelta, None]:
     user = await get_user(user_id)
@@ -279,6 +329,7 @@ async def admin_approve_review(review_id: int) -> Union[Review, None]:
                     user.hold_balance = 0
                 
                 user.balance += review.amount
+                await log_operation(session, user.id, "REVIEW_APPROVED", review.amount, f"Отзыв #{review.id} ({review.platform})")
 
             review.status = 'approved'
             return review
@@ -349,6 +400,7 @@ async def create_withdrawal_request(user_id: int, amount: float, recipient_info:
                 return None
             
             user.balance -= amount
+            await log_operation(session, user_id, "WITHDRAWAL", -amount, f"Запрос на вывод для {recipient_info}")
             
             new_request = WithdrawalRequest(
                 user_id=user_id,
@@ -383,6 +435,7 @@ async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest,
             user = await session.get(User, request.user_id)
             if user:
                 user.balance += request.amount
+                await log_operation(session, user.id, "WITHDRAWAL", request.amount, "Отклонение запроса на вывод")
             
             request.status = 'rejected'
             return request
@@ -426,7 +479,6 @@ async def get_top_10_users() -> List[Tuple[int, str, float, int]]:
         return result.all()
 
 # --- Функции для работы с промокодами ---
-
 async def create_promo_code(code: str, condition: str, reward: float, total_uses: int) -> Union[PromoCode, None]:
     async with async_session() as session:
         async with session.begin():
@@ -446,11 +498,6 @@ async def create_promo_code(code: str, condition: str, reward: float, total_uses
             return new_promo
 
 async def get_promo_by_code(code: str, for_update: bool = False) -> Union[PromoCode, None]:
-    """
-    Получает промокод по его коду.
-    :param code: Код промокода.
-    :param for_update: Если True, блокирует строку в базе данных для предотвращения гонки состояний.
-    """
     async with async_session() as session:
         async with session.begin():
             stmt = select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code))
@@ -491,26 +538,26 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
         )
         return result.scalar_one_or_none()
         
-async def create_promo_activation(user_id: int, promo_id: int, status: str) -> PromoActivation:
-    async with async_session() as session:
-        async with session.begin():
-            new_activation = PromoActivation(
-                user_id=user_id,
-                promo_code_id=promo_id,
-                status=status
-            )
-            session.add(new_activation)
-            if status == 'completed':
-                promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
-                if promo_to_update:
-                    promo_to_update.current_uses += 1
-                else:
-                    logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
-                    raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
+async def create_promo_activation(user_id: int, promo_id: int, status: str, session) -> PromoActivation:
+    """Создает активацию промокода, используя переданную сессию."""
+    new_activation = PromoActivation(
+        user_id=user_id,
+        promo_code_id=promo_id,
+        status=status
+    )
+    session.add(new_activation)
+    if status == 'completed':
+        promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
+        if promo_to_update:
+            promo_to_update.current_uses += 1
+        else:
+            logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
+            raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
 
-            await session.flush()
-            await session.refresh(new_activation)
-            return new_activation
+    await session.flush()
+    await session.refresh(new_activation)
+    return new_activation
+
 
 async def delete_promo_activation(activation_id: int) -> bool:
     async with async_session() as session:
@@ -521,24 +568,22 @@ async def delete_promo_activation(activation_id: int) -> bool:
             await session.delete(activation)
             return True
 
-async def complete_promo_activation(activation_id: int) -> bool:
-    async with async_session() as session:
-        async with session.begin():
-            activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
-            if not activation or activation.status != 'pending_condition':
-                return False
-            
-            promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
-            if promo_to_update.current_uses >= promo_to_update.total_uses:
-                logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
-                return False
+async def complete_promo_activation(activation_id: int, session) -> bool:
+    """Завершает активацию, используя переданную сессию."""
+    activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
+    if not activation or activation.status != 'pending_condition':
+        return False
+    
+    promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
+    if promo_to_update.current_uses >= promo_to_update.total_uses:
+        logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
+        return False
 
-            activation.status = 'completed'
-            promo_to_update.current_uses += 1
-            return True
+    activation.status = 'completed'
+    promo_to_update.current_uses += 1
+    return True
 
 # --- Функции для системы поддержки ---
-
 async def create_support_ticket(user_id: int, username: str, question: str, admin_message_ids: dict, photo_file_id: str = None) -> SupportTicket:
     async with async_session() as session:
         async with session.begin():
@@ -597,7 +642,6 @@ async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> i
             return current_warnings
 
 # --- НОВЫЕ ФУНКЦИИ ДЛЯ ПРОЦЕССА ВЕРИФИКАЦИИ ПОСЛЕ ХОЛДА ---
-
 async def get_reviews_past_hold() -> List[Review]:
     """Находит все отзывы в статусе 'on_hold', у которых истекло время холда."""
     async with async_session() as session:
@@ -671,9 +715,7 @@ async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
 
 
 # --- Функции для системы бана и просроченных ссылок ---
-
 async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> List[Link]:
-    """Находит все ссылки в статусе 'assigned' дольше N часов, меняет их статус на 'expired' и возвращает их."""
     async with async_session() as session:
         async with session.begin():
             threshold_time = datetime.datetime.utcnow() - datetime.timedelta(hours=hours_threshold)
@@ -712,24 +754,28 @@ async def reset_all_expired_links() -> int:
             result = await session.execute(stmt)
             return result.rowcount
 
-async def ban_user(user_id: int) -> bool:
-    """Устанавливает пользователю флаг is_banned = True."""
+async def ban_user(user_id: int, reason: str) -> bool:
+    """Устанавливает флаг is_banned, причину и дату бана."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
             if not user:
                 return False
             user.is_banned = True
+            user.ban_reason = reason
+            user.banned_at = datetime.datetime.utcnow()
             return True
 
 async def unban_user(user_id: int) -> bool:
-    """Устанавливает пользователю флаг is_banned = False."""
+    """Снимает бан с пользователя."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
             if not user:
                 return False
             user.is_banned = False
+            user.ban_reason = None
+            user.banned_at = None
             return True
 
 async def update_last_unban_request_time(user_id: int):
@@ -741,7 +787,6 @@ async def update_last_unban_request_time(user_id: int):
                 user.last_unban_request_at = datetime.datetime.utcnow()
 
 # --- Функции для реферальной системы ---
-
 async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -> bool:
     """Сохраняет выбранный пользователем реферальный путь."""
     async with async_session() as session:
@@ -754,7 +799,6 @@ async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -
             return True
             
 # --- НОВЫЕ ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
-
 async def get_reward_settings() -> List[RewardSetting]:
     """Получает все настройки наград из базы."""
     async with async_session() as session:
@@ -786,3 +830,75 @@ async def set_system_setting(key: str, value: str):
             else:
                 new_setting = SystemSetting(key=key, value=value)
                 session.add(new_setting)
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ DND, СПИСКОВ БАНОВ И ПРОМО ---
+async def toggle_dnd_status(admin_id: int) -> bool:
+    """Переключает DND-статус для админа и возвращает новый статус."""
+    async with async_session() as session:
+        async with session.begin():
+            admin = await session.get(User, admin_id)
+            if not admin:
+                return False
+            admin.dnd_enabled = not admin.dnd_enabled
+            return admin.dnd_enabled
+
+async def get_active_admins(admin_ids: List[int]) -> List[int]:
+    """Возвращает список ID админов из переданного списка, у которых выключен DND."""
+    async with async_session() as session:
+        query = select(User.id).where(User.id.in_(admin_ids), User.dnd_enabled == False)
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_pending_tasks_count() -> Dict[str, int]:
+    """Считает количество задач, ожидающих модерации."""
+    async with async_session() as session:
+        # pending - отзывы до холда, awaiting_confirmation - отзывы после холда
+        reviews_query = select(func.count(Review.id)).where(Review.status.in_(['pending', 'awaiting_confirmation']))
+        tickets_query = select(func.count(SupportTicket.id)).where(SupportTicket.status == 'open')
+        
+        reviews_count = await session.execute(reviews_query)
+        tickets_count = await session.execute(tickets_query)
+        
+        return {
+            "reviews": reviews_count.scalar_one(),
+            "tickets": tickets_count.scalar_one(),
+        }
+
+async def get_banned_users(page: int = 1, limit: int = 6) -> List[User]:
+    """Получает список забаненных пользователей для страницы."""
+    async with async_session() as session:
+        query = (
+            select(User)
+            .where(User.is_banned == True)
+            .order_by(desc(User.banned_at))
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_banned_users_count() -> int:
+    """Возвращает общее количество забаненных пользователей."""
+    async with async_session() as session:
+        query = select(func.count(User.id)).where(User.is_banned == True)
+        result = await session.execute(query)
+        return result.scalar_one()
+
+async def get_all_promo_codes(page: int = 1, limit: int = 6) -> List[PromoCode]:
+    """Получает список всех промокодов для страницы."""
+    async with async_session() as session:
+        query = (
+            select(PromoCode)
+            .order_by(desc(PromoCode.created_at))
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_promo_codes_count() -> int:
+    """Возвращает общее количество промокодов."""
+    async with async_session() as session:
+        query = select(func.count(PromoCode.id))
+        result = await session.execute(query)
+        return result.scalar_one()

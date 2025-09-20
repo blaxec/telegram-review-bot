@@ -10,7 +10,8 @@ from aiogram.exceptions import TelegramBadRequest
 from states.user_states import UserState
 from keyboards import inline, reply
 from database import db_manager
-from config import WITHDRAWAL_CHANNEL_ID, Limits
+from config import WITHDRAWAL_CHANNEL_ID, Limits, TRANSFER_COMMISSION_PERCENT
+from logic.user_notifications import format_timedelta
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -48,8 +49,8 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     profile_text = (
         f"✨ Ваш <b>Профиль</b> ✨\n\n"
         f"Вас пригласил: {referrer_info}\n"
-        f"Баланс звезд: {balance} ⭐\n"
-        f"В холде: {hold_balance} ⭐"
+        f"Баланс звезд: {balance:.2f} ⭐\n" # Форматируем до 2 знаков после запятой
+        f"В холде: {hold_balance:.2f} ⭐" # Форматируем до 2 знаков после запятой
     )
     
     keyboard = inline.get_profile_keyboard()
@@ -90,6 +91,44 @@ async def profile_handler(message: Message, state: FSMContext, bot: Bot):
 async def go_profile_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await show_profile_menu(callback, state, bot)
 
+@router.callback_query(F.data == 'profile_history')
+async def show_operation_history(callback: CallbackQuery):
+    """Показывает последние операции пользователя за 24 часа."""
+    user_id = callback.from_user.id
+    operations = await db_manager.get_operation_history(user_id)
+
+    if not operations:
+        text = "📜 <b>История операций за последние 24 часа:</b>\n\nОпераций не найдено."
+    else:
+        text = "📜 <b>История операций за последние 24 часа:</b>\n\n"
+        for op in operations:
+            time_str = op.created_at.strftime('%H:%M:%S UTC')
+            amount_str = f"{op.amount:+.2f} ⭐" if op.amount > 0 else f"{op.amount:.2f} ⭐"
+            
+            op_description = ""
+            if op.operation_type == "REVIEW_APPROVED":
+                op_description = "✅ Одобрен отзыв"
+            elif op.operation_type == "PROMO_ACTIVATED":
+                op_description = "🎁 Активация промокода"
+            elif op.operation_type == "WITHDRAWAL":
+                op_description = "📤 Запрос на вывод"
+            elif op.operation_type == "FINE":
+                op_description = "💸 Штраф"
+            elif op.operation_type == "TRANSFER_SENT":
+                op_description = "➡️ Перевод звезд"
+            elif op.operation_type == "TRANSFER_RECEIVED":
+                op_description = "⬅️ Получение звезд"
+            elif op.operation_type == "TOP_REWARD":
+                op_description = "🏆 Награда из топа"
+            
+            description_suffix = f" ({op.description})" if op.description else ""
+            text += f"<code>{time_str}</code>: {op_description} {amount_str}{description_suffix}\n"
+    
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=inline.get_operation_history_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
 @router.callback_query(F.data == 'profile_transfer')
 async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
@@ -110,7 +149,7 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
     if callback.message:
         prompt_msg = await callback.message.edit_text(
-            "Сколько звезд вы хотите передать?",
+            f"Сколько звезд вы хотите передать? (Комиссия за перевод: {TRANSFER_COMMISSION_PERCENT}%)", # Добавлено сообщение о комиссии
             reply_markup=inline.get_cancel_inline_keyboard()
         )
         if prompt_msg:
@@ -118,12 +157,16 @@ async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs
 
 async def process_transfer_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
-    if amount > float(balance):
-        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
+    
+    commission_amount = amount * (Limits.TRANSFER_COMMISSION_PERCENT / 100)
+    total_deduction = amount + commission_amount
+
+    if total_deduction > float(balance):
+        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐. С учетом комиссии ({commission_amount:.2f} ⭐) вам нужно {total_deduction:.2f} ⭐.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
-    await state.update_data(transfer_amount=amount)
+    await state.update_data(transfer_amount=amount, transfer_commission=commission_amount)
     await state.set_state(UserState.TRANSFER_RECIPIENT)
     prompt_msg = await message.answer(
         "Кому вы хотите передать звезды? Укажите никнейм (например, @username) или ID пользователя.",
@@ -210,7 +253,7 @@ async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None
         notification_text = (
             f"✨ Вам переданы звезды ✨\n\n"
             f"От: {sender_name}\n"
-            f"Количество: {data['transfer_amount']} ⭐"
+            f"Количество: {data['transfer_amount']:.2f} ⭐"
         )
         if comment:
             notification_text += f"\nКомментарий: {comment}"
@@ -241,7 +284,7 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
         return
 
     if balance < Limits.MIN_WITHDRAWAL_AMOUNT:
-        await callback.answer(f"Минимальная сумма для вывода {Limits.MIN_WITHDRAWAL_AMOUNT} звезд. Ваш баланс: {balance} ⭐.", show_alert=True)
+        await callback.answer(f"Минимальная сумма для вывода {Limits.MIN_WITHDRAWAL_AMOUNT:.2f} звезд. Ваш баланс: {balance:.2f} ⭐.", show_alert=True)
         return
     
     if not WITHDRAWAL_CHANNEL_ID:
@@ -266,7 +309,7 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
     if amount_str == 'other':
         await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
         if callback.message:
-            prompt_msg = await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT}):", reply_markup=inline.get_cancel_inline_keyboard())
+            prompt_msg = await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT:.2f}):", reply_markup=inline.get_cancel_inline_keyboard())
             if prompt_msg:
                 await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
@@ -275,7 +318,7 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
     
     balance, _ = await db_manager.get_user_balance(user_id)
     if float(balance) < amount:
-        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐", show_alert=True)
+        await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐", show_alert=True)
         return
 
     await state.update_data(withdraw_amount=amount)
@@ -295,7 +338,7 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
     try:
         amount = float(message.text)
         if amount < Limits.MIN_WITHDRAWAL_AMOUNT:
-            prompt_msg = await message.answer(f"Минимальная сумма для вывода - {Limits.MIN_WITHDRAWAL_AMOUNT} звезд.")
+            prompt_msg = await message.answer(f"Минимальная сумма для вывода - {Limits.MIN_WITHDRAWAL_AMOUNT:.2f} звезд.")
             await state.update_data(prompt_message_id=prompt_msg.message_id)
             return
     except (ValueError, TypeError):
@@ -305,7 +348,7 @@ async def withdraw_other_amount_input(message: Message, state: FSMContext):
 
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
     if float(balance) < amount:
-        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance} ⭐")
+        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
@@ -330,7 +373,7 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     admin_message = (
         f"🚨 <b>Новый запрос на вывод средств!</b> 🚨\n\n"
         f"👤 <b>Отправитель:</b> @{user.username} (ID: <code>{user.id}</code>)\n"
-        f"💰 <b>Сумма:</b> {amount} ⭐\n"
+        f"💰 <b>Сумма:</b> {amount:.2f} ⭐\n"
         f"🎯 <b>Получатель:</b> {recipient_info}\n"
     )
     if comment:
@@ -339,6 +382,7 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     admin_message += f"\nЗапрос ID: <code>{request_id}</code>"
 
     try:
+        # Уведомляем канал выплат напрямую, DND для канала не применяется
         await bot.send_message(
             chat_id=WITHDRAWAL_CHANNEL_ID,
             text=admin_message,
@@ -348,7 +392,7 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     except Exception as e:
         logger.error(f"Не удалось отправить запрос в канал выплат {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат или не имеет нужных прав. Пожалуйста, обратитесь в поддержку. Ваши звезды не были списаны.")
-        await db_manager.update_balance(user.id, amount)
+        await db_manager.update_balance(user.id, amount, op_type="WITHDRAWAL_REJECTED", description="Ошибка отправки в канал") # Возвращаем звезды
     
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
@@ -429,7 +473,7 @@ async def show_hold_info(callback: CallbackQuery, state: FSMContext, **kwargs):
         text = "⏳ Ваши отзывы в холде:\n\nУ вас нет отзывов в холде."
     else:
         text = "⏳ Ваши отзывы в холде:\n\n"
-        review_lines = [f"- {review.amount} ⭐ ({review.platform}) до {review.hold_until.strftime('%d.%m.%Y %H:%M')} UTC" for review in reviews_in_hold]
+        review_lines = [f"- {review.amount:.2f} ⭐ ({review.platform}) до {review.hold_until.strftime('%d.%m.%Y %H:%M')} UTC" for review in reviews_in_hold]
         text += "\n".join(review_lines)
     
     if callback.message:

@@ -9,13 +9,13 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
 from database import db_manager
-from config import ADMIN_ID_1, ADMIN_IDS, Durations
+from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations
 from keyboards import inline
 from logic.user_notifications import format_timedelta
+from utils.access_filters import IsSuperAdmin # НОВЫЙ ФИЛЬТР
 
 router = Router()
 logger = logging.getLogger(__name__)
-ADMINS = set(ADMIN_IDS)
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Вспомогательная функция для планирования удаления сообщения."""
@@ -53,7 +53,7 @@ async def request_unban(message: Message, bot: Bot):
     
     try:
         await bot.send_message(
-            chat_id=ADMIN_ID_1,
+            chat_id=SUPER_ADMIN_ID, # Отправляем только Главному Админу
             text=admin_notification,
             reply_markup=inline.get_unban_request_keyboard(user.id)
         )
@@ -62,11 +62,11 @@ async def request_unban(message: Message, bot: Bot):
         msg = await message.answer("✅ Ваш запрос на разбан отправлен главному администратору. Ожидайте решения.")
         asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     except Exception as e:
-        logger.error(f"Не удалось отправить запрос на разбан админу {ADMIN_ID_1}: {e}")
+        logger.error(f"Не удалось отправить запрос на разбан админу {SUPER_ADMIN_ID}: {e}")
         await message.answer("❌ Не удалось отправить запрос. Попробуйте позже.")
 
 
-@router.message(Command("unban"), F.from_user.id.in_(ADMINS))
+@router.message(Command("unban"), IsSuperAdmin()) # Изменен фильтр
 async def unban_user_command(message: Message):
     # Удаляем команду админа
     try:
@@ -102,7 +102,7 @@ async def unban_user_command(message: Message):
         await message.answer("❌ Произошла ошибка при разбане.")
 
 
-@router.callback_query(F.data.startswith("unban_approve:"))
+@router.callback_query(F.data.startswith("unban_approve:"), IsSuperAdmin()) # Изменен фильтр
 async def approve_unban_request(callback: CallbackQuery, bot: Bot):
     user_id_to_unban = int(callback.data.split(":")[1])
     
@@ -121,7 +121,7 @@ async def approve_unban_request(callback: CallbackQuery, bot: Bot):
     if callback.message:
         await callback.message.edit_text(f"{callback.message.text}\n\n<b>Статус: РАЗБАНЕН</b>", reply_markup=None)
 
-@router.callback_query(F.data.startswith("unban_reject:"))
+@router.callback_query(F.data.startswith("unban_reject:"), IsSuperAdmin()) # Изменен фильтр
 async def reject_unban_request(callback: CallbackQuery):
     await callback.answer("Запрос на разбан отклонен.", show_alert=True)
     if callback.message:

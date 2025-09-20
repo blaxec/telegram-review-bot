@@ -30,7 +30,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
 # Обратите внимание, что BOT_TOKEN теперь импортируется после проверки
-from config import BOT_TOKEN, ADMIN_ID_1, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT
+from config import BOT_TOKEN, SUPER_ADMIN_ID, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, BotCommandScopeDefault
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -53,15 +53,24 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="stars", description="✨ Мой профиль и баланс"),
         BotCommand(command="promo", description="🎁 Ввести промокод")
     ]
-
+    
+    # Команды для ОБЫЧНЫХ администраторов
     admin_commands = user_commands + [
-        BotCommand(command="roles", description="🛠️ Управление ролями админов"),
-        BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
-        BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
+        BotCommand(command="dnd", description="🌙/☀️ Включить/выключить ночной режим"),
+        BotCommand(command="pending_tasks", description="📥 Посмотреть задачи в очереди"),
         BotCommand(command="viewhold", description="⏳ Холд пользователя"),
         BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны"),
         BotCommand(command="fine", description="💸 Выписать штраф"),
+    ]
+
+    # Команды для ГЛАВНОГО администратора (включают все команды обычного)
+    super_admin_commands = admin_commands + [
+        BotCommand(command="roles", description="🛠️ Управление ролями админов"),
+        BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
+        BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
+        BotCommand(command="banlist", description="📜 Список забаненных"),
+        BotCommand(command="promolist", description="📝 Список промокодов"),
         BotCommand(command="ban", description="🚫 Забанить"),
         BotCommand(command="unban", description="✅ Разбанить"),
         BotCommand(command="create_promo", description="✨ Создать промокод")
@@ -76,13 +85,22 @@ async def set_bot_commands(bot: Bot):
 
     for admin_id in ADMIN_IDS:
         try:
-            commands_to_set = admin_commands.copy()
-            if admin_id == ADMIN_ID_1 and admin_id in TESTER_IDS:
-                tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
-                commands_to_set.extend(tester_only_commands)
-
-            await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
-            logger.info(f"Admin commands set for admin ID: {admin_id}")
+            if admin_id == SUPER_ADMIN_ID:
+                commands_to_set = super_admin_commands.copy()
+                # Если главный админ еще и тестер
+                if admin_id in TESTER_IDS:
+                    tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
+                    commands_to_set.extend(tester_only_commands)
+                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
+                logger.info(f"Super Admin commands set for admin ID: {admin_id}")
+            else:
+                commands_to_set = admin_commands.copy()
+                # Если обычный админ еще и тестер
+                if admin_id in TESTER_IDS:
+                     tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
+                     commands_to_set.extend(tester_only_commands)
+                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
+                logger.info(f"Regular Admin commands set for admin ID: {admin_id}")
         except Exception as e:
             logger.error(f"Failed to set commands for admin {admin_id}: {e}")
 

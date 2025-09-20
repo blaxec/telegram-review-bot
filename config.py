@@ -7,11 +7,16 @@ from urllib.parse import urlparse
 # УДАЛЕНО: load_dotenv() больше не нужен в Docker-окружении
 logger = logging.getLogger(__name__)
 
+# --- Основные настройки ролей и ID ---
+# ГЛАВНЫЙ АДМИНИСТРАТОР (полный доступ)
+SUPER_ADMIN_ID = int(os.getenv("ADMIN_ID_1", 0))
+# СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного, для общей рассылки и фильтров)
+ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS", "").split(',') if admin_id.strip().isdigit()]
+if SUPER_ADMIN_ID and SUPER_ADMIN_ID not in ADMIN_IDS:
+    ADMIN_IDS.insert(0, SUPER_ADMIN_ID) # Гарантируем, что главный админ всегда в списке
+
 # --- Основные настройки бота ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 0))
-ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 0))
-ADMIN_IDS = [ADMIN_ID_1, ADMIN_ID_2]
 
 # --- НОВАЯ НАСТРОЙКА: ID Тестировщиков для команды /skip ---
 TESTER_IDS_STR = os.getenv("TESTER_IDS", "")
@@ -25,11 +30,11 @@ WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 # Эти значения используются, если в базе данных не заданы конкретные роли.
 class Defaults:
     # Администратор, ответственный за большинство проверок скриншотов
-    DEFAULT_SCREENSHOT_CHECK_ADMIN = ADMIN_ID_1
+    DEFAULT_SCREENSHOT_CHECK_ADMIN = int(os.getenv("ADMIN_ID_1", 0))
     # Администратор, ответственный за выдачу текстов и данных
-    DEFAULT_TEXT_PROVIDER_ADMIN = ADMIN_ID_1
+    DEFAULT_TEXT_PROVIDER_ADMIN = int(os.getenv("ADMIN_ID_1", 0))
     # Администратор для финальной, самой ответственной проверки
-    DEFAULT_FINAL_VERDICT_ADMIN = ADMIN_ID_2
+    DEFAULT_FINAL_VERDICT_ADMIN = int(os.getenv("ADMIN_ID_2", 0)) if os.getenv("ADMIN_ID_2") else int(os.getenv("ADMIN_ID_1", 0))
 
 
 # --- Ключи для Google Gemini ---
@@ -129,6 +134,8 @@ class Limits:
     MIN_WITHDRAWAL_AMOUNT = 15.0
     MIN_TRANSFER_AMOUNT = 1.0
     WARNINGS_THRESHOLD_FOR_BAN = 3
+    # --- НОВОЕ: Комиссия за перевод ---
+    TRANSFER_COMMISSION_PERCENT = 0.0 # 0% по умолчанию
 
 
 # --- Настройки подключения к базам данных ---
