@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 # ГЛАВНЫЙ АДМИНИСТРАТОР (полный доступ)
 SUPER_ADMIN_ID = int(os.getenv("ADMIN_ID_1", 0))
 # СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного, для общей рассылки и фильтров)
-ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS", "").split(',') if admin_id.strip().isdigit()]
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", str(SUPER_ADMIN_ID))
+ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
 if SUPER_ADMIN_ID and SUPER_ADMIN_ID not in ADMIN_IDS:
     ADMIN_IDS.insert(0, SUPER_ADMIN_ID) # Гарантируем, что главный админ всегда в списке
 
@@ -134,8 +135,9 @@ class Limits:
     MIN_WITHDRAWAL_AMOUNT = 15.0
     MIN_TRANSFER_AMOUNT = 1.0
     WARNINGS_THRESHOLD_FOR_BAN = 3
-    # --- НОВОЕ: Комиссия за перевод ---
-    TRANSFER_COMMISSION_PERCENT = 0.0 # 0% по умолчанию
+
+# --- ИСПРАВЛЕНИЕ: Добавляем недостающую переменную ---
+TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 0.0))
 
 
 # --- Настройки подключения к базам данных ---
