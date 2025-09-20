@@ -25,7 +25,7 @@ from logic.user_notifications import (
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
-from logic import notification_manager # НОВЫЙ ИМПОРТ
+# ИЗМЕНЕНИЕ: Импорт удален отсюда
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -226,6 +226,8 @@ async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext)
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -239,7 +241,6 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
     
     try:
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=caption,
@@ -280,6 +281,8 @@ async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext)
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
 
@@ -292,12 +295,14 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
 
     try:
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
-            keyboard=inline.get_admin_verification_keyboard(message.from_user.id, "google_last_reviews"),
+            keyboard=inline.get_admin_verification_keyboard(
+                user_id=message.from_user.id, 
+                context="google_last_reviews"
+            ),
             task_type="google_last_reviews"
         )
     except Exception as e:
@@ -344,6 +349,8 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -376,11 +383,10 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     )
     
     try:
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=admin_notification_text,
-            photo_id=profile_screenshot_id, # Может быть None
+            photo_id=profile_screenshot_id,
             keyboard=inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id),
             task_type="google_issue_text"
         )
@@ -407,6 +413,8 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
 async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -444,22 +452,20 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
 
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
-        sent_message = await notification_manager.send_notification_to_admins(
+        sent_message_list = await notification_manager.send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
             keyboard=inline.get_admin_final_verdict_keyboard(review_id),
-            task_type="google_final_verdict"
+            task_type="google_final_verdict",
+            return_sent_messages=True
         )
-        # notification_manager возвращает None, если уведомление не отправлено ни одному админу.
-        # Если оно отправлено, то это будет список сообщений (хотя мы ожидаем одно).
-        if sent_message and isinstance(sent_message, list) and sent_message:
-            await db_manager.db_update_review_admin_message_id(review_id, sent_message[0].message_id) # Предполагаем, что отправлено одно сообщение и берем его ID
-        elif sent_message: # Если это не список, но что-то есть
-            await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        
+        if sent_message_list:
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message_list[0].message_id)
         else:
-            logger.warning(f"No admin received notification for review {review_id}. Review ID in DB might be incorrect.")
+            logger.warning(f"No admin received notification for review {review_id}. Admin message ID not updated.")
+
 
         response_msg = await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
         await schedule_message_deletion(response_msg, 25)
@@ -536,6 +542,8 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -555,14 +563,13 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
         
         task_type = "yandex_with_text_profile_screenshot" if review_type == "with_text" else "yandex_without_text_profile_screenshot"
         
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
             keyboard=inline.get_admin_verification_keyboard(
                 user_id=message.from_user.id,
-                context="yandex_profile_screenshot" # Для контекста кнопки, не для DND
+                context="yandex_profile_screenshot"
             ),
             task_type=task_type
         )
@@ -617,6 +624,8 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -649,11 +658,10 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         )
         
         try:
-            # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
             await notification_manager.send_notification_to_admins(
                 bot,
                 text=admin_notification_text,
-                photo_id=profile_screenshot_id, # Может быть None
+                photo_id=profile_screenshot_id,
                 keyboard=inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id),
                 task_type="yandex_with_text_issue_text"
             )
@@ -702,6 +710,8 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
     
 @router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -748,21 +758,20 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         
         task_type = "yandex_with_text_final_verdict" if review_type == "with_text" else "yandex_without_text_final_verdict"
 
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
-        sent_message = await notification_manager.send_notification_to_admins(
+        sent_message_list = await notification_manager.send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
             keyboard=inline.get_admin_final_verdict_keyboard(review_id),
-            task_type=task_type
+            task_type=task_type,
+            return_sent_messages=True
         )
         
-        if sent_message and isinstance(sent_message, list) and sent_message:
-            await db_manager.db_update_review_admin_message_id(review_id, sent_message[0].message_id) # Предполагаем, что отправлено одно сообщение и берем его ID
-        elif sent_message: # Если это не список, но что-то есть
-            await db_manager.db_update_review_admin_message_id(review_id, sent_message.message_id)
+        if sent_message_list:
+            await db_manager.db_update_review_admin_message_id(review_id, sent_message_list[0].message_id)
         else:
-            logger.warning(f"No admin received notification for review {review_id}. Review ID in DB might be incorrect.")
+            logger.warning(f"No admin received notification for review {review_id}. Admin message ID not updated.")
+
         
         await message.answer("Ваш отзыв успешно отправлен на финальную проверку администратором.")
 
@@ -800,7 +809,6 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
         await state.clear()
         return
         
-    # Отменяем таймаут на ожидание скриншота
     timeout_job_id = data.get('confirmation_timeout_job_id')
     if timeout_job_id:
         try:
@@ -834,9 +842,6 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
     try:
         admin_id = await admin_roles.get_other_hold_admin()
         
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager, но для media_group нужно обернуть ---
-        # notification_manager не поддерживает media_group напрямую, поэтому делаем вручную
-        # с проверкой DND для admin_id
         admin_obj = await db_manager.get_user(admin_id)
         if admin_obj and not admin_obj.dnd_enabled:
             sent_messages = await bot.send_media_group(
@@ -845,7 +850,6 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
             )
             
             if sent_messages:
-                # Оборачиваем в try-except для подавления ошибки "message is not modified"
                 try:
                     await bot.edit_message_reply_markup(
                         chat_id=admin_id,
@@ -854,7 +858,7 @@ async def process_confirmation_screenshot(message: Message, state: FSMContext, b
                     )
                 except TelegramBadRequest as e:
                     if "message is not modified" not in str(e).lower():
-                        raise e # Если ошибка другая, пробрасываем ее дальше
+                        raise e
                     else:
                         logger.warning("Ignored 'message is not modified' error when adding keyboard to media group.")
         else:

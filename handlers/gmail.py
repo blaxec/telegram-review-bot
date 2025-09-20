@@ -17,8 +17,7 @@ from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
 from logic import admin_roles
-from logic import notification_manager # НОВЫЙ ИМПОРТ
-from utils.access_filters import IsAdmin # НОВЫЙ ФИЛЬТР
+from utils.access_filters import IsAdmin
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -126,6 +125,8 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
 
 async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     device_model = message.text
     user_id = message.from_user.id
     
@@ -149,7 +150,6 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         admin_notification += "\n\n<i>Это запрос на создание со второго устройства (пользователь на кулдауне).</i>"
 
     try:
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=admin_notification,
@@ -185,6 +185,8 @@ async def process_another_device_model(message: Message, state: FSMContext, bot:
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    # ИЗМЕНЕНИЕ: Локальный импорт
+    from logic import notification_manager
     user_id = callback.from_user.id
     try:
         await callback.answer()
@@ -229,7 +231,6 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         f"3. <i>Обязательно отключите устройство пользователя от аккаунта после проверки.</i>"
     )
     try:
-        # --- ИЗМЕНЕНИЕ: Используем notification_manager ---
         await notification_manager.send_notification_to_admins(
             bot,
             text=admin_notification,
@@ -294,7 +295,7 @@ async def back_to_gmail_verification(callback: CallbackQuery, state: FSMContext)
 
 # --- ХЭНДЛЕРЫ АДМИНА ДЛЯ УПРАВЛЕНИЯ GMAIL ---
 
-@router.message(AdminState.ENTER_GMAIL_DATA, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.ENTER_GMAIL_DATA, IsAdmin())
 async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -340,7 +341,7 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     await state.clear()
 
 
-@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_gmail_confirm_account:'), IsAdmin())
 async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
     
@@ -361,23 +362,20 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
     async with db_manager.async_session() as session:
         async with session.begin():
             if user and user.referrer_id:
-                referrer = await session.get(db_manager.User, user.referrer_id) # Используем сессию
+                referrer = await session.get(db_manager.User, user.referrer_id)
                 if referrer and referrer.referral_path == 'gmail':
                     reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
-                    # add_referral_earning теперь не принимает сессию, так как она создает свою.
-                    # Это может быть проблемой для атомарности, но для упрощения пока так.
-                    # В идеале, db_manager.add_referral_earning тоже должен принимать session.
                     await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
                     try:
                         await bot.send_message(
                             referrer.id,
                             f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
-                            f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT} ⭐ в копилку."
+                            f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT:.2f} ⭐ в копилку."
                         )
                     except Exception as e:
                         logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
 
-            await db_manager.update_balance(user_id, reward_amount, op_type="GMAIL_ACCOUNT", description="Создание Gmail аккаунта")
+            await db_manager.update_balance(user_id, reward_amount, op_type="PROMO_ACTIVATED", description="Создание Gmail аккаунта")
             
             cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
             if cooldown_end_time:
@@ -388,12 +386,10 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
                     args=[bot, user_id, "gmail"]
                 )
             
-            # check_and_apply_promo_reward также должен был бы работать через сессию
-            # но его логика сложнее, поэтому пока оставляем как есть, это отдельная транзакция
             await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
     try:
-        msg = await bot.send_message(user_id, f"✅ Ваш аккаунт успешно прошел проверку. +{reward_amount} звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
+        msg = await bot.send_message(user_id, f"✅ Ваш аккаунт успешно прошел проверку. +{reward_amount:.2f} звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
         await schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY)
     except Exception as e:
         logger.error(f"Не удалось уведомить {user_id} о подтверждении Gmail: {e}")
@@ -405,7 +401,7 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
             pass
 
 
-@router.callback_query(F.data.startswith('admin_gmail_reject_account:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_gmail_reject_account:'), IsAdmin())
 async def admin_reject_gmail_account(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = int(callback.data.split(':')[1])
     
