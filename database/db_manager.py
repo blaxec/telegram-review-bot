@@ -1,4 +1,4 @@
-# file: telegram-review-bot-main/database/db_manager.py
+## file: telegram-review-bot-main/database/db_manager.py
 
 import datetime
 import logging
@@ -885,10 +885,11 @@ async def get_banned_users_count() -> int:
         return result.scalar_one()
 
 async def get_all_promo_codes(page: int = 1, limit: int = 6) -> List[PromoCode]:
-    """Получает список всех промокодов для страницы."""
+    """Получает список всех АКТИВНЫХ промокодов для страницы."""
     async with async_session() as session:
         query = (
             select(PromoCode)
+            .where(PromoCode.current_uses < PromoCode.total_uses)
             .order_by(desc(PromoCode.created_at))
             .offset((page - 1) * limit)
             .limit(limit)
@@ -897,8 +898,23 @@ async def get_all_promo_codes(page: int = 1, limit: int = 6) -> List[PromoCode]:
         return result.scalars().all()
 
 async def get_promo_codes_count() -> int:
-    """Возвращает общее количество промокодов."""
+    """Возвращает общее количество АКТИВНЫХ промокодов."""
     async with async_session() as session:
-        query = select(func.count(PromoCode.id))
+        query = select(func.count(PromoCode.id)).where(PromoCode.current_uses < PromoCode.total_uses)
         result = await session.execute(query)
         return result.scalar_one()
+
+async def delete_promo_code(promo_id: int) -> bool:
+    """Полностью удаляет промокод и связанные с ним активации."""
+    async with async_session() as session:
+        async with session.begin():
+            # Сначала удаляем все активации, связанные с этим промокодом
+            await session.execute(
+                delete(PromoActivation).where(PromoActivation.promo_code_id == promo_id)
+            )
+            # Теперь удаляем сам промокод
+            result = await session.execute(
+                delete(PromoCode).where(PromoCode.id == promo_id)
+            )
+            # rowcount > 0 означает, что удаление прошло успешно
+            return result.rowcount > 0

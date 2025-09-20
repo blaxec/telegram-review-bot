@@ -38,15 +38,11 @@ from logic.admin_logic import (
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
-from logic import admin_roles
-from utils.access_filters import IsAdmin, IsSuperAdmin # НОВЫЕ ФИЛЬТРЫ
+from logic import admin_roles, notification_manager
+from utils.access_filters import IsAdmin, IsSuperAdmin
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-
-# Хранилище для временной задачи добавления ссылок
-# temp_admin_tasks = {} # Удалено, т.к. используется FSM-стейт AdminState.ADD_LINKS
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Вспомогательная функция для планирования удаления сообщения."""
@@ -72,19 +68,19 @@ async def delete_previous_messages(message: Message, state: FSMContext):
 
 # --- ГЛОБАЛЬНЫЕ АДМИН КОМАНДЫ ---
 
-@router.message(Command("addstars"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("addstars"), IsSuperAdmin())
 async def admin_add_stars(message: Message, state: FSMContext):
     try:
         await message.delete()
     except TelegramBadRequest: pass
     await state.clear()
-    await db_manager.update_balance(message.from_user.id, 999.0, op_type="ADMIN_ADD_STARS", description="Начисление через команду /addstars")
+    await db_manager.update_balance(message.from_user.id, 999.0, op_type="TOP_REWARD", description="Начисление через команду /addstars")
     msg = await message.answer(f"✅ На ваш баланс зачислено 999.0 ⭐.")
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
 
 # --- НОВЫЕ КОМАНДЫ ДЛЯ DND и PENDING_TASKS ---
 
-@router.message(Command("dnd"), IsAdmin()) # Добавлен фильтр IsAdmin
+@router.message(Command("dnd"), IsAdmin())
 async def toggle_dnd_mode(message: Message, state: FSMContext):
     try: await message.delete()
     except TelegramBadRequest: pass
@@ -100,7 +96,7 @@ async def toggle_dnd_mode(message: Message, state: FSMContext):
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
     await state.clear()
 
-@router.message(Command("pending_tasks"), IsAdmin()) # Добавлен фильтр IsAdmin
+@router.message(Command("pending_tasks"), IsAdmin())
 async def show_pending_tasks(message: Message, state: FSMContext):
     try: await message.delete()
     except TelegramBadRequest: pass
@@ -120,7 +116,7 @@ async def show_pending_tasks(message: Message, state: FSMContext):
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
-@router.message(Command("admin_refs"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("admin_refs"), IsSuperAdmin())
 async def admin_refs_menu(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -128,8 +124,9 @@ async def admin_refs_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
-@router.callback_query(F.data.startswith("admin_refs:select_platform:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:select_platform:"), IsSuperAdmin())
 async def admin_select_ref_platform(callback: CallbackQuery):
+    await callback.answer()
     platform = callback.data.split(':')[2]
     platform_names = {
         "google_maps": "Google Карты",
@@ -143,24 +140,23 @@ async def admin_select_ref_platform(callback: CallbackQuery):
             f"Управление ссылками для платформы: <b>{platform_name}</b>",
             reply_markup=inline.get_admin_platform_refs_keyboard(platform)
         )
-    await callback.answer()
 
 
-@router.callback_query(F.data == "admin_refs:back_to_selection", IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "admin_refs:back_to_selection", IsSuperAdmin())
 async def admin_back_to_platform_selection(callback: CallbackQuery):
+    await callback.answer()
     if callback.message:
         await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    await callback.answer()
 
 
-@router.callback_query(F.data == "admin_refs:expire_manual", IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "admin_refs:expire_manual", IsSuperAdmin())
 async def admin_expire_links_manual(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer("⚙️ Запускаю проверку 'зависших' ссылок...", show_alert=True)
     await check_and_expire_links(bot, state.storage)
     await callback.message.answer("✅ Проверка завершена. Все 'зависшие' более 24 часов ссылки были помечены как просроченные.")
 
 
-@router.callback_query(F.data == "back_to_refs_menu", IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "back_to_refs_menu", IsSuperAdmin())
 async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await state.clear()
     
@@ -178,22 +174,21 @@ async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot
     await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
     await callback.answer()
 
-@router.callback_query(F.data.startswith("admin_refs:add_choose_type:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:add_choose_type:"), IsSuperAdmin())
 async def admin_add_ref_choose_type(callback: CallbackQuery):
     """Показывает выбор типа ссылок для добавления."""
+    await callback.answer()
     platform = callback.data.split(':')[2]
     await callback.message.edit_text(
         "Выберите тип ссылок, которые вы хотите добавить:",
         reply_markup=inline.get_admin_add_link_type_keyboard(platform)
     )
-    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin())
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    # await state.clear() # Не нужно очищать, так как мы переходим в новое состояние ADD_LINKS
     try:
-        _, _, link_type, platform = callback.data.split(':') # admin_refs:add:fast:google_maps
+        _, _, link_type, platform = callback.data.split(':')
     except ValueError:
         await callback.answer("Ошибка в данных кнопки.", show_alert=True)
         return
@@ -201,7 +196,7 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     is_fast = (link_type == 'fast')
     link_type_text = "быстрые 🚀" if is_fast else "обычные"
 
-    await state.set_state(AdminState.ADD_LINKS) # Устанавливаем новый FSM-стейт
+    await state.set_state(AdminState.ADD_LINKS)
     await state.update_data(platform_for_links=platform, is_fast_track_for_links=is_fast)
     
     if callback.message:
@@ -209,14 +204,14 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
             f"Выбрана платформа: <i>{platform}</i>.\n"
             f"Тип добавляемых ссылок: <b>{link_type_text}</b>.\n\n"
             f"Отправьте ссылки следующим сообщением. Каждая ссылка с новой строки.",
-            reply_markup=inline.get_cancel_inline_keyboard() # Кнопка отмены
+            reply_markup=inline.get_cancel_inline_keyboard()
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer()
 
-@router.message(AdminState.ADD_LINKS, F.text, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.ADD_LINKS, F.text, IsSuperAdmin())
 async def admin_add_links_handler(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state) # Удаляем сообщение пользователя и промпт
+    await delete_previous_messages(message, state)
 
     user_id = message.from_user.id
     data = await state.get_data()
@@ -233,12 +228,11 @@ async def admin_add_links_handler(message: Message, state: FSMContext):
         logger.exception(f"Критическая ошибка (FSM) для пользователя {user_id}: {e}")
         await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
     finally:
-        await state.clear() # Очищаем состояние после завершения
+        await state.clear()
 
-@router.callback_query(F.data.startswith("admin_refs:stats:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:stats:"), IsSuperAdmin())
 async def admin_view_refs_stats(callback: CallbackQuery):
-    try: await callback.answer("Загружаю...", show_alert=False)
-    except: pass
+    await callback.answer("Загружаю...", show_alert=False)
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
     stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
@@ -251,14 +245,13 @@ async def admin_view_refs_stats(callback: CallbackQuery):
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
 
-@router.callback_query(F.data.startswith("admin_refs:list:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:list:"), IsSuperAdmin())
 async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer("Загружаю список...")
     platform = callback.data.split(':')[2]
     all_links = await reference_manager.get_all_references(platform)
 
     if callback.message:
-        # Удаляем предыдущее сообщение, если оно не было удалено ранее
         data = await state.get_data()
         message_ids_to_delete = data.get("link_message_ids", [])
         for msg_id in set(message_ids_to_delete):
@@ -266,10 +259,10 @@ async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMCont
                 await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
             except TelegramBadRequest:
                 pass
-        await state.update_data(link_message_ids=[]) # Очищаем список после удаления
+        await state.update_data(link_message_ids=[])
         
         try: await callback.message.delete()
-        except TelegramBadRequest: pass # Удаляем само сообщение с кнопками
+        except TelegramBadRequest: pass
 
     if not all_links:
         msg = await bot.send_message(callback.from_user.id, f"В базе нет ссылок для платформы <i>{platform}</i>.", reply_markup=inline.get_admin_platform_refs_keyboard(platform))
@@ -302,8 +295,9 @@ async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMCont
     await state.update_data(link_message_ids=message_ids)
 
 
-@router.callback_query(F.data.startswith("admin_refs:delete_start:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:delete_start:"), IsSuperAdmin())
 async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     platform = callback.data.split(':')[2]
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
@@ -314,9 +308,8 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
             reply_markup=inline.get_cancel_inline_keyboard()
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
-    await callback.answer()
 
-@router.message(AdminState.DELETE_LINK_ID, F.from_user.id.in_(ADMINS))
+@router.message(AdminState.DELETE_LINK_ID, IsSuperAdmin())
 async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
     await delete_previous_messages(message, state)
 
@@ -373,18 +366,18 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     await temp_message.delete()
 
 
-@router.callback_query(F.data.startswith("admin_refs:return_start:"), IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_refs:return_start:"), IsSuperAdmin())
 async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса возврата ссылки в 'available'."""
+    await callback.answer()
     platform = callback.data.split(':')[2]
     await state.set_state(AdminState.RETURN_LINK_ID)
     await state.update_data(platform_for_return=platform)
     if callback.message:
         prompt_msg = await callback.message.answer("Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", reply_markup=inline.get_cancel_inline_keyboard())
         await state.update_data(prompt_message_id=prompt_msg.message_id)
-    await callback.answer()
 
-@router.message(AdminState.RETURN_LINK_ID, F.from_user.id.in_(ADMINS))
+@router.message(AdminState.RETURN_LINK_ID, IsSuperAdmin())
 async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: Bot):
     """Обработка ID ссылки для возврата."""
     await delete_previous_messages(message, state)
@@ -428,7 +421,7 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await temp_message.delete()
 
 # --- БЛОК ПРОВЕРКИ И ВЕРИФИКАЦИИ ---
-@router.callback_query(F.data.startswith("admin_ocr:"), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_ocr:"), IsAdmin())
 async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Администратор нажимает кнопку для AI-проверки скриншота."""
     try:
@@ -444,7 +437,6 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     file_id = callback.message.photo[-1].file_id
     original_caption = callback.message.caption or ""
 
-    # Отправляем ответ, чтобы убрать "часики" сразу
     await callback.answer("🤖 Запускаю проверку с помощью ИИ...", show_alert=False)
 
     try:
@@ -453,8 +445,7 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
             reply_markup=None 
         )
     except TelegramBadRequest:
-        pass # Игнорируем ошибку, если сообщение уже было изменено или удалено
-
+        pass
 
     task_map = {
         'yandex_profile_screenshot': 'yandex_profile_check',
@@ -467,8 +458,7 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
         try:
             await callback.message.answer("Неизвестная задача для OCR.")
             await callback.message.edit_reply_markup(reply_markup=inline.get_admin_verification_keyboard(user_id, context))
-        except TelegramBadRequest:
-            pass
+        except TelegramBadRequest: pass
         return
 
     ocr_result = await analyze_screenshot(bot, file_id, task)
@@ -492,13 +482,11 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
             caption=new_caption,
             reply_markup=manual_verification_keyboard
         )
-    except TelegramBadRequest:
-        pass # Игнорируем, если сообщение уже изменено
+    except TelegramBadRequest: pass
 
 
-@router.callback_query(F.data.startswith('admin_verify:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_verify:'), IsAdmin())
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # Убираем "часики" сразу
     await callback.answer()
     
     try:
@@ -532,10 +520,9 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
             responsible_admin = await admin_roles.get_gmail_data_admin()
             if callback.from_user.id != responsible_admin:
                 admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
-                await callback.message.answer(f"Запрос на выдачу данных отправлен {admin_name}") # Ответ админу, который нажал
+                await callback.message.answer(f"Запрос на выдачу данных отправлен {admin_name}")
                 try:
                     user_info = await bot.get_chat(user_id)
-                    # Используем notification_manager для уведомления ответственного админа
                     await notification_manager.send_notification_to_admins(
                         bot,
                         text=f"❗️Пользователь @{user_info.username} (ID: {user_id}) ожидает данные для создания Gmail. Вы назначены ответственным.",
@@ -584,15 +571,13 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
 
 # --- БЛОК УПРАВЛЕНИЯ ТЕКСТОМ ОТЗЫВА ---
 
-@router.callback_query(F.data.startswith('admin_provide_text:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_provide_text:'), IsAdmin())
 async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # Убираем "часики" сразу
     await callback.answer()
     
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
         
-        # ПРОВЕРКА РОЛИ
         if platform == 'google':
             responsible_admin = await admin_roles.get_google_issue_admin()
         elif platform == 'yandex_with_text':
@@ -603,9 +588,8 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext,
 
         if callback.from_user.id != responsible_admin:
             admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
-            await callback.message.answer(f"Эту задачу выполняет {admin_name}") # Ответ админу, который нажал
+            await callback.message.answer(f"Эту задачу выполняет {admin_name}")
             return
-        # КОНЕЦ ПРОВЕРКИ
 
         state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
         if platform not in state_map: await callback.message.answer("Ошибка платформы."); return
@@ -629,7 +613,7 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext,
         )
     except Exception as e: logger.warning(f"Error in admin_start_providing_text: {e}")
 
-@router.callback_query(F.data.startswith('admin_ai_generate_start:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_ai_generate_start:'), IsAdmin())
 async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try:
         await callback.answer("Ожидаю сценарий...")
@@ -639,7 +623,6 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bo
     try:
         _, platform, user_id_str, link_id_str = callback.data.split(':')
         
-        # ПРОВЕРКА РОЛИ
         if platform == 'google':
             responsible_admin = await admin_roles.get_google_issue_admin()
         elif platform == 'yandex_with_text':
@@ -652,7 +635,6 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bo
             admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
             await callback.answer(f"Эту задачу выполняет {admin_name}", show_alert=True)
             return
-        # КОНЕЦ ПРОВЕРКИ
 
         edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
         new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
@@ -677,7 +659,7 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bo
         if callback.message:
             await callback.message.answer("Произошла ошибка на старте генерации.", show_alert=True)
 
-@router.message(AdminState.AI_AWAITING_SCENARIO, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.AI_AWAITING_SCENARIO, IsAdmin())
 async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Сценарий не может быть пустым. Пожалуйста, отправьте текст.")
@@ -729,13 +711,13 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
     await state.update_data(ai_scenario=scenario, ai_generated_text=generated_text)
 
 
-@router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('ai_moderation:'), AdminState.AI_AWAITING_MODERATION, IsAdmin())
 async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    await callback.answer()
     action = callback.data.split(':')[1]
     data = await state.get_data()
     
     if action == 'send':
-        await callback.answer("✅ Отправляю пользователю...", show_alert=False)
         review_text = data.get('ai_generated_text')
         
         dp_dummy = Dispatcher(storage=state.storage)
@@ -748,7 +730,6 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await state.clear()
 
     elif action == 'regenerate':
-        await callback.answer("🔄 Генерирую новый вариант...", show_alert=False)
         scenario = data.get('ai_scenario')
         
         if not scenario:
@@ -783,7 +764,6 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         await state.update_data(ai_generated_text=generated_text)
     
     elif action == 'manual':
-        await callback.answer("✍️ Переключаю на ручной ввод...", show_alert=False)
         platform = data['platform']
         state_map = {'google': AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, 'yandex_with_text': AdminState.PROVIDE_YANDEX_REVIEW_TEXT}
         
@@ -796,7 +776,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
 
 # --- БЛОК МОДЕРАЦИИ ОТЗЫВОВ ---
 
-@router.callback_query(F.data.startswith("admin_final_approve:"), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_final_approve:"), IsAdmin())
 async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler):
     review_id = int(callback.data.split(':')[1])
     
@@ -806,7 +786,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
         return
     
     platform = review.platform
-    responsible_admin = SUPER_ADMIN_ID # Базовое значение на случай ошибки
+    responsible_admin = SUPER_ADMIN_ID
 
     if platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
     elif platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
@@ -822,7 +802,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     if success and callback.message:
         await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В <b>ХОЛДЕ</b> (@{callback.from_user.username})", reply_markup=None)
 
-@router.callback_query(F.data.startswith('admin_final_reject:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('admin_final_reject:'), IsAdmin())
 async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
     review_id = int(callback.data.split(':')[1])
     
@@ -832,7 +812,7 @@ async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext, b
         return
         
     platform = review.platform
-    responsible_admin = SUPER_ADMIN_ID # Базовое значение на случай ошибки
+    responsible_admin = SUPER_ADMIN_ID
 
     if platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
     elif platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
@@ -853,7 +833,7 @@ async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext, b
     await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer("Ожидание причины...")
 
-@router.message(AdminState.PROVIDE_FINAL_REJECTION_REASON, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.PROVIDE_FINAL_REJECTION_REASON, IsAdmin())
 async def admin_final_reject_process_reason(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text:
         await message.answer("Причина не может быть пустой.")
@@ -872,13 +852,13 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     try:
         review = await db_manager.get_review_by_id(review_id)
         if review and review.admin_message_id:
-            responsible_admin = SUPER_ADMIN_ID # Базовое значение на случай ошибки
+            responsible_admin = SUPER_ADMIN_ID
             if review.platform == 'google': responsible_admin = await admin_roles.get_google_final_admin()
             elif review.platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_final_admin()
             elif review.platform == 'yandex_without_text': responsible_admin = await admin_roles.get_yandex_no_text_final_admin()
 
             original_message = await bot.edit_message_caption(
-                chat_id=responsible_admin, # Отправляем тому, кто должен был проверить
+                chat_id=responsible_admin,
                 message_id=review.admin_message_id,
                 caption=f"{(review.review_text or '')}\n\n❌ <b>ОТКЛОНЕН</b> (@{message.from_user.username})\nПричина: {reason}",
                 reply_markup=None
@@ -889,7 +869,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     await state.clear()
 
 
-@router.callback_query(F.data.startswith('final_verify_approve:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('final_verify_approve:'), IsAdmin())
 async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     """Админ одобряет отзыв после холда и выплачивает награду."""
     review_id = int(callback.data.split(':')[1])
@@ -917,7 +897,7 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
         except TelegramBadRequest:
             pass
 
-@router.callback_query(F.data.startswith('final_verify_reject:'), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith('final_verify_reject:'), IsAdmin())
 async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
     """Админ отклоняет отзыв после холда."""
     review_id = int(callback.data.split(':')[1])
@@ -947,7 +927,7 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
             
 # --- БЛОК ВЫВОДА СРЕДСТВ ---
 
-@router.callback_query(F.data.startswith("admin_withdraw_approve:"), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_withdraw_approve:"), IsAdmin())
 async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
     request_id = int(callback.data.split(":")[1])
     success, message_text, _ = await approve_withdrawal_logic(request_id, bot)
@@ -959,7 +939,7 @@ async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
         except TelegramBadRequest as e:
             logger.warning(f"Could not edit withdrawal message in channel: {e}")
 
-@router.callback_query(F.data.startswith("admin_withdraw_reject:"), IsAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("admin_withdraw_reject:"), IsAdmin())
 async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
     request_id = int(callback.data.split(":")[1])
     success, message_text, _ = await reject_withdrawal_logic(request_id, bot)
@@ -973,7 +953,7 @@ async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
 
 # --- ПРОЧИЕ АДМИН-КОМАНДЫ ---
 
-@router.message(Command("reset_cooldown"), IsAdmin()) # Изменен фильтр
+@router.message(Command("reset_cooldown"), IsAdmin())
 async def reset_cooldown_handler(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -991,7 +971,7 @@ async def reset_cooldown_handler(message: Message, state: FSMContext):
         await message.answer(f"✅ Кулдауны для <i>{username}</i> сброшены.")
     else: await message.answer(f"❌ Ошибка при сбросе кулдаунов для <code>{args[1]}</code>.")
 
-@router.message(Command("viewhold"), IsAdmin()) # Изменен фильтр
+@router.message(Command("viewhold"), IsAdmin())
 async def viewhold_handler(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -1005,7 +985,7 @@ async def viewhold_handler(message: Message, state: FSMContext):
     response_text = await get_user_hold_info_logic(identifier)
     await message.answer(response_text)
 
-@router.message(Command("fine"), IsAdmin()) # Изменен фильтр
+@router.message(Command("fine"), IsAdmin())
 async def fine_user_start(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -1015,7 +995,7 @@ async def fine_user_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_USER_ID)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(Command("create_promo"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("create_promo"), IsSuperAdmin())
 async def create_promo_start(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -1026,7 +1006,7 @@ async def create_promo_start(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_CODE_NAME)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(Command("ban"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("ban"), IsSuperAdmin())
 async def ban_user_start(message: Message, state: FSMContext):
     try:
         await message.delete()
@@ -1110,7 +1090,7 @@ async def show_promo_codes_page(message_or_callback: Message | CallbackQuery, st
 
     text = await format_promo_code_page(promos, page, total_pages)
     
-    keyboard = inline.get_pagination_keyboard("promolist", page, total_pages)
+    keyboard = inline.get_promo_list_keyboard(page, total_pages)
     
     if isinstance(message_or_callback, Message):
         await message_or_callback.answer(text, reply_markup=keyboard)
@@ -1122,6 +1102,50 @@ async def promolist_pagination_handler(callback: CallbackQuery, state: FSMContex
     await callback.answer()
     page = int(callback.data.split(":")[2])
     await show_promo_codes_page(callback, state, page)
+
+@router.callback_query(F.data == "promolist:delete_start", AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
+async def promo_delete_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AdminState.PROMO_DELETE_CONFIRM)
+    prompt_msg = await callback.message.answer(
+        "Введите ID или название промокода, который хотите удалить.",
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+
+@router.message(AdminState.PROMO_DELETE_CONFIRM, IsSuperAdmin())
+async def process_delete_promo_id(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    
+    identifier = message.text.strip()
+    promo_to_delete = None
+    
+    if identifier.isdigit():
+        promo_id = int(identifier)
+        # В db_manager нет функции get_promo_by_id, поэтому ищем по коду.
+        # Это допущение, что ID промокода может совпадать с его кодом.
+        promo_to_delete = await db_manager.get_promo_by_code(str(promo_id))
+    else:
+        promo_to_delete = await db_manager.get_promo_by_code(identifier)
+
+    if not promo_to_delete:
+        await message.answer(f"❌ Промокод '{identifier}' не найден.")
+        await state.clear()
+        # Возвращаемся к списку
+        await show_promo_codes_page(message, state, 1)
+        return
+
+    success = await db_manager.delete_promo_code(promo_to_delete.id)
+    if success:
+        await message.answer(f"✅ Промокод `{promo_to_delete.code}` и все его активации были успешно удалены.")
+    else:
+        await message.answer(f"❌ Произошла ошибка при удалении промокода `{promo_to_delete.code}`.")
+        
+    await state.clear()
+    # Возвращаемся к списку
+    await show_promo_codes_page(message, state, 1)
+
 
 @router.callback_query(F.data == "promolist:close", AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
 async def promolist_close_handler(callback: CallbackQuery, state: FSMContext):
@@ -1158,13 +1182,14 @@ async def show_reward_settings_menu(message_or_callback: Message | CallbackQuery
         await message_or_callback.message.edit_text(text, reply_markup=markup)
 
 
-@router.message(Command("stat_rewards"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("stat_rewards"), IsSuperAdmin())
 async def stat_rewards_handler(message: Message, state: FSMContext):
     await show_reward_settings_menu(message, state)
 
 
-@router.callback_query(F.data == "reward_setting:set_places", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "reward_setting:set_places", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin())
 async def ask_places_count(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     await state.set_state(AdminState.REWARD_SET_PLACES_COUNT)
     prompt_msg = await callback.message.edit_text(
         "Введите новое количество призовых мест (например, 3). Это действие сбросит текущие суммы наград.",
@@ -1173,7 +1198,7 @@ async def ask_places_count(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
-@router.message(AdminState.REWARD_SET_PLACES_COUNT, F.text, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.REWARD_SET_PLACES_COUNT, F.text, IsSuperAdmin())
 async def process_places_count(message: Message, state: FSMContext):
     await delete_previous_messages(message, state)
     if not message.text.isdigit() or not (0 < int(message.text) <= 10):
@@ -1188,8 +1213,9 @@ async def process_places_count(message: Message, state: FSMContext):
     await show_reward_settings_menu(message, state)
 
 
-@router.callback_query(F.data == "reward_setting:set_amounts", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "reward_setting:set_amounts", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin())
 async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     await state.set_state(AdminState.REWARD_SET_AMOUNT_FOR_PLACE)
     prompt_msg = await callback.message.edit_text(
         "Введите данные для изменения награды в формате: <code>МЕСТО СУММА</code>\nНапример: <code>1 50.5</code> или <code>3 15</code>",
@@ -1198,7 +1224,7 @@ async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
-@router.message(AdminState.REWARD_SET_AMOUNT_FOR_PLACE, F.text, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.REWARD_SET_AMOUNT_FOR_PLACE, F.text, IsSuperAdmin())
 async def process_reward_amount(message: Message, state: FSMContext):
     await delete_previous_messages(message, state)
     try:
@@ -1226,8 +1252,9 @@ async def process_reward_amount(message: Message, state: FSMContext):
     await show_reward_settings_menu(message, state)
 
 
-@router.callback_query(F.data == "reward_setting:set_timer", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data == "reward_setting:set_timer", AdminState.REWARD_SETTINGS_MENU, IsSuperAdmin())
 async def ask_timer_duration(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     await state.set_state(AdminState.REWARD_SET_TIMER)
     prompt_msg = await callback.message.edit_text(
         "Введите интервал автоматической выдачи наград в часах (например, 24).",
@@ -1236,7 +1263,7 @@ async def ask_timer_duration(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
-@router.message(AdminState.REWARD_SET_TIMER, F.text, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.REWARD_SET_TIMER, F.text, IsSuperAdmin())
 async def process_timer_duration(message: Message, state: FSMContext):
     await delete_previous_messages(message, state)
     if not message.text.isdigit() or int(message.text) <= 0:
@@ -1245,7 +1272,6 @@ async def process_timer_duration(message: Message, state: FSMContext):
     
     hours = message.text
     await db_manager.set_system_setting("reward_timer_hours", hours)
-    # Сбрасываем таймер, чтобы новый интервал применился со следующего запуска
     await db_manager.set_system_setting("next_reward_timestamp", "0")
     
     await message.answer(f"✅ Интервал выдачи наград установлен на {hours} часов. Изменения вступят в силу после следующего цикла.")
@@ -1254,7 +1280,7 @@ async def process_timer_duration(message: Message, state: FSMContext):
 
 # --- Обработчики состояний (FSM) ---
 
-@router.message(AdminState.PROVIDE_WARN_REASON, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.PROVIDE_WARN_REASON, IsAdmin())
 async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1275,7 +1301,7 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     
     await state.clear()
 
-@router.message(AdminState.PROVIDE_REJECTION_REASON, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.PROVIDE_REJECTION_REASON, IsAdmin())
 async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1296,8 +1322,8 @@ async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot
 
     await state.clear()
 
-@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, IsAdmin()) # Изменен фильтр
-@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.PROVIDE_GOOGLE_REVIEW_TEXT, IsAdmin())
+@router.message(AdminState.PROVIDE_YANDEX_REVIEW_TEXT, IsAdmin())
 async def admin_process_review_text(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1311,7 +1337,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     await message.answer(response_text)
     if success: await state.clear()
 
-@router.message(AdminState.FINE_USER_ID, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.FINE_USER_ID, IsAdmin())
 async def fine_user_get_id(message: Message, state: FSMContext):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1325,7 +1351,7 @@ async def fine_user_get_id(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_AMOUNT)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(AdminState.FINE_AMOUNT, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.FINE_AMOUNT, IsAdmin())
 async def fine_user_get_amount(message: Message, state: FSMContext):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1341,7 +1367,7 @@ async def fine_user_get_amount(message: Message, state: FSMContext):
     await state.set_state(AdminState.FINE_REASON)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(AdminState.FINE_REASON, IsAdmin()) # Изменен фильтр
+@router.message(AdminState.FINE_REASON, IsAdmin())
 async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1350,7 +1376,7 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     await message.answer(result_text)
     await state.clear()
 
-@router.message(AdminState.PROMO_CODE_NAME, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.PROMO_CODE_NAME, IsSuperAdmin())
 async def promo_name_entered(message: Message, state: FSMContext):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1365,7 +1391,7 @@ async def promo_name_entered(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_USES)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(AdminState.PROMO_USES, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.PROMO_USES, IsSuperAdmin())
 async def promo_uses_entered(message: Message, state: FSMContext):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1383,7 +1409,7 @@ async def promo_uses_entered(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_REWARD)
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(AdminState.PROMO_REWARD, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.PROMO_REWARD, IsSuperAdmin())
 async def promo_reward_entered(message: Message, state: FSMContext):
     if not message.text: return
     await delete_previous_messages(message, state)
@@ -1398,8 +1424,9 @@ async def promo_reward_entered(message: Message, state: FSMContext):
     await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
     await state.set_state(AdminState.PROMO_CONDITION)
 
-@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, IsSuperAdmin()) # Изменен фильтр
+@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, IsSuperAdmin())
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     condition = callback.data.split(":")[1]
     data = await state.get_data()
     new_promo = await db_manager.create_promo_code(
@@ -1412,7 +1439,7 @@ async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Произошла ошибка при создании промокода.")
     await state.clear()
 
-@router.message(AdminState.BAN_REASON, IsSuperAdmin()) # Изменен фильтр
+@router.message(AdminState.BAN_REASON, IsSuperAdmin())
 async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("Причина не может быть пустой. Введите причину текстом.")
@@ -1423,7 +1450,7 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     user_id_to_ban = data.get("user_id_to_ban")
     ban_reason = message.text
 
-    success = await db_manager.ban_user(user_id_to_ban, ban_reason) # Передаем причину бана
+    success = await db_manager.ban_user(user_id_to_ban, ban_reason)
     if not success:
         await message.answer("❌ Произошла при бане пользователя.")
         await state.clear()

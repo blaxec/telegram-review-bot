@@ -113,7 +113,8 @@ class AdminState(StatesGroup):
     # Состояния для списков
     BAN_LIST_VIEW = State()
     PROMO_LIST_VIEW = State()
-
+    PROMO_DELETE_CONFIRM = State()
+    
     # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
     REWARD_SETTINGS_MENU = State()
     REWARD_SET_PLACES_COUNT = State()

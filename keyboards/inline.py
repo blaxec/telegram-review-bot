@@ -309,7 +309,6 @@ def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     
 def get_admin_add_link_type_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    # ИСПРАВЛЕНИЕ: callback_data теперь ведет напрямую на нужный обработчик
     builder.button(text="➕ Обычные", callback_data=f"admin_refs:add:regular:{platform}")
     builder.button(text="➕ Быстрые 🚀", callback_data=f"admin_refs:add:fast:{platform}")
     builder.button(text="⬅️ Назад", callback_data=f"admin_refs:select_platform:{platform}")
@@ -397,9 +396,8 @@ def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int) ->
     """Создает клавиатуру для пагинации списков."""
     builder = InlineKeyboardBuilder()
     
-    # Кнопки "назад" и "вперед"
     back_button = InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:page:{current_page-1}")
-    page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop") # noop - no operation
+    page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop")
     forward_button = InlineKeyboardButton(text="➡️ Вперед", callback_data=f"{prefix}:page:{current_page+1}")
 
     row = []
@@ -413,10 +411,31 @@ def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int) ->
     if row:
         builder.row(*row)
     
-    # Кнопка "Закрыть"
     builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data=f"{prefix}:close"))
     return builder.as_markup()
 
+def get_promo_list_keyboard(current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для списка промокодов с пагинацией и кнопкой удаления."""
+    builder = InlineKeyboardBuilder()
+    
+    back_button = InlineKeyboardButton(text="⬅️ Назад", callback_data=f"promolist:page:{current_page-1}")
+    page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop")
+    forward_button = InlineKeyboardButton(text="➡️ Вперед", callback_data=f"promolist:page:{current_page+1}")
+
+    pagination_row = []
+    if current_page > 1:
+        pagination_row.append(back_button)
+    if total_pages > 1:
+        pagination_row.append(page_button)
+    if current_page < total_pages:
+        pagination_row.append(forward_button)
+    
+    if pagination_row:
+        builder.row(*pagination_row)
+
+    builder.row(InlineKeyboardButton(text="🗑️ Удалить промокод", callback_data="promolist:delete_start"))
+    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="promolist:close"))
+    return builder.as_markup()
 
 # --- Клавиатуры для поддержки ---
 def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
