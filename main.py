@@ -1,7 +1,10 @@
 # file: main.py
 
-import logging
+import sys
 import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import logging
 
 # --- АГРЕССИВНАЯ ОТЛАДКА В САМОМ НАЧАЛЕ ---
 logging.basicConfig(
@@ -68,7 +71,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="roles", description="🛠️ Управление ролями админов"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
-        BotCommand(command="amnesty", description="🙏 Список запросов на разбан"), # НОВАЯ КОМАНДА
+        BotCommand(command="amnesty", description="🙏 Список запросов на разбан"),
         BotCommand(command="banlist", description="📜 Список забаненных"),
         BotCommand(command="promolist", description="📝 Список промокодов"),
         BotCommand(command="ban", description="🚫 Забанить"),
@@ -87,7 +90,6 @@ async def set_bot_commands(bot: Bot):
         try:
             if admin_id == SUPER_ADMIN_ID:
                 commands_to_set = super_admin_commands.copy()
-                # Если главный админ еще и тестер
                 if admin_id in TESTER_IDS:
                     tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
                     commands_to_set.extend(tester_only_commands)
@@ -95,7 +97,6 @@ async def set_bot_commands(bot: Bot):
                 logger.info(f"Super Admin commands set for admin ID: {admin_id}")
             else:
                 commands_to_set = admin_commands.copy()
-                # Если обычный админ еще и тестер
                 if admin_id in TESTER_IDS:
                      tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
                      commands_to_set.extend(tester_only_commands)
@@ -154,7 +155,6 @@ async def main():
     dp.include_router(support.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
-    # Роутер "other" должен быть последним, так как он ловит все необработанные сообщения
     dp.include_router(other.router)
 
     dp.errors.register(handle_telegram_bad_request)
