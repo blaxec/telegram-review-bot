@@ -17,6 +17,11 @@ from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
 from logic import admin_roles
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logic.notification_manager import send_notification_to_admins
 from utils.access_filters import IsAdmin
 

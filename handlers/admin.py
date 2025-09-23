@@ -6,6 +6,11 @@ import logging
 import asyncio
 from math import ceil
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aiogram import Router, F, Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext

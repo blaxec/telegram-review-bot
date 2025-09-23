@@ -11,6 +11,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logic.notification_manager import send_notification_to_admins
 
 logger = logging.getLogger(__name__)

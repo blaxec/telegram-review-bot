@@ -11,6 +11,11 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
