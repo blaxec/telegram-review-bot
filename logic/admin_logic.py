@@ -1,11 +1,11 @@
-# file: telegram-review-bot-main/logic/admin_logic.py
+# file: logic/admin_logic.py
 
 import logging
 import datetime
 import asyncio
 from math import ceil
 
-from aiogram.types import Message
+from aiogram.types import Message, LabeledPrice
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -18,7 +18,7 @@ from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward
 from logic.user_notifications import send_confirmation_button, handle_task_timeout, send_cooldown_expired_notification
-from config import Rewards, Durations, Limits, TESTER_IDS
+from config import Rewards, Durations, Limits, TESTER_IDS, PAYMENT_PROVIDER_TOKEN, PAID_UNBAN_COST_STARS, SUPER_ADMIN_ID
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
         state_to_return = state_to_return_map.get(context)
         if state_to_return:
              await user_state.set_state(state_to_return)
-        else: # На случай если контекст не найден
+        else:
              await user_state.set_state(UserState.MAIN_MENU)
         user_message_text += "\nПожалуйста, исправьте ошибку и повторите попытку или вернитесь в главное меню."
 
@@ -454,7 +454,28 @@ async def schedule_message_deletion(message: Message, delay: int):
             pass
     asyncio.create_task(delete_after_delay())
 
-# --- НОВАЯ ЛОГИКА ДЛЯ СПИСКА ЗАБАНЕННЫХ ---
+# --- ЛОГИКА ДЛЯ СПИСКОВ В АДМИНКЕ ---
+def get_paginated_links_text(links: list, current_page: int, total_pages: int, platform: str, filter_type: str) -> str:
+    """Форматирует текст для страницы со списком ссылок."""
+    if not links:
+        return f"📄 Список ссылок для <i>{platform}</i> (Фильтр: {filter_type})\n\nСсылок, соответствующих критериям, не найдено."
+
+    base_text = f"📄 Список ссылок для <i>{platform}</i> (Фильтр: {filter_type})\n\n"
+    icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
+
+    for link in links:
+        user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
+        fast_track_icon = "🚀" if link.is_fast_track else ""
+        requires_photo_icon = "📸" if link.requires_photo else ""
+        
+        base_text += (
+            f"{fast_track_icon}{requires_photo_icon}{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n"
+            f"🔗 <code>{link.url}</code>\n\n"
+        )
+    
+    base_text += f"Страница {current_page}/{total_pages}"
+    return base_text
+
 async def format_banned_user_page(users: list, current_page: int, total_pages: int) -> str:
     if not users:
         return "📜 <b>Список забаненных пользователей:</b>\n\nПока никого нет в бане.\n\n" \
@@ -472,7 +493,6 @@ async def format_banned_user_page(users: list, current_page: int, total_pages: i
     text += f"Страница {current_page}/{total_pages}"
     return text
 
-# --- НОВАЯ ЛОГИКА ДЛЯ СПИСКА ПРОМОКОДОВ ---
 async def format_promo_code_page(promos: list, current_page: int, total_pages: int) -> str:
     if not promos:
         return "📝 <b>Список промокодов:</b>\n\nПромокодов не найдено.\n\n" \
@@ -481,16 +501,14 @@ async def format_promo_code_page(promos: list, current_page: int, total_pages: i
     text = "📝 <b>Список промокодов:</b>\n\n"
     for promo in promos:
         condition_map = {
-            'no_condition': 'Без условия',
-            'google_review': 'Отзыв Google',
-            'yandex_review': 'Отзыв Yandex',
-            'gmail_account': 'Создание Gmail'
+            'no_condition': 'Без условия', 'google_review': 'Отзыв Google',
+            'yandex_review': 'Отзыв Yandex', 'gmail_account': 'Создание Gmail'
         }
         condition_text = condition_map.get(promo.condition, 'Неизвестно')
         created_at = promo.created_at.strftime('%d.%m.%Y %H:%M') if promo.created_at else 'N/A'
         
         text += (
-            f"🎁 <b>Код:</b> <code>{promo.code}</code>\n"
+            f"🎁 <b>Код:</b> <code>{promo.code}</code> (ID: <code>{promo.id}</code>)\n"
             f"   - <b>Награда:</b> {promo.reward:.2f} ⭐\n"
             f"   - <b>Использований:</b> {promo.current_uses}/{promo.total_uses}\n"
             f"   - <b>Условие:</b> {condition_text}\n"
@@ -498,3 +516,70 @@ async def format_promo_code_page(promos: list, current_page: int, total_pages: i
         )
     text += f"Страница {current_page}/{total_pages}"
     return text
+
+# --- ЛОГИКА ДЛЯ СИСТЕМЫ АМНИСТИИ ---
+
+async def get_unban_requests_page(requests: list, current_page: int, total_pages: int) -> str:
+    if not requests:
+        return "🙏 <b>Запросы на амнистию:</b>\n\nНовых запросов нет."
+        
+    text = "🙏 <b>Запросы на амнистию:</b>\n\n"
+    for req in requests:
+        user = req.user
+        username = f"@{user.username}" if user.username else f"ID {user.id}"
+        created_at = req.created_at.strftime('%d.%m.%Y %H:%M')
+        text += (
+            f"<b>Запрос #{req.id}</b> от {username} (<code>{user.id}</code>)\n"
+            f"<i>Дата:</i> {created_at} UTC\n"
+            f"<i>Кол-во разбанов:</i> {user.unban_count}\n"
+            f"<i>Причина:</i> «{req.reason}»\n\n"
+        )
+    text += f"Страница {current_page}/{total_pages}"
+    return text
+
+async def process_unban_request_logic(bot: Bot, request_id: int, action: str, admin_id: int) -> tuple[bool, str]:
+    """Обрабатывает решение админа по заявке на разбан."""
+    request = await db_manager.get_unban_request_by_id(request_id)
+    if not request or request.status != 'pending':
+        return False, "❌ Запрос уже обработан или не найден."
+
+    user = request.user
+    if action == 'reject':
+        await db_manager.update_unban_request_status(request.id, 'rejected', admin_id)
+        try:
+            await bot.send_message(user.id, "❌ Ваш запрос на амнистию был отклонен администратором.")
+        except Exception: pass
+        return True, f"✅ Запрос #{request.id} отклонен."
+
+    elif action == 'approve':
+        if user.unban_count == 0: # Первый разбан - бесплатный
+            await db_manager.unban_user(user.id, is_first_unban=True)
+            await db_manager.update_unban_request_status(request.id, 'approved', admin_id)
+            try:
+                await bot.send_message(user.id, "🎉 Ваш запрос на амнистию был одобрен! Вы разбанены.")
+            except Exception: pass
+            return True, f"✅ Пользователь {user.id} разбанен бесплатно."
+        else: # Последующие разбаны - платные
+            if not PAYMENT_PROVIDER_TOKEN:
+                return False, "❌ Ошибка: не настроен токен для платежей. Невозможно выставить счет."
+            
+            await db_manager.update_unban_request_status(request.id, 'payment_pending', admin_id)
+            
+            try:
+                await bot.send_invoice(
+                    chat_id=user.id,
+                    title="Платный разбан",
+                    description=f"Второй и последующие разбаны являются платными. После оплаты вы будете автоматически разблокированы.",
+                    payload=f"unban_request_{request.id}",
+                    provider_token=PAYMENT_PROVIDER_TOKEN,
+                    currency="XTR",
+                    prices=[LabeledPrice(label="Разбан", amount=PAID_UNBAN_COST_STARS)]
+                )
+            except Exception as e:
+                logger.error(f"Failed to send invoice for unban request {request.id} to user {user.id}: {e}")
+                await db_manager.update_unban_request_status(request.id, 'pending', admin_id) # Возвращаем в пендинг
+                return False, f"❌ Не удалось отправить счет пользователю {user.id}."
+            
+            return True, f"✅ Пользователю {user.id} выставлен счет на платный разбан."
+            
+    return False, "Неизвестное действие."

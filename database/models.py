@@ -37,6 +37,7 @@ class User(Base):
     banned_at = Column(DateTime, nullable=True)
     ban_reason = Column(String, nullable=True)
     last_unban_request_at = Column(DateTime, nullable=True)
+    unban_count = Column(Integer, default=0, nullable=False) # НОВОЕ ПОЛЕ
     
     phone_number = Column(String, nullable=True)
 
@@ -50,6 +51,7 @@ class User(Base):
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
     operations = relationship("OperationHistory", back_populates="user")
+    unban_requests = relationship("UnbanRequest", back_populates="user") # НОВАЯ СВЯЗЬ
 
 
 class Review(Base):
@@ -86,7 +88,7 @@ class Link(Base):
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
     is_fast_track = Column(Boolean, default=False, nullable=False)
-    requires_photo = Column(Boolean, default=False, nullable=False)
+    requires_photo = Column(Boolean, default=False, nullable=False) # НОВОЕ ПОЛЕ
 
 
 class WithdrawalRequest(Base):
@@ -174,3 +176,16 @@ class OperationHistory(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="operations")
+
+# --- НОВАЯ ТАБЛИЦА ДЛЯ ЗАПРОСОВ НА РАЗБАН ---
+class UnbanRequest(Base):
+    __tablename__ = 'unban_requests'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    reason = Column(String, nullable=False)
+    status = Column(Enum('pending', 'approved', 'rejected', 'payment_pending', name='unban_request_status_enum'), default='pending', nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    reviewed_by_admin_id = Column(BigInteger, nullable=True)
+    
+    user = relationship("User", back_populates="unban_requests")

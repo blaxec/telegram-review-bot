@@ -5,14 +5,16 @@ import asyncio
 import datetime
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, LabeledPrice
 from aiogram.exceptions import TelegramBadRequest
 
 from database import db_manager
-from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations
+from config import SUPER_ADMIN_ID, Durations, PAYMENT_PROVIDER_TOKEN, PAID_UNBAN_COST_STARS
 from keyboards import inline
 from logic.user_notifications import format_timedelta
-from utils.access_filters import IsSuperAdmin # НОВЫЙ ФИЛЬТР
+from utils.access_filters import IsSuperAdmin
+from states.user_states import UserState
+from aiogram.fsm.context import FSMContext
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -26,10 +28,9 @@ async def schedule_message_deletion(message: Message, delay: int):
         pass
 
 @router.message(Command("unban_request"))
-async def request_unban(message: Message, bot: Bot):
-    # Планируем удаление команды пользователя для чистоты чата
+async def request_unban_start(message: Message, state: FSMContext):
+    """Начало процесса подачи запроса на разбан."""
     asyncio.create_task(schedule_message_deletion(message, Durations.DELETE_UNBAN_REQUEST_DELAY))
-
     user = await db_manager.get_user(message.from_user.id)
 
     if not user or not user.is_banned:
@@ -37,7 +38,6 @@ async def request_unban(message: Message, bot: Bot):
         asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
         return
 
-    # Проверка кулдауна
     if user.last_unban_request_at:
         time_since_last_request = datetime.datetime.utcnow() - user.last_unban_request_at
         if time_since_last_request < datetime.timedelta(minutes=Durations.COOLDOWN_UNBAN_REQUEST_MINUTES):
@@ -46,29 +46,40 @@ async def request_unban(message: Message, bot: Bot):
             asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
             return
     
-    admin_notification = (
-        f"🚨 <b>Запрос на амнистию!</b> 🚨\n\n"
-        f"Пользователь @{user.username} (ID: <code>{user.id}</code>) просит о разбане."
+    await state.set_state(UserState.UNBAN_AWAITING_REASON)
+    prompt_msg = await message.answer(
+        "✍️ Пожалуйста, опишите причину, по которой вы считаете, что бан был выдан ошибочно, или почему вас следует разбанить. "
+        "Ваше сообщение будет передано администратору."
     )
-    
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+@router.message(UserState.UNBAN_AWAITING_REASON, F.text)
+async def process_unban_reason(message: Message, state: FSMContext):
+    """Обработка причины от пользователя и создание запроса."""
+    data = await state.get_data()
+    prompt_msg_id = data.get("prompt_message_id")
+    if prompt_msg_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_msg_id)
+        except TelegramBadRequest:
+            pass
     try:
-        await bot.send_message(
-            chat_id=SUPER_ADMIN_ID, # Отправляем только Главному Админу
-            text=admin_notification,
-            reply_markup=inline.get_unban_request_keyboard(user.id)
-        )
-        # Обновляем время последнего запроса в БД
-        await db_manager.update_last_unban_request_time(user.id)
-        msg = await message.answer("✅ Ваш запрос на разбан отправлен главному администратору. Ожидайте решения.")
-        asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
-    except Exception as e:
-        logger.error(f"Не удалось отправить запрос на разбан админу {SUPER_ADMIN_ID}: {e}")
-        await message.answer("❌ Не удалось отправить запрос. Попробуйте позже.")
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    user_id = message.from_user.id
+    reason = message.text
+    
+    await db_manager.create_unban_request(user_id, reason)
+    await db_manager.update_last_unban_request_time(user_id)
+    
+    await message.answer("✅ Ваш запрос на разбан отправлен главному администратору. Ожидайте решения.")
+    await state.clear()
 
 
-@router.message(Command("unban"), IsSuperAdmin()) # Изменен фильтр
+@router.message(Command("unban"), IsSuperAdmin())
 async def unban_user_command(message: Message):
-    # Удаляем команду админа
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -98,31 +109,40 @@ async def unban_user_command(message: Message):
     if success:
         msg = await message.answer(f"✅ Пользователь @{user_to_unban.username} (<code>{user_id_to_unban}</code>) был разбанен.")
         asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
+        try:
+            await message.bot.send_message(user_id_to_unban, "✅ Администратор разбанил вас вручную.")
+        except: pass
     else:
         await message.answer("❌ Произошла ошибка при разбане.")
 
+# --- ОБРАБОТЧИКИ ПЛАТЕЖЕЙ ---
 
-@router.callback_query(F.data.startswith("unban_approve:"), IsSuperAdmin()) # Изменен фильтр
-async def approve_unban_request(callback: CallbackQuery, bot: Bot):
-    user_id_to_unban = int(callback.data.split(":")[1])
+@router.pre_checkout_query()
+async def pre_checkout_query_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
+    """Подтверждает готовность к приему платежа."""
+    # Здесь можно добавить дополнительную логику, например, проверку доступности товара
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+    logger.info(f"Pre-checkout query for user {pre_checkout_query.from_user.id} confirmed.")
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message):
+    """Обрабатывает успешный платеж за разбан."""
+    user_id = message.from_user.id
+    logger.info(f"Successful payment of {message.successful_payment.total_amount} stars received from user {user_id} for unban.")
     
-    success = await db_manager.unban_user(user_id_to_unban)
+    request = await db_manager.get_unban_request_by_status(user_id, 'payment_pending')
     
-    if not success:
-        await callback.answer("❌ Не удалось найти пользователя для разбана.", show_alert=True)
+    if not request:
+        logger.error(f"CRITICAL: Successful payment from {user_id}, but no 'payment_pending' unban request found!")
+        await message.answer("Спасибо за оплату! Однако, произошла ошибка при поиске вашего запроса. Пожалуйста, обратитесь в поддержку.")
         return
 
-    try:
-        await bot.send_message(user_id_to_unban, "🎉 <b>Хорошие новости!</b>\n\nГлавный администратор одобрил ваш запрос. Вы были разблокированы и снова можете пользоваться ботом.")
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id_to_unban} о разбане: {e}")
-
-    await callback.answer("✅ Пользователь разбанен.", show_alert=True)
-    if callback.message:
-        await callback.message.edit_text(f"{callback.message.text}\n\n<b>Статус: РАЗБАНЕН</b>", reply_markup=None)
-
-@router.callback_query(F.data.startswith("unban_reject:"), IsSuperAdmin()) # Изменен фильтр
-async def reject_unban_request(callback: CallbackQuery):
-    await callback.answer("Запрос на разбан отклонен.", show_alert=True)
-    if callback.message:
-        await callback.message.edit_text(f"{callback.message.text}\n\n<b>Статус: ОТКЛОНЕНО</b>", reply_markup=None)
+    # Разбаниваем пользователя
+    await db_manager.unban_user(user_id)
+    # Помечаем запрос как одобренный
+    await db_manager.update_unban_request_status(request.id, 'approved', SUPER_ADMIN_ID)
+    
+    await message.answer(
+        "🎉 <b>Оплата прошла успешно!</b>\n\n"
+        "Вы были разблокированы и снова можете пользоваться всеми функциями бота."
+    )

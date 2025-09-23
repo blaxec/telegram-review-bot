@@ -1,4 +1,4 @@
-# file: telegram-review-bot-main/handlers/earning.py
+# file: handlers/earning.py
 
 import datetime
 import logging
@@ -25,7 +25,7 @@ from logic.user_notifications import (
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
-# ИЗМЕНЕНИЕ: Импорт удален отсюда
+from logic.notification_manager import send_notification_to_admins
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -226,8 +226,6 @@ async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext)
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -241,7 +239,7 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     caption = f"Проверьте имя и фамилию в профиле пользователя.\n{user_info_text}"
     
     try:
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
@@ -281,8 +279,6 @@ async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext)
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
 
@@ -295,7 +291,7 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
 
     try:
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
@@ -349,8 +345,6 @@ async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -383,7 +377,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     )
     
     try:
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=admin_notification_text,
             photo_id=profile_screenshot_id,
@@ -413,8 +407,6 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
 async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -452,7 +444,7 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
         if not review_id:
             raise Exception("Failed to create review draft in DB.")
 
-        sent_message_list = await notification_manager.send_notification_to_admins(
+        sent_message_list = await send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
@@ -542,8 +534,6 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -563,7 +553,7 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
         
         task_type = "yandex_with_text_profile_screenshot" if review_type == "with_text" else "yandex_without_text_profile_screenshot"
         
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,
@@ -624,8 +614,6 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
 async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -658,7 +646,7 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         )
         
         try:
-            await notification_manager.send_notification_to_admins(
+            await send_notification_to_admins(
                 bot,
                 text=admin_notification_text,
                 photo_id=profile_screenshot_id,
@@ -710,8 +698,6 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
     
 @router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -758,7 +744,7 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
         
         task_type = "yandex_with_text_final_verdict" if review_type == "with_text" else "yandex_without_text_final_verdict"
 
-        sent_message_list = await notification_manager.send_notification_to_admins(
+        sent_message_list = await send_notification_to_admins(
             bot,
             text=caption,
             photo_id=photo_file_id,

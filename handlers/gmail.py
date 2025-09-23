@@ -17,6 +17,7 @@ from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
 from logic import admin_roles
+from logic.notification_manager import send_notification_to_admins
 from utils.access_filters import IsAdmin
 
 router = Router()
@@ -125,8 +126,6 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
 
 async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     device_model = message.text
     user_id = message.from_user.id
     
@@ -150,7 +149,7 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         admin_notification += "\n\n<i>Это запрос на создание со второго устройства (пользователь на кулдауне).</i>"
 
     try:
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=admin_notification,
             keyboard=inline.get_admin_verification_keyboard(user_id, context),
@@ -185,8 +184,6 @@ async def process_another_device_model(message: Message, state: FSMContext, bot:
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
 async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     user_id = callback.from_user.id
     try:
         await callback.answer()
@@ -231,7 +228,7 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
         f"3. <i>Обязательно отключите устройство пользователя от аккаунта после проверки.</i>"
     )
     try:
-        await notification_manager.send_notification_to_admins(
+        await send_notification_to_admins(
             bot,
             text=admin_notification,
             keyboard=inline.get_admin_gmail_final_check_keyboard(user_id),

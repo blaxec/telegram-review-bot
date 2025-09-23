@@ -8,8 +8,8 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
-    TRANSFER_SHOW_MY_NICK = State()
-    TRANSFER_ASK_COMMENT = State()
+    TRANSFER_AWAITING_MEDIA_CHOICE = State() # НОВОЕ
+    TRANSFER_AWAITING_MEDIA = State() # НОВОЕ
     TRANSFER_COMMENT_INPUT = State()
     
     # Состояния для вывода звезд
@@ -67,6 +67,9 @@ class UserState(StatesGroup):
     # Состояния для реферальной системы
     REFERRAL_PATH_SELECTION = State()
     REFERRAL_YANDEX_SUBPATH_SELECTION = State()
+    
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ АМНИСТИИ ---
+    UNBAN_AWAITING_REASON = State()
 
 
 class AdminState(StatesGroup):
@@ -103,7 +106,7 @@ class AdminState(StatesGroup):
     SUPPORT_AWAITING_COOLDOWN_HOURS = State()
 
     # Состояния для управления ссылками
-    ADD_LINKS = State() # Новый стейт для добавления ссылок
+    ADD_LINKS = State() 
     DELETE_LINK_ID = State()
     RETURN_LINK_ID = State()
 
@@ -114,6 +117,7 @@ class AdminState(StatesGroup):
     BAN_LIST_VIEW = State()
     PROMO_LIST_VIEW = State()
     PROMO_DELETE_CONFIRM = State()
+    AMNESTY_LIST_VIEW = State() # НОВОЕ
     
     # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
     REWARD_SETTINGS_MENU = State()

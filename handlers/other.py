@@ -42,8 +42,13 @@ async def handle_unknown_callbacks(callback: CallbackQuery):
     не были пойманы другими обработчиками.
     """
     try:
+        # Проверяем, не является ли это пустым колбэком от пагинации
+        if callback.data == "noop":
+            await callback.answer()
+            return
+            
         await callback.answer(
-            "Эта кнопка больше не активна. Пожалуйста, воспользуйтесь меню.",
+            "Эта кнопка больше не активна или действие уже выполнено. Пожалуйста, воспользуйтесь меню.",
             show_alert=True
         )
     except TelegramBadRequest:

@@ -4,7 +4,7 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, User
+from aiogram.types import Message, CallbackQuery, User, InputMediaPhoto, InputMediaVideo, InputMediaAnimation
 from aiogram.exceptions import TelegramBadRequest
 
 from states.user_states import UserState
@@ -16,19 +16,16 @@ from logic.user_notifications import format_timedelta
 router = Router()
 logger = logging.getLogger(__name__)
 
-async def delete_previous_messages(message: Message, state: FSMContext):
-    """Вспомогательная функция для удаления старых сообщений."""
+async def delete_prompt_message(message: Message, state: FSMContext):
+    """Удаляет только предыдущее сообщение-приглашение от бота."""
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     if prompt_message_id:
         try:
             await message.bot.delete_message(message.chat.id, prompt_message_id)
+            await state.update_data(prompt_message_id=None)
         except TelegramBadRequest:
             pass
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
 
 # --- Главный экран профиля и навигация ---
 async def show_profile_menu(message_or_callback: Message | CallbackQuery, state: FSMContext, bot: Bot):
@@ -49,33 +46,30 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     profile_text = (
         f"✨ Ваш <b>Профиль</b> ✨\n\n"
         f"Вас пригласил: {referrer_info}\n"
-        f"Баланс звезд: {balance:.2f} ⭐\n" # Форматируем до 2 знаков после запятой
-        f"В холде: {hold_balance:.2f} ⭐" # Форматируем до 2 знаков после запятой
+        f"Баланс звезд: {balance:.2f} ⭐\n"
+        f"В холде: {hold_balance:.2f} ⭐"
     )
     
     keyboard = inline.get_profile_keyboard()
     
-    if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(profile_text, reply_markup=keyboard)
-    else: 
+    # Логика для редактирования или отправки нового сообщения
+    is_message = isinstance(message_or_callback, Message)
+    target_message = message_or_callback if is_message else message_or_callback.message
+
+    if not target_message: return
+
+    if is_message:
+        await target_message.answer(profile_text, reply_markup=keyboard)
+    else:
         try:
-            if message_or_callback.message:
-                await message_or_callback.message.edit_text(profile_text, reply_markup=keyboard)
+            await target_message.edit_text(profile_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
-                try:
-                    await message_or_callback.answer()
-                except TelegramBadRequest:
-                    pass
+                await message_or_callback.answer()
             else:
-                logger.warning(f"Could not edit profile message, sending a new one. Error: {e}")
-                try:
-                    if message_or_callback.message:
-                        await message_or_callback.message.delete()
-                except TelegramBadRequest:
-                    pass
-                if message_or_callback.message:
-                    await bot.send_message(chat_id=message_or_callback.message.chat.id, text=profile_text, reply_markup=keyboard)
+                logger.warning(f"Could not edit profile message, sending new. Error: {e}")
+                await target_message.delete()
+                await bot.send_message(chat_id=target_message.chat.id, text=profile_text, reply_markup=keyboard)
 
 
 @router.message(Command("stars"))
@@ -105,21 +99,13 @@ async def show_operation_history(callback: CallbackQuery):
             time_str = op.created_at.strftime('%H:%M:%S UTC')
             amount_str = f"{op.amount:+.2f} ⭐" if op.amount > 0 else f"{op.amount:.2f} ⭐"
             
-            op_description = ""
-            if op.operation_type == "REVIEW_APPROVED":
-                op_description = "✅ Одобрен отзыв"
-            elif op.operation_type == "PROMO_ACTIVATED":
-                op_description = "🎁 Активация промокода"
-            elif op.operation_type == "WITHDRAWAL":
-                op_description = "📤 Запрос на вывод"
-            elif op.operation_type == "FINE":
-                op_description = "💸 Штраф"
-            elif op.operation_type == "TRANSFER_SENT":
-                op_description = "➡️ Перевод звезд"
-            elif op.operation_type == "TRANSFER_RECEIVED":
-                op_description = "⬅️ Получение звезд"
-            elif op.operation_type == "TOP_REWARD":
-                op_description = "🏆 Награда из топа"
+            op_map = {
+                "REVIEW_APPROVED": "✅ Одобрен отзыв", "PROMO_ACTIVATED": "🎁 Активация промокода",
+                "WITHDRAWAL": "📤 Запрос на вывод", "FINE": "💸 Штраф",
+                "TRANSFER_SENT": "➡️ Перевод звезд", "TRANSFER_RECEIVED": "⬅️ Получение звезд",
+                "TOP_REWARD": "🏆 Награда из топа"
+            }
+            op_description = op_map.get(op.operation_type, "Неизвестная операция")
             
             description_suffix = f" ({op.description})" if op.description else ""
             text += f"<code>{time_str}</code>: {op_description} {amount_str}{description_suffix}\n"
@@ -133,157 +119,169 @@ async def show_operation_history(callback: CallbackQuery):
 async def initiate_transfer(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
     
-    try:
-        balance = float(balance)
-    except (ValueError, TypeError):
-        balance = 0.0
-
-    if balance < 0:
-        await callback.answer("Ваш баланс отрицательный. Передача звезд невозможна, пока вы не погасите долг.", show_alert=True)
-        return
-        
-    if balance < Limits.MIN_TRANSFER_AMOUNT:
-        await callback.answer(f"Недостаточно звезд на балансе для выполнения этой операции (минимум {Limits.MIN_TRANSFER_AMOUNT} ⭐).", show_alert=True)
+    if float(balance) < Limits.MIN_TRANSFER_AMOUNT:
+        await callback.answer(f"Недостаточно звезд на балансе для перевода (минимум {Limits.MIN_TRANSFER_AMOUNT} ⭐).", show_alert=True)
         return
 
     await state.set_state(UserState.TRANSFER_AMOUNT_OTHER)
     if callback.message:
         prompt_msg = await callback.message.edit_text(
-            f"Сколько звезд вы хотите передать? (Комиссия за перевод: {TRANSFER_COMMISSION_PERCENT}%)", # Добавлено сообщение о комиссии
-            reply_markup=inline.get_cancel_inline_keyboard()
+            f"Сколько звезд вы хотите передать? (Минимум {Limits.MIN_TRANSFER_AMOUNT} ⭐)\n"
+            f"Комиссия за перевод: {TRANSFER_COMMISSION_PERCENT}%",
+            reply_markup=inline.get_cancel_to_profile_keyboard()
         )
-        if prompt_msg:
-            await state.update_data(prompt_message_id=prompt_msg.message_id)
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 async def process_transfer_amount(amount: float, message: Message, state: FSMContext):
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
-    
-    commission_amount = amount * (Limits.TRANSFER_COMMISSION_PERCENT / 100)
-    total_deduction = amount + commission_amount
+    commission = amount * (TRANSFER_COMMISSION_PERCENT / 100)
+    total_deduction = amount + commission
+
+    await delete_prompt_message(message, state)
 
     if total_deduction > float(balance):
-        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐. С учетом комиссии ({commission_amount:.2f} ⭐) вам нужно {total_deduction:.2f} ⭐.")
+        prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐. С учетом комиссии ({commission:.2f} ⭐) вам нужно {total_deduction:.2f} ⭐.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
-    await state.update_data(transfer_amount=amount, transfer_commission=commission_amount)
+    await state.update_data(transfer_amount=amount)
     await state.set_state(UserState.TRANSFER_RECIPIENT)
     prompt_msg = await message.answer(
-        "Кому вы хотите передать звезды? Укажите никнейм (например, @username) или ID пользователя.",
-        reply_markup=inline.get_cancel_inline_keyboard()
+        "Кому вы хотите передать звезды? Укажите никнейм (@username) или ID пользователя.",
+        reply_markup=inline.get_cancel_to_profile_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(UserState.TRANSFER_AMOUNT_OTHER)
+@router.message(UserState.TRANSFER_AMOUNT_OTHER, F.text)
 async def transfer_other_amount_input(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state)
-    if not message.text: return
     try:
         amount = float(message.text)
         if amount < Limits.MIN_TRANSFER_AMOUNT: raise ValueError
     except (ValueError, TypeError):
+        await delete_prompt_message(message, state)
         prompt_msg = await message.answer(f"Неверный формат. Пожалуйста, введите положительное число (минимум {Limits.MIN_TRANSFER_AMOUNT}).")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
+    finally:
+        await message.delete()
     await process_transfer_amount(amount, message, state)
 
-@router.message(UserState.TRANSFER_RECIPIENT)
+@router.message(UserState.TRANSFER_RECIPIENT, F.text)
 async def process_transfer_recipient(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state)
-    if not message.text: return
     recipient_id = await db_manager.find_user_by_identifier(message.text)
+    await delete_prompt_message(message, state)
+    await message.delete()
+    
     if not recipient_id or recipient_id == message.from_user.id:
         prompt_msg = await message.answer("Пользователь не найден или вы пытаетесь отправить звезды себе. Попробуйте еще раз.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
     await state.update_data(recipient_id=recipient_id)
-    await state.set_state(UserState.TRANSFER_SHOW_MY_NICK)
-    await message.answer(
-        "Хотите указать свой никнейм при передаче? Получатель увидит, от кого пришли звезды.",
-        reply_markup=inline.get_transfer_show_nick_keyboard()
+    await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
+    prompt_msg = await message.answer(
+        "Введите комментарий к передаче или нажмите 'Пропустить'.",
+        reply_markup=inline.get_skip_comment_keyboard('transfer')
     )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.callback_query(F.data.in_({'transfer_show_nick_yes', 'transfer_show_nick_no'}), UserState.TRANSFER_SHOW_MY_NICK)
-async def process_transfer_show_nick(callback: CallbackQuery, state: FSMContext):
-    show_nick = callback.data == 'transfer_show_nick_yes'
-    await state.update_data(show_nick=show_nick)
-    await state.set_state(UserState.TRANSFER_ASK_COMMENT)
-    if callback.message:
-        prompt_msg = await callback.message.edit_text(
-            "Хотите оставить комментарий к передаче?",
-            reply_markup=inline.get_ask_comment_keyboard(prefix='transfer')
-        )
-        if prompt_msg:
-            await state.update_data(prompt_message_id=prompt_msg.message_id)
+@router.message(UserState.TRANSFER_COMMENT_INPUT, F.text)
+async def process_transfer_comment_input(message: Message, state: FSMContext):
+    await delete_prompt_message(message, state)
+    await message.delete()
+    await state.update_data(transfer_comment=message.text)
+    await ask_for_media(message, state, 'transfer')
 
-@router.callback_query(F.data == 'transfer_ask_comment_no', UserState.TRANSFER_ASK_COMMENT)
-async def process_transfer_no_comment(callback: CallbackQuery, state: FSMContext, bot: Bot):
+@router.callback_query(F.data == 'transfer_skip_comment', UserState.TRANSFER_COMMENT_INPUT)
+async def process_transfer_skip_comment(callback: CallbackQuery, state: FSMContext):
     if callback.message:
         await callback.message.delete()
-    await finish_transfer(callback.from_user, state, bot, comment=None)
+    await state.update_data(transfer_comment=None)
+    await ask_for_media(callback.message, state, 'transfer')
 
-@router.callback_query(F.data == 'transfer_ask_comment_yes', UserState.TRANSFER_ASK_COMMENT)
-async def process_transfer_yes_comment(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
-    if callback.message:
-        prompt_msg = await callback.message.edit_text("Введите ваш комментарий:")
-        if prompt_msg:
-            await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(UserState.TRANSFER_COMMENT_INPUT)
-async def process_transfer_comment_input(message: Message, state: FSMContext, bot: Bot):
-    await delete_previous_messages(message, state)
-    if not message.text: return
-    await finish_transfer(message.from_user, state, bot, comment=message.text)
-
-async def finish_transfer(user, state: FSMContext, bot: Bot, comment: str | None):
-    data = await state.get_data()
-    sender_id = user.id
-    sender_username = user.username
-    
-    success = await db_manager.transfer_stars(
-        sender_id=sender_id,
-        recipient_id=data['recipient_id'],
-        amount=data['transfer_amount']
+async def ask_for_media(message: Message, state: FSMContext, prefix: str):
+    await state.set_state(UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
+    prompt_msg = await message.answer(
+        "Хотите прикрепить медиа (фото, видео, GIF)?",
+        reply_markup=inline.get_attach_media_keyboard(prefix)
     )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-    if success:
-        sender_name = f"@{sender_username}" if data['show_nick'] else "Анонимный пользователь"
-        notification_text = (
-            f"✨ Вам переданы звезды ✨\n\n"
-            f"От: {sender_name}\n"
-            f"Количество: {data['transfer_amount']:.2f} ⭐"
+@router.callback_query(F.data == 'transfer_attach_media_no', UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
+async def process_transfer_no_media(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    if callback.message:
+        await callback.message.delete()
+    await finish_transfer(callback.from_user, state, bot)
+
+@router.callback_query(F.data == 'transfer_attach_media_yes', UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
+async def process_transfer_yes_media(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.TRANSFER_AWAITING_MEDIA)
+    if callback.message:
+        prompt_msg = await callback.message.edit_text(
+            "Отправьте фото, видео или GIF.",
+            reply_markup=inline.get_cancel_to_profile_keyboard()
         )
-        if comment:
-            notification_text += f"\nКомментарий: {comment}"
-        
-        try:
-            await bot.send_message(data['recipient_id'], notification_text)
-        except Exception as e:
-            print(f"Не удалось уведомить о переводе {data['recipient_id']}: {e}")
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-        await bot.send_message(sender_id, "Звезды успешно переданы!", reply_markup=reply.get_main_menu_keyboard())
-    else:
+@router.message(UserState.TRANSFER_AWAITING_MEDIA, F.photo | F.video | F.animation)
+async def process_transfer_media_input(message: Message, state: FSMContext, bot: Bot):
+    await delete_prompt_message(message, state)
+    
+    media_type = None
+    file_id = None
+    
+    if message.photo:
+        media_type = 'photo'
+        file_id = message.photo[-1].file_id
+    elif message.video:
+        media_type = 'video'
+        file_id = message.video.file_id
+    elif message.animation:
+        media_type = 'animation'
+        file_id = message.animation.file_id
+    
+    await state.update_data(media_type=media_type, file_id=file_id)
+    await finish_transfer(message.from_user, state, bot)
+    await message.delete()
+
+async def finish_transfer(user: User, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    sender_id, sender_username = user.id, user.username
+    recipient_id, amount = data['recipient_id'], data['transfer_amount']
+    comment, media_type, file_id = data.get('transfer_comment'), data.get('media_type'), data.get('file_id')
+
+    success = await db_manager.transfer_stars(sender_id, recipient_id, amount)
+
+    if not success:
         await bot.send_message(sender_id, "Произошла ошибка при переводе. Попробуйте снова.", reply_markup=reply.get_main_menu_keyboard())
+        await state.clear()
+        return
 
+    notification_text = f"✨ Вам переданы <b>{amount:.2f} ⭐</b> от @{sender_username}!"
+    if comment:
+        notification_text += f"\n\n<i>Комментарий:</i> {comment}"
+        
+    try:
+        if media_type == 'photo':
+            await bot.send_photo(recipient_id, file_id, caption=notification_text)
+        elif media_type == 'video':
+            await bot.send_video(recipient_id, file_id, caption=notification_text)
+        elif media_type == 'animation':
+            await bot.send_animation(recipient_id, file_id, caption=notification_text)
+        else:
+            await bot.send_message(recipient_id, notification_text)
+    except Exception as e:
+        logger.error(f"Не удалось уведомить о переводе {recipient_id}: {e}")
+
+    await bot.send_message(sender_id, "✅ Звезды успешно переданы!", reply_markup=reply.get_main_menu_keyboard())
     await state.clear()
-    await state.set_state(UserState.MAIN_MENU)
+
 
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
     
-    try:
-        balance = float(balance)
-    except (ValueError, TypeError):
-        balance = 0.0
-    
-    if balance < 0:
-        await callback.answer("Ваш баланс отрицательный. Вывод невозможен, пока вы не погасите долг.", show_alert=True)
-        return
-
-    if balance < Limits.MIN_WITHDRAWAL_AMOUNT:
+    if float(balance) < Limits.MIN_WITHDRAWAL_AMOUNT:
         await callback.answer(f"Минимальная сумма для вывода {Limits.MIN_WITHDRAWAL_AMOUNT:.2f} звезд. Ваш баланс: {balance:.2f} ⭐.", show_alert=True)
         return
     
@@ -303,20 +301,18 @@ async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs
 
 @router.callback_query(F.data.startswith('withdraw_amount_'), UserState.WITHDRAW_AMOUNT)
 async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
     amount_str = callback.data.split('_')[-1]
     
     if amount_str == 'other':
         await state.set_state(UserState.WITHDRAW_AMOUNT_OTHER)
         if callback.message:
-            prompt_msg = await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT:.2f}):", reply_markup=inline.get_cancel_inline_keyboard())
+            prompt_msg = await callback.message.edit_text(f"Введите сумму для вывода (минимум {Limits.MIN_WITHDRAWAL_AMOUNT:.2f}):", reply_markup=inline.get_cancel_to_profile_keyboard())
             if prompt_msg:
                 await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
     amount = float(amount_str)
-    
-    balance, _ = await db_manager.get_user_balance(user_id)
+    balance, _ = await db_manager.get_user_balance(callback.from_user.id)
     if float(balance) < amount:
         await callback.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐", show_alert=True)
         return
@@ -331,27 +327,29 @@ async def withdraw_predefined_amount(callback: CallbackQuery, state: FSMContext)
         if prompt_msg:
             await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(UserState.WITHDRAW_AMOUNT_OTHER)
+@router.message(UserState.WITHDRAW_AMOUNT_OTHER, F.text)
 async def withdraw_other_amount_input(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state)
-    if not message.text: return
     try:
         amount = float(message.text)
         if amount < Limits.MIN_WITHDRAWAL_AMOUNT:
-            prompt_msg = await message.answer(f"Минимальная сумма для вывода - {Limits.MIN_WITHDRAWAL_AMOUNT:.2f} звезд.")
-            await state.update_data(prompt_message_id=prompt_msg.message_id)
-            return
+            raise ValueError
     except (ValueError, TypeError):
-        prompt_msg = await message.answer("Неверный формат. Пожалуйста, введите число.")
+        await delete_prompt_message(message, state)
+        await message.delete()
+        prompt_msg = await message.answer(f"Неверный формат. Введите число не менее {Limits.MIN_WITHDRAWAL_AMOUNT:.2f}.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
-
+    
     balance, _ = await db_manager.get_user_balance(message.from_user.id)
     if float(balance) < amount:
+        await delete_prompt_message(message, state)
+        await message.delete()
         prompt_msg = await message.answer(f"Недостаточно звезд. Ваш баланс: {balance:.2f} ⭐")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
+    await delete_prompt_message(message, state)
+    await message.delete()
     await state.update_data(withdraw_amount=amount)
     await state.set_state(UserState.WITHDRAW_RECIPIENT)
     prompt_msg = await message.answer(
@@ -367,7 +365,6 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     if request_id is None:
         await bot.send_message(user.id, "❌ Произошла ошибка при создании запроса. Возможно, на балансе недостаточно средств. Попробуйте снова.")
         await state.clear()
-        await state.set_state(UserState.MAIN_MENU)
         return
 
     admin_message = (
@@ -382,7 +379,6 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
     admin_message += f"\nЗапрос ID: <code>{request_id}</code>"
 
     try:
-        # Уведомляем канал выплат напрямую, DND для канала не применяется
         await bot.send_message(
             chat_id=WITHDRAWAL_CHANNEL_ID,
             text=admin_message,
@@ -391,11 +387,11 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
         await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.\n\nСледить за статусом можно в нашем <a href='https://t.me/conclusions_starref'>канале выплат</a>.")
     except Exception as e:
         logger.error(f"Не удалось отправить запрос в канал выплат {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
-        await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат или не имеет нужных прав. Пожалуйста, обратитесь в поддержку. Ваши звезды не были списаны.")
-        await db_manager.update_balance(user.id, amount, op_type="WITHDRAWAL_REJECTED", description="Ошибка отправки в канал") # Возвращаем звезды
+        # Возвращаем звезды, если не удалось уведомить админов
+        await db_manager.update_balance(user.id, amount, op_type="WITHDRAWAL", description="Возврат из-за ошибки отправки")
+        await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат. Ваши звезды возвращены на баланс.")
     
     await state.clear()
-    await state.set_state(UserState.MAIN_MENU)
 
 @router.callback_query(F.data.startswith('withdraw_recipient_'), UserState.WITHDRAW_RECIPIENT)
 async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -413,15 +409,15 @@ async def process_withdraw_recipient(callback: CallbackQuery, state: FSMContext,
         prompt_msg = await bot.send_message(
             callback.from_user.id,
             "Укажите никнейм или ID пользователя, которому нужно отправить подарок.",
-            reply_markup=inline.get_cancel_inline_keyboard()
+            reply_markup=inline.get_cancel_to_profile_keyboard()
         )
         if prompt_msg:
             await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(UserState.WITHDRAW_USER_ID)
+@router.message(UserState.WITHDRAW_USER_ID, F.text)
 async def process_withdraw_user_id(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state)
-    if not message.text: return
+    await delete_prompt_message(message, state)
+    await message.delete()
     recipient_id = await db_manager.find_user_by_identifier(message.text)
     if not recipient_id or recipient_id == message.from_user.id:
         prompt_msg = await message.answer("Пользователь не найден или вы пытаетесь отправить подарок себе. Попробуйте еще раз.")
@@ -450,10 +446,10 @@ async def process_withdraw_yes_comment(callback: CallbackQuery, state: FSMContex
         if prompt_msg:
             await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(UserState.WITHDRAW_COMMENT_INPUT)
+@router.message(UserState.WITHDRAW_COMMENT_INPUT, F.text)
 async def process_withdraw_comment_input(message: Message, state: FSMContext, bot: Bot):
-    await delete_previous_messages(message, state)
-    if not message.text: return
+    await delete_prompt_message(message, state)
+    await message.delete()
     await finish_withdraw(message.from_user, state, bot, comment=message.text)
 
 async def finish_withdraw(user: User, state: FSMContext, bot: Bot, comment: str | None):
@@ -481,3 +477,9 @@ async def show_hold_info(callback: CallbackQuery, state: FSMContext, **kwargs):
             await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
         except TelegramBadRequest:
             pass
+
+@router.callback_query(F.data == 'cancel_to_profile')
+async def cancel_to_profile_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Возвращает в меню профиля из любого FSM."""
+    await state.clear()
+    await show_profile_menu(callback, state, bot)

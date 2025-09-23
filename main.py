@@ -30,7 +30,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
 # Обратите внимание, что BOT_TOKEN теперь импортируется после проверки
-from config import BOT_TOKEN, SUPER_ADMIN_ID, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT
+from config import BOT_TOKEN, SUPER_ADMIN_ID, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT, PAYMENT_PROVIDER_TOKEN
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, BotCommandScopeDefault
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -59,7 +59,6 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="dnd", description="🌙/☀️ Включить/выключить ночной режим"),
         BotCommand(command="pending_tasks", description="📥 Посмотреть задачи в очереди"),
         BotCommand(command="viewhold", description="⏳ Холд пользователя"),
-        BotCommand(command="reviewhold", description="🔍 Проверить отзывы в холде"),
         BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны"),
         BotCommand(command="fine", description="💸 Выписать штраф"),
     ]
@@ -69,6 +68,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="roles", description="🛠️ Управление ролями админов"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
+        BotCommand(command="amnesty", description="🙏 Список запросов на разбан"), # НОВАЯ КОМАНДА
         BotCommand(command="banlist", description="📜 Список забаненных"),
         BotCommand(command="promolist", description="📝 Список промокодов"),
         BotCommand(command="ban", description="🚫 Забанить"),
@@ -154,6 +154,7 @@ async def main():
     dp.include_router(support.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
+    # Роутер "other" должен быть последним, так как он ловит все необработанные сообщения
     dp.include_router(other.router)
 
     dp.errors.register(handle_telegram_bad_request)

@@ -51,6 +51,12 @@ GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")
 GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
 GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile")
 
+# --- ПАРАМЕТРЫ ПЛАТНОГО РАЗБАНА ---
+# Укажите токен, полученный от @BotFather при настройке платежей
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
+# Стоимость повторного разбана в Telegram Stars (минимальное значение - 1)
+PAID_UNBAN_COST_STARS = int(os.getenv("PAID_UNBAN_COST_STARS", 1))
+
 if not GOOGLE_API_KEYS:
     logger.warning("!!! КОНФИГУРАЦИЯ: Не найдены GOOGLE_API_KEY_1 и GOOGLE_API_KEY_2 в .env файле.")
     logger.warning("!!! Функция автоматической проверки скриншотов (OCR) будет отключена.")
@@ -59,6 +65,11 @@ if WITHDRAWAL_CHANNEL_ID > 0:
     logger.warning(f"!!! КОНФИГУРАЦИЯ: WITHDRAWAL_CHANNEL_ID ({WITHDRAWAL_CHANNEL_ID}) является положительным числом.")
     logger.warning("!!! Для приватных каналов ID должен быть отрицательным и начинаться с -100.")
     logger.warning("!!! Бот, скорее всего, не сможет отправлять сообщения в канал. Пожалуйста, проверьте ID.")
+
+if not PAYMENT_PROVIDER_TOKEN:
+    logger.warning("!!! КОНФИГУРАЦИЯ: Не найден PAYMENT_PROVIDER_TOKEN в .env файле.")
+    logger.warning("!!! Функция платного разбана будет недоступна.")
+
 
 # --- Награды (в звездах) ---
 class Rewards:
@@ -110,11 +121,12 @@ class Durations:
 # --- Лимиты и пороги ---
 class Limits:
     MIN_WITHDRAWAL_AMOUNT = 15.0
-    MIN_TRANSFER_AMOUNT = 1.0
+    MIN_TRANSFER_AMOUNT = 3.0 # ИЗМЕНЕНО
     WARNINGS_THRESHOLD_FOR_BAN = 3
+    LINKS_PER_PAGE = 10 # Для пагинации в админке
 
 # --- Комиссия за перевод ---
-TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 0.0))
+TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 0.5)) # ИЗМЕНЕНО
 
 # --- Настройки подключения к базам данных ---
 DATABASE_URL = os.getenv("DATABASE_URL")

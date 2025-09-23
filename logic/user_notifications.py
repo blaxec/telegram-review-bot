@@ -8,12 +8,10 @@ from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-
 from keyboards import inline, reply
 from database import db_manager
 from references import reference_manager
-# ИЗМЕНЕНИЕ: Удаляем импорт отсюда, чтобы разорвать цикл
-# from logic import notification_manager 
+from logic.notification_manager import send_notification_to_admins
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +86,6 @@ async def send_confirmation_button(bot: Bot, user_id: int, platform: str):
 
 async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, platform: str, message_to_admins: str, scheduler: AsyncIOScheduler):
     """Обрабатывает истечение времени на любом из этапов задания."""
-    # --- ИЗМЕНЕНИЕ: Импортируем менеджер здесь, внутри функции ---
-    from logic import notification_manager, admin_roles
-
     state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
     current_state_str = await state.get_state()
@@ -122,7 +117,6 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     try:
         await bot.send_message(user_id, timeout_message, reply_markup=reply.get_main_menu_keyboard())
         
-        # Определяем, какой тип задачи был, чтобы уведомить нужного админа
         task_type = None
         if 'google' in platform:
             task_type = "google_issue_text"
@@ -130,7 +124,7 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
             task_type = "yandex_with_text_issue_text"
 
         if task_type:
-            await notification_manager.send_notification_to_admins(bot, text=admin_notification, task_type=task_type)
+            await send_notification_to_admins(bot, text=admin_notification, task_type=task_type)
 
     except Exception as e:
         logger.error(f"Ошибка при обработке таймаута для {user_id}: {e}")

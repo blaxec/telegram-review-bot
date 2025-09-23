@@ -16,7 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations
+from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations, Limits
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import (
@@ -33,13 +33,16 @@ from logic.admin_logic import (
     approve_final_review_logic,
     reject_final_review_logic,
     format_banned_user_page,
-    format_promo_code_page
+    format_promo_code_page,
+    get_paginated_links_text, # НОВЫЙ ИМПОРТ
+    get_unban_requests_page, # НОВЫЙ ИМПОРТ
+    process_unban_request_logic # НОВЫЙ ИМПОРТ
 )
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
 from logic import admin_roles
-# ИЗМЕНЕНИЕ: Удаляем импорт 'notification_manager' из шапки файла
+from logic.notification_manager import send_notification_to_admins # ИЗМЕНЕНИЕ
 from utils.access_filters import IsAdmin, IsSuperAdmin
 
 router = Router()
@@ -126,9 +129,11 @@ async def admin_refs_menu(message: Message, state: FSMContext):
     await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 @router.callback_query(F.data.startswith("admin_refs:select_platform:"), IsSuperAdmin())
-async def admin_select_ref_platform(callback: CallbackQuery):
+async def admin_select_ref_platform(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     platform = callback.data.split(':')[2]
+    await state.update_data(current_platform=platform)
+
     platform_names = {
         "google_maps": "Google Карты",
         "yandex_with_text": "Яндекс (с текстом)",
@@ -150,84 +155,59 @@ async def admin_back_to_platform_selection(callback: CallbackQuery):
         await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 
-@router.callback_query(F.data == "admin_refs:expire_manual", IsSuperAdmin())
-async def admin_expire_links_manual(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await callback.answer("⚙️ Запускаю проверку 'зависших' ссылок...", show_alert=True)
-    await check_and_expire_links(bot, state.storage)
-    await callback.message.answer("✅ Проверка завершена. Все 'зависшие' более 24 часов ссылки были помечены как просроченные.")
-
-
-@router.callback_query(F.data == "back_to_refs_menu", IsSuperAdmin())
-async def back_to_refs_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await state.clear()
-    
-    data = await state.get_data()
-    message_ids_to_delete = data.get("link_message_ids", [])
-    if callback.message:
-        message_ids_to_delete.append(callback.message.message_id)
-    
-    for msg_id in set(message_ids_to_delete):
-        try: 
-            await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
-        except TelegramBadRequest: 
-            pass
-
-    await bot.send_message(callback.from_user.id, "Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("admin_refs:add_choose_type:"), IsSuperAdmin())
-async def admin_add_ref_choose_type(callback: CallbackQuery):
-    """Показывает выбор типа ссылок для добавления."""
-    await callback.answer()
-    platform = callback.data.split(':')[2]
-    await callback.message.edit_text(
-        "Выберите тип ссылок, которые вы хотите добавить:",
-        reply_markup=inline.get_admin_add_link_type_keyboard(platform)
-    )
-
-
 @router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin())
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     try:
-        _, _, link_type, platform = callback.data.split(':')
+        _, _, link_type, photo_req, platform = callback.data.split(':')
     except ValueError:
         await callback.answer("Ошибка в данных кнопки.", show_alert=True)
         return
         
     is_fast = (link_type == 'fast')
-    link_type_text = "быстрые 🚀" if is_fast else "обычные"
+    requires_photo = (photo_req == 'photo')
+
+    type_text = []
+    if is_fast: type_text.append("быстрые 🚀")
+    if requires_photo: type_text.append("с фото 📸")
+    if not type_text: type_text.append("обычные")
+    
+    final_type_text = " и ".join(type_text)
 
     await state.set_state(AdminState.ADD_LINKS)
-    await state.update_data(platform_for_links=platform, is_fast_track_for_links=is_fast)
+    await state.update_data(
+        platform_for_links=platform,
+        is_fast_track_for_links=is_fast,
+        requires_photo_for_links=requires_photo
+    )
     
     if callback.message:
+        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
+        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
         prompt_msg = await callback.message.edit_text(
             f"Выбрана платформа: <i>{platform}</i>.\n"
-            f"Тип добавляемых ссылок: <b>{link_type_text}</b>.\n\n"
+            f"Тип добавляемых ссылок: <b>{final_type_text}</b>.\n\n"
             f"Отправьте ссылки следующим сообщением. Каждая ссылка с новой строки.",
-            reply_markup=inline.get_cancel_inline_keyboard()
+            reply_markup=cancel_button
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer()
 
 @router.message(AdminState.ADD_LINKS, F.text, IsSuperAdmin())
 async def admin_add_links_handler(message: Message, state: FSMContext):
+    data = await state.get_data()
+    # ИЗМЕНЕНИЕ: Удаляем предыдущее сообщение с инпутом и промпт
     await delete_previous_messages(message, state)
 
-    user_id = message.from_user.id
-    data = await state.get_data()
     platform = data.get("platform_for_links")
     is_fast = data.get("is_fast_track_for_links")
-
-    logger.info(f"[FSM_ADD_LINK] Processing link submission for user {user_id}. Platform: {platform}, Is Fast: {is_fast}")
+    requires_photo = data.get("requires_photo_for_links")
     
     try:
-        result_text = await process_add_links_logic(message.text, platform, is_fast_track=is_fast)
-        await message.answer(result_text)
-        await message.answer("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
+        result_text = await process_add_links_logic(message.text, platform, is_fast_track=is_fast, requires_photo=requires_photo)
+        await message.answer(result_text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
     except Exception as e:
-        logger.exception(f"Критическая ошибка (FSM) для пользователя {user_id}: {e}")
-        await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.")
+        logger.exception(f"Критическая ошибка (FSM) при добавлении ссылок: {e}")
+        await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.", reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
     finally:
         await state.clear()
 
@@ -235,66 +215,58 @@ async def admin_add_links_handler(message: Message, state: FSMContext):
 async def admin_view_refs_stats(callback: CallbackQuery):
     await callback.answer("Загружаю...", show_alert=False)
     platform = callback.data.split(':')[2]
-    all_links = await reference_manager.get_all_references(platform)
-    stats = {status: len([link for link in all_links if link.status == status]) for status in ['available', 'assigned', 'used', 'expired']}
+    stats = await db_manager.db_get_link_stats(platform)
+    
     text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
-            f"Всего: {len(all_links)}\n"
+            f"Всего: {stats.get('total', 0)}\n"
             f"🟢 Доступно: {stats.get('available', 0)}\n"
             f"🟡 В работе: {stats.get('assigned', 0)}\n"
             f"🔴 Использовано: {stats.get('used', 0)}\n"
             f"⚫ Просрочено: {stats.get('expired', 0)}")
+            
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
 
-@router.callback_query(F.data.startswith("admin_refs:list:"), IsSuperAdmin())
-async def admin_view_refs_list(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await callback.answer("Загружаю список...")
-    platform = callback.data.split(':')[2]
-    all_links = await reference_manager.get_all_references(platform)
 
+# --- ОБНОВЛЕННЫЙ БЛОК ПРОСМОТРА СПИСКА ССЫЛОК ---
+
+@router.callback_query(F.data.startswith("admin_refs:list"), IsSuperAdmin())
+async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
+    """Отображает первую страницу списка ссылок с фильтрами."""
+    await callback.answer()
+    
+    parts = callback.data.split(':')
+    platform = parts[2]
+    # Устанавливаем фильтр по умолчанию "all"
+    filter_type = parts[3] if len(parts) > 3 else "all"
+    
+    await state.update_data(link_list_filter=filter_type)
+    
+    await show_links_page(callback, state, platform, filter_type, page=1)
+
+async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: str, filter_type: str, page: int):
+    """Отображает конкретную страницу списка ссылок."""
+    total_links, links_on_page = await db_manager.db_get_paginated_references(platform, page, Limits.LINKS_PER_PAGE, filter_type)
+    total_pages = ceil(total_links / Limits.LINKS_PER_PAGE) if total_links > 0 else 1
+    
+    page_text = get_paginated_links_text(links_on_page, page, total_pages, platform, filter_type)
+    keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type)
+    
     if callback.message:
-        data = await state.get_data()
-        message_ids_to_delete = data.get("link_message_ids", [])
-        for msg_id in set(message_ids_to_delete):
-            try:
-                await bot.delete_message(chat_id=callback.from_user.id, message_id=msg_id)
-            except TelegramBadRequest:
-                pass
-        await state.update_data(link_message_ids=[])
-        
-        try: await callback.message.delete()
-        except TelegramBadRequest: pass
+        await callback.message.edit_text(page_text, reply_markup=keyboard, disable_web_page_preview=True)
 
-    if not all_links:
-        msg = await bot.send_message(callback.from_user.id, f"В базе нет ссылок для платформы <i>{platform}</i>.", reply_markup=inline.get_admin_platform_refs_keyboard(platform))
-        await state.update_data(link_message_ids=[msg.message_id])
-        return
-
-    message_ids = []
-    base_text = f"📄 Список ссылок для <i>{platform}</i>:\n\n"
-    chunks = [""]
-    icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
-
-    for link in all_links:
-        user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
-        fast_track_icon = "🚀" if link.is_fast_track else ""
-        requires_photo_icon = "📸" if link.requires_photo else ""
-        line = f"{fast_track_icon}{requires_photo_icon}{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n🔗 <code>{link.url}</code>\n\n"
-        
-        if len(chunks[-1] + line) > 4000:
-            chunks.append("")
-        chunks[-1] += line
+@router.callback_query(F.data.startswith("links_page:"), IsSuperAdmin())
+async def link_list_paginator(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает пагинацию и смену фильтров."""
+    await callback.answer()
     
-    for i, chunk in enumerate(chunks):
-        final_text = (base_text + chunk) if i == 0 else chunk
-        msg = await bot.send_message(callback.from_user.id, final_text, disable_web_page_preview=True)
-        message_ids.append(msg.message_id)
+    _, platform, page_str = callback.data.split(":")
+    page = int(page_str)
     
-    final_management_message = await bot.send_message(callback.from_user.id, "Управление списком:", reply_markup=inline.get_admin_refs_list_keyboard(platform))
-    message_ids.append(final_management_message.message_id)
-
-    await state.update_data(link_message_ids=message_ids)
-
+    data = await state.get_data()
+    filter_type = data.get("link_list_filter", "all")
+    
+    await show_links_page(callback, state, platform, filter_type, page)
 
 @router.callback_query(F.data.startswith("admin_refs:delete_start:"), IsSuperAdmin())
 async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
@@ -303,16 +275,21 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
     if callback.message:
-        prompt_msg = await callback.message.answer(
+        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
+        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
+        prompt_msg = await callback.message.edit_text(
             "Введите ID ссылок, которые хотите удалить.\n"
             "Можно ввести несколько ID через пробел или запятую.", 
-            reply_markup=inline.get_cancel_inline_keyboard()
+            reply_markup=cancel_button
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(AdminState.DELETE_LINK_ID, IsSuperAdmin())
 async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
+    # Удаляем сообщение с ID и промпт
     await delete_previous_messages(message, state)
+    data = await state.get_data()
+    platform = data.get("platform_for_deletion")
 
     if not message.text:
         msg = await message.answer("❌ Пожалуйста, введите один или несколько ID.")
@@ -349,23 +326,17 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     if not summary_text:
          summary_text = "Не найдено корректных ID для удаления."
     
-    msg = await message.answer(summary_text)
-    asyncio.create_task(schedule_message_deletion(msg, 15))
-
+    # Отправляем временное сообщение и сразу же "нажимаем" на кнопку, чтобы обновить список
+    temp_message = await message.answer(summary_text)
     await state.clear()
     
-    data = await state.get_data()
-    platform = data.get("platform_for_deletion")
-
-    temp_message = await message.answer("Обновляю список...")
+    # Имитируем нажатие на кнопку для возврата к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message, 
-        data=f"admin_refs:list:{platform}"
+        data=f"admin_refs:list:{platform}:all"
     )
-    await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
-    await temp_message.delete()
-
+    await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
 @router.callback_query(F.data.startswith("admin_refs:return_start:"), IsSuperAdmin())
 async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
@@ -375,13 +346,20 @@ async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.RETURN_LINK_ID)
     await state.update_data(platform_for_return=platform)
     if callback.message:
-        prompt_msg = await callback.message.answer("Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", reply_markup=inline.get_cancel_inline_keyboard())
+        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
+        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
+        prompt_msg = await callback.message.edit_text(
+            "Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", 
+            reply_markup=cancel_button
+        )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(AdminState.RETURN_LINK_ID, IsSuperAdmin())
 async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: Bot):
     """Обработка ID ссылки для возврата."""
     await delete_previous_messages(message, state)
+    data = await state.get_data()
+    platform = data.get("platform_for_return")
 
     if not message.text or not message.text.isdigit():
         msg = await message.answer("❌ Пожалуйста, введите корректный числовой ID.")
@@ -389,17 +367,13 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
         return
     
     link_id = int(message.text)
-    data = await state.get_data()
-    platform = data.get("platform_for_return")
-    
     success, assigned_user_id = await reference_manager.force_release_reference(link_id)
     
+    result_text = ""
     if not success:
-        msg = await message.answer(f"❌ Не удалось вернуть ссылку с ID {link_id}. Возможно, она не в статусе 'assigned' или не найдена.")
+        result_text = f"❌ Не удалось вернуть ссылку с ID {link_id}. Возможно, она не в статусе 'assigned' или не найдена."
     else:
-        msg = await message.answer(f"✅ Ссылка ID {link_id} возвращена в статус 'available'.")
-
-    asyncio.create_task(schedule_message_deletion(msg, 10))
+        result_text = f"✅ Ссылка ID {link_id} возвращена в статус 'available'."
 
     if assigned_user_id:
         try:
@@ -412,14 +386,13 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
 
     await state.clear()
     
-    temp_message = await message.answer("Обновляю список...")
+    temp_message = await message.answer(result_text)
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message,
-        data=f"admin_refs:list:{platform}"
+        data=f"admin_refs:list:{platform}:all"
     )
-    await admin_view_refs_list(callback=dummy_callback_query, bot=bot, state=state)
-    await temp_message.delete()
+    await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
 # --- БЛОК ПРОВЕРКИ И ВЕРИФИКАЦИИ ---
 @router.callback_query(F.data.startswith("admin_ocr:"), IsAdmin())
@@ -488,8 +461,6 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith('admin_verify:'), IsAdmin())
 async def admin_verification_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # ИЗМЕНЕНИЕ: Локальный импорт
-    from logic import notification_manager
     await callback.answer()
     
     try:
@@ -526,7 +497,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 await callback.message.answer(f"Запрос на выдачу данных отправлен {admin_name}")
                 try:
                     user_info = await bot.get_chat(user_id)
-                    await notification_manager.send_notification_to_admins(
+                    await send_notification_to_admins(
                         bot,
                         text=f"❗️Пользователь @{user_info.username} (ID: {user_id}) ожидает данные для создания Gmail. Вы назначены ответственным.",
                         task_type="gmail_issue_data"
@@ -1072,13 +1043,6 @@ async def banlist_pagination_handler(callback: CallbackQuery, state: FSMContext)
     page = int(callback.data.split(":")[2])
     await show_banned_users_page(callback, state, page)
 
-@router.callback_query(F.data == "banlist:close", AdminState.BAN_LIST_VIEW, IsSuperAdmin())
-async def banlist_close_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if callback.message:
-        await callback.message.delete()
-    await state.clear()
-
 
 @router.message(Command("promolist"), IsSuperAdmin())
 async def show_promo_list(message: Message, state: FSMContext):
@@ -1145,13 +1109,46 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     await state.set_state(AdminState.PROMO_LIST_VIEW)
     await show_promo_codes_page(message, state, 1)
 
+# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ АМНИСТИЯМИ ---
 
-@router.callback_query(F.data == "promolist:close", AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
-async def promolist_close_handler(callback: CallbackQuery, state: FSMContext):
+@router.message(Command("amnesty"), IsSuperAdmin())
+async def show_amnesty_list(message: Message, state: FSMContext):
+    await state.set_state(AdminState.AMNESTY_LIST_VIEW)
+    await show_amnesty_page(message, state, 1)
+
+async def show_amnesty_page(message_or_callback: Message | CallbackQuery, state: FSMContext, page: int):
+    requests = await db_manager.get_pending_unban_requests(page=page)
+    total_requests_count = await db_manager.get_pending_unban_requests_count()
+    requests_per_page = 5 # Меньше, т.к. текста больше
+    total_pages = ceil(total_requests_count / requests_per_page) if total_requests_count > 0 else 1
+
+    text = await get_unban_requests_page(requests, page, total_pages)
+    
+    keyboard = inline.get_amnesty_keyboard(requests, page, total_pages)
+    
+    if isinstance(message_or_callback, Message):
+        await message_or_callback.answer(text, reply_markup=keyboard)
+    else:
+        await message_or_callback.message.edit_text(text, reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith("amnesty:page:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
+async def amnesty_pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    if callback.message:
-        await callback.message.delete()
-    await state.clear()
+    page = int(callback.data.split(":")[2])
+    await show_amnesty_page(callback, state, page)
+
+@router.callback_query(F.data.startswith("amnesty:action:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
+async def amnesty_action_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    _, action, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+    admin_id = callback.from_user.id
+
+    success, message_text = await process_unban_request_logic(bot, request_id, action, admin_id)
+    
+    await callback.answer(message_text, show_alert=True)
+    
+    # Обновляем список, чтобы убрать обработанный запрос
+    await show_amnesty_page(callback, state, 1)
 
 
 # --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ НАГРАДАМИ СТАТИСТИКИ ---

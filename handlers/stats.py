@@ -84,3 +84,18 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
             await message_or_callback.answer(error_text)
         else:
             await message_or_callback.answer(error_text, show_alert=True)
+
+# --- НОВЫЙ ОБРАБОТЧИК ---
+@router.message(F.text == '📊 Статистика', UserState.MAIN_MENU)
+async def stats_handler_message(message: Message, state: FSMContext):
+    """Обработчик нажатия на кнопку 'Статистика'."""
+    await show_stats_menu(message)
+
+
+@router.callback_query(F.data == 'profile_toggle_anonymity')
+async def toggle_anonymity_handler(callback: CallbackQuery):
+    """Обрабатывает переключение анонимности."""
+    await callback.answer()
+    new_status = await db_manager.toggle_anonymity(callback.from_user.id)
+    # После переключения просто обновляем меню статистики
+    await show_stats_menu(callback)
