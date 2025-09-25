@@ -1,4 +1,3 @@
-
 # file: handlers/ban_system.py
 
 import logging

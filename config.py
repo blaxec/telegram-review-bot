@@ -68,7 +68,7 @@ if WITHDRAWAL_CHANNEL_ID > 0:
 
 if not PAYMENT_PROVIDER_TOKEN:
     logger.warning("!!! КОНФИГУРАЦИЯ: Не найден PAYMENT_PROVIDER_TOKEN в .env файле.")
-    logger.warning("!!! Функция платного разбана будет недоступна.")
+    logger.warning("!!! Функция платного разбана будет недоступна (или будет работать в режиме заглушки).")
 
 
 # --- Награды (в звездах) ---

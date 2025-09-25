@@ -538,7 +538,7 @@ async def get_unban_requests_page(requests: list, current_page: int, total_pages
     return text
 
 async def process_unban_request_logic(bot: Bot, request_id: int, action: str, admin_id: int) -> tuple[bool, str]:
-    """Обрабатывает решение админа по заявке на разбан."""
+    """Обрабатывает решение админа по заявке на разбан (с заглушкой для платежей)."""
     request = await db_manager.get_unban_request_by_id(request_id)
     if not request or request.status != 'pending':
         return False, "❌ Запрос уже обработан или не найден."
@@ -552,14 +552,37 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
         return True, f"✅ Запрос #{request.id} отклонен."
 
     elif action == 'approve':
-        if user.unban_count == 0: # Первый разбан - бесплатный
+        if user.unban_count == 0:  # Первый разбан - бесплатный
             await db_manager.unban_user(user.id, is_first_unban=True)
             await db_manager.update_unban_request_status(request.id, 'approved', admin_id)
             try:
                 await bot.send_message(user.id, "🎉 Ваш запрос на амнистию был одобрен! Вы разбанены.")
             except Exception: pass
             return True, f"✅ Пользователь {user.id} разбанен бесплатно."
-        else: # Последующие разбаны - платные
+        else:  # Последующие разбаны - платные
+            
+            # --- НАЧАЛО ЗАГЛУШКИ ---
+            # Этот блок кода имитирует успешную оплату.
+            # Когда получите токен, удалите этот блок и раскомментируйте следующий.
+            
+            logger.warning(f"!!! PAYMENT STUB: Simulating successful payment for unban request {request.id} for user {user.id} !!!")
+            await db_manager.unban_user(user.id) # Сразу разбаниваем
+            await db_manager.update_unban_request_status(request.id, 'approved', admin_id) # Сразу одобряем
+            try:
+                # Отправляем сообщение, имитирующее успешную оплату
+                await bot.send_message(
+                    user.id,
+                    "🎉 <b>(ТЕСТОВЫЙ РЕЖИМ)</b> Ваш платный разбан был успешно обработан!\n\n"
+                    "Вы были разблокированы и снова можете пользоваться всеми функциями бота."
+                )
+            except Exception: pass
+            return True, f"✅ Пользователь {user.id} разбанен (в режиме заглушки)."
+            # --- КОНЕЦ ЗАГЛУШКИ ---
+
+            """
+            # --- НАСТОЯЩИЙ КОД ДЛЯ ПЛАТЕЖЕЙ ---
+            # РАСКОММЕНТИРУЙТЕ ЭТОТ БЛОК, КОГДА ПОЛУЧИТЕ ТОКЕН
+            
             if not PAYMENT_PROVIDER_TOKEN:
                 return False, "❌ Ошибка: не настроен токен для платежей. Невозможно выставить счет."
             
@@ -581,5 +604,8 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
                 return False, f"❌ Не удалось отправить счет пользователю {user.id}."
             
             return True, f"✅ Пользователю {user.id} выставлен счет на платный разбан."
+            
+            # --- КОНЕЦ НАСТОЯЩЕГО КОДА ---
+            """
             
     return False, "Неизвестное действие."
