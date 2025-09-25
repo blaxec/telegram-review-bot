@@ -1,3 +1,4 @@
+
 # file: handlers/ban_system.py
 
 import logging
@@ -54,7 +55,7 @@ async def request_unban_start(message: Message, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.UNBAN_AWAITING_REASON, F.text)
-async def process_unban_reason(message: Message, state: FSMContext):
+async def process_unban_reason(message: Message, state: FSMContext, bot: Bot):
     """Обработка причины от пользователя и создание запроса."""
     data = await state.get_data()
     prompt_msg_id = data.get("prompt_message_id")
@@ -75,6 +76,12 @@ async def process_unban_reason(message: Message, state: FSMContext):
     await db_manager.update_last_unban_request_time(user_id)
     
     await message.answer("✅ Ваш запрос на разбан отправлен главному администратору. Ожидайте решения.")
+    
+    try:
+        await bot.send_message(SUPER_ADMIN_ID, f"🔔 Поступил новый запрос на амнистию! Используйте /amnesty для просмотра.")
+    except Exception as e:
+        logger.error(f"Failed to notify super admin about new unban request: {e}")
+        
     await state.clear()
 
 

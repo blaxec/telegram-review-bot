@@ -85,7 +85,7 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
         else:
             await message_or_callback.answer(error_text, show_alert=True)
 
-# --- НОВЫЙ ОБРАБОТЧИК ---
+# --- ИЗМЕНЕННЫЙ ОБРАБОТЧИК ---
 @router.message(F.text == '📊 Статистика', UserState.MAIN_MENU)
 async def stats_handler_message(message: Message, state: FSMContext):
     """Обработчик нажатия на кнопку 'Статистика'."""

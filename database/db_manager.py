@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database.models import (Base, User, Review, Link, WithdrawalRequest, 
                              PromoCode, PromoActivation, SupportTicket,
-                             RewardSetting, SystemSetting, OperationHistory)
+                             RewardSetting, SystemSetting, OperationHistory, UnbanRequest)
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -373,11 +373,49 @@ async def db_update_link_status(link_id: int, status: str, user_id: int | None =
             )
             await session.execute(stmt)
 
-async def db_get_all_references(platform: str) -> list[Link]:
+async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all") -> Tuple[int, List[Link]]:
+    """Получает ссылки с пагинацией и фильтрацией."""
     async with async_session() as session:
-        query = select(Link).where(Link.platform == platform)
+        base_query = select(Link).where(Link.platform == platform)
+        count_query = select(func.count(Link.id)).where(Link.platform == platform)
+        
+        if filter_type == 'fast':
+            base_query = base_query.where(Link.is_fast_track == True)
+            count_query = count_query.where(Link.is_fast_track == True)
+        elif filter_type == 'photo':
+            base_query = base_query.where(Link.requires_photo == True)
+            count_query = count_query.where(Link.requires_photo == True)
+        elif filter_type == 'regular':
+            base_query = base_query.where(Link.is_fast_track == False, Link.requires_photo == False)
+            count_query = count_query.where(Link.is_fast_track == False, Link.requires_photo == False)
+
+        total_count = await session.scalar(count_query)
+        
+        paginated_query = base_query.order_by(desc(Link.id)).offset((page - 1) * limit).limit(limit)
+        result = await session.execute(paginated_query)
+        links = result.scalars().all()
+        
+        return total_count, links
+        
+async def db_get_link_stats(platform: str) -> Dict[str, int]:
+    """Получает статистику по ссылкам для платформы."""
+    async with async_session() as session:
+        query = (
+            select(
+                Link.status,
+                func.count(Link.id)
+            )
+            .where(Link.platform == platform)
+            .group_by(Link.status)
+        )
         result = await session.execute(query)
-        return result.scalars().all()
+        stats = {status: count for status, count in result.all()}
+        
+        total_query = select(func.count(Link.id)).where(Link.platform == platform)
+        total_count = await session.scalar(total_query)
+        stats['total'] = total_count
+        
+        return stats
 
 async def db_delete_reference(link_id: int):
     async with async_session() as session:
@@ -538,25 +576,27 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
         )
         return result.scalar_one_or_none()
         
-async def create_promo_activation(user_id: int, promo_id: int, status: str, session) -> PromoActivation:
-    """Создает активацию промокода, используя переданную сессию."""
-    new_activation = PromoActivation(
-        user_id=user_id,
-        promo_code_id=promo_id,
-        status=status
-    )
-    session.add(new_activation)
-    if status == 'completed':
-        promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
-        if promo_to_update:
-            promo_to_update.current_uses += 1
-        else:
-            logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
-            raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
+async def create_promo_activation(user_id: int, promo_id: int, status: str) -> PromoActivation:
+    async with async_session() as session:
+        async with session.begin():
+            """Создает активацию промокода, используя переданную сессию."""
+            new_activation = PromoActivation(
+                user_id=user_id,
+                promo_code_id=promo_id,
+                status=status
+            )
+            session.add(new_activation)
+            if status == 'completed':
+                promo_to_update = await session.get(PromoCode, promo_id, with_for_update=True)
+                if promo_to_update:
+                    promo_to_update.current_uses += 1
+                else:
+                    logger.error(f"Could not increment promo uses for id {promo_id} as it was not found.")
+                    raise IntegrityError("Promo code not found during activation.", params=None, orig=None)
 
-    await session.flush()
-    await session.refresh(new_activation)
-    return new_activation
+            await session.flush()
+            await session.refresh(new_activation)
+            return new_activation
 
 
 async def delete_promo_activation(activation_id: int) -> bool:
@@ -568,20 +608,22 @@ async def delete_promo_activation(activation_id: int) -> bool:
             await session.delete(activation)
             return True
 
-async def complete_promo_activation(activation_id: int, session) -> bool:
-    """Завершает активацию, используя переданную сессию."""
-    activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
-    if not activation or activation.status != 'pending_condition':
-        return False
-    
-    promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
-    if promo_to_update.current_uses >= promo_to_update.total_uses:
-        logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
-        return False
+async def complete_promo_activation(activation_id: int) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            """Завершает активацию, используя переданную сессию."""
+            activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
+            if not activation or activation.status != 'pending_condition':
+                return False
+            
+            promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
+            if promo_to_update.current_uses >= promo_to_update.total_uses:
+                logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
+                return False
 
-    activation.status = 'completed'
-    promo_to_update.current_uses += 1
-    return True
+            activation.status = 'completed'
+            promo_to_update.current_uses += 1
+            return True
 
 # --- Функции для системы поддержки ---
 async def create_support_ticket(user_id: int, username: str, question: str, admin_message_ids: dict, photo_file_id: str = None) -> SupportTicket:
@@ -766,8 +808,8 @@ async def ban_user(user_id: int, reason: str) -> bool:
             user.banned_at = datetime.datetime.utcnow()
             return True
 
-async def unban_user(user_id: int) -> bool:
-    """Снимает бан с пользователя."""
+async def unban_user(user_id: int, is_first_unban: bool = False) -> bool:
+    """Снимает бан с пользователя и увеличивает счетчик разбанов."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -776,6 +818,8 @@ async def unban_user(user_id: int) -> bool:
             user.is_banned = False
             user.ban_reason = None
             user.banned_at = None
+            if is_first_unban:
+                user.unban_count += 1
             return True
 
 async def update_last_unban_request_time(user_id: int):
@@ -785,6 +829,64 @@ async def update_last_unban_request_time(user_id: int):
             user = await session.get(User, user_id)
             if user:
                 user.last_unban_request_at = datetime.datetime.utcnow()
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ СИСТЕМЫ АМНИСТИИ ---
+async def create_unban_request(user_id: int, reason: str) -> Optional[UnbanRequest]:
+    """Создает новый запрос на разбан в базе данных."""
+    async with async_session() as session:
+        async with session.begin():
+            new_request = UnbanRequest(user_id=user_id, reason=reason, status='pending')
+            session.add(new_request)
+            await session.flush()
+            await session.refresh(new_request)
+            return new_request
+
+async def get_pending_unban_requests(page: int = 1, limit: int = 5) -> List[UnbanRequest]:
+    """Получает список ожидающих запросов на разбан с пагинацией."""
+    async with async_session() as session:
+        query = (
+            select(UnbanRequest)
+            .where(UnbanRequest.status == 'pending')
+            .options(selectinload(UnbanRequest.user))
+            .order_by(UnbanRequest.created_at)
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_pending_unban_requests_count() -> int:
+    """Возвращает общее количество ожидающих запросов на разбан."""
+    async with async_session() as session:
+        query = select(func.count(UnbanRequest.id)).where(UnbanRequest.status == 'pending')
+        result = await session.execute(query)
+        return result.scalar_one()
+
+async def get_unban_request_by_id(request_id: int) -> Optional[UnbanRequest]:
+    """Получает запрос на разбан по его ID."""
+    async with async_session() as session:
+        return await session.get(UnbanRequest, request_id, options=[selectinload(UnbanRequest.user)])
+
+async def update_unban_request_status(request_id: int, status: str, admin_id: int) -> bool:
+    """Обновляет статус запроса на разбан."""
+    async with async_session() as session:
+        async with session.begin():
+            request = await session.get(UnbanRequest, request_id)
+            if not request:
+                return False
+            request.status = status
+            request.reviewed_by_admin_id = admin_id
+            return True
+            
+async def get_unban_request_by_status(user_id: int, status: str) -> Optional[UnbanRequest]:
+    """Находит запрос на разбан для пользователя по статусу."""
+    async with async_session() as session:
+        query = select(UnbanRequest).where(
+            UnbanRequest.user_id == user_id,
+            UnbanRequest.status == status
+        ).order_by(desc(UnbanRequest.created_at)).limit(1)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
 
 # --- Функции для реферальной системы ---
 async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -> bool:

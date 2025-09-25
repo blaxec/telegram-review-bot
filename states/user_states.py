@@ -109,6 +109,7 @@ class AdminState(StatesGroup):
     ADD_LINKS = State() 
     DELETE_LINK_ID = State()
     RETURN_LINK_ID = State()
+    LINK_LIST_VIEW = State() # НОВОЕ
 
     # Состояния для процесса бана
     BAN_REASON = State()

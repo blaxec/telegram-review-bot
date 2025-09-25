@@ -361,34 +361,32 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
     user = await db_manager.get_user(user_id)
     reward_amount = Rewards.GMAIL_ACCOUNT
 
-    async with db_manager.async_session() as session:
-        async with session.begin():
-            if user and user.referrer_id:
-                referrer = await session.get(db_manager.User, user.referrer_id)
-                if referrer and referrer.referral_path == 'gmail':
-                    reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
-                    await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
-                    try:
-                        await bot.send_message(
-                            referrer.id,
-                            f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
-                            f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT:.2f} ⭐ в копилку."
-                        )
-                    except Exception as e:
-                        logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
-
-            await db_manager.update_balance(user_id, reward_amount, op_type="PROMO_ACTIVATED", description="Создание Gmail аккаунта")
-            
-            cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
-            if cooldown_end_time:
-                scheduler.add_job(
-                    send_cooldown_expired_notification, 
-                    'date', 
-                    run_date=cooldown_end_time, 
-                    args=[bot, user_id, "gmail"]
+    if user and user.referrer_id:
+        referrer = await db_manager.get_user(user.referrer_id)
+        if referrer and referrer.referral_path == 'gmail':
+            reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
+            await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
+            try:
+                await bot.send_message(
+                    referrer.id,
+                    f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
+                    f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT:.2f} ⭐ в копилку."
                 )
-            
-            await check_and_apply_promo_reward(user_id, "gmail_account", bot)
+            except Exception as e:
+                logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")
+
+    await db_manager.update_balance(user_id, reward_amount, op_type="PROMO_ACTIVATED", description="Создание Gmail аккаунта")
+    
+    cooldown_end_time = await db_manager.set_platform_cooldown(user_id, "gmail", Durations.COOLDOWN_GMAIL_HOURS)
+    if cooldown_end_time:
+        scheduler.add_job(
+            send_cooldown_expired_notification, 
+            'date', 
+            run_date=cooldown_end_time, 
+            args=[bot, user_id, "gmail"]
+        )
+    
+    await check_and_apply_promo_reward(user_id, "gmail_account", bot)
     
     try:
         msg = await bot.send_message(user_id, f"✅ Ваш аккаунт успешно прошел проверку. +{reward_amount:.2f} звезд начислено на баланс.", reply_markup=reply.get_main_menu_keyboard())
