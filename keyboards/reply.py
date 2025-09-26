@@ -6,7 +6,8 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Возвращает клавиатуру главного меню."""
     kb = [
         [KeyboardButton(text='👤 Профиль'), KeyboardButton(text='💰 Заработок')],
-        [KeyboardButton(text='📊 Статистика'), KeyboardButton(text='💬 Поддержка')]
+        [KeyboardButton(text='📊 Статистика'), KeyboardButton(text='💬 Поддержка')],
+        [KeyboardButton(text='💼 Вакансия')]
     ]
     keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     return keyboard

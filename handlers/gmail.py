@@ -16,6 +16,7 @@ from database import db_manager
 from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
+from logic.gmail_logic import parse_gmail_data # <<< ИЗМЕНЕНИЕ: Импорт из нового файла
 from logic import admin_roles
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ async def request_another_phone(callback: CallbackQuery, state: FSMContext):
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, is_another: bool):
+async def send_device_model_to_admin(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, is_another: bool):
     """Отправляет модель устройства на проверку админу с полным набором кнопок."""
     device_model = message.text
     user_id = message.from_user.id
@@ -158,7 +159,8 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
             bot,
             text=admin_notification,
             keyboard=inline.get_admin_verification_keyboard(user_id, context),
-            task_type="gmail_device_model"
+            task_type="gmail_device_model",
+            scheduler=scheduler
         )
     except Exception as e:
         await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
@@ -166,25 +168,25 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
         logger.error(f"Ошибка отправки модели устройства админу: {e}")
 
 @router.message(UserState.GMAIL_ENTER_DEVICE_MODEL)
-async def process_device_model(message: Message, state: FSMContext, bot: Bot):
+async def process_device_model(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_previous_messages(message, state)
     if not message.text:
         prompt_msg = await message.answer("Пожалуйста, отправьте модель устройства в виде текста.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     logger.info(f"Caught device model from user {message.from_user.id} in state GMAIL_ENTER_DEVICE_MODEL.")
-    await send_device_model_to_admin(message, state, bot, is_another=False)
+    await send_device_model_to_admin(message, state, bot, scheduler, is_another=False)
 
 
 @router.message(UserState.GMAIL_ENTER_ANOTHER_DEVICE_MODEL)
-async def process_another_device_model(message: Message, state: FSMContext, bot: Bot):
+async def process_another_device_model(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_previous_messages(message, state)
     if not message.text:
         prompt_msg = await message.answer("Пожалуйста, отправьте модель устройства в виде текста.")
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
     logger.info(f"Caught another device model from user {message.from_user.id} in state GMAIL_ENTER_ANOTHER_DEVICE_MODEL.")
-    await send_device_model_to_admin(message, state, bot, is_another=True)
+    await send_device_model_to_admin(message, state, bot, scheduler, is_another=True)
 
 
 @router.callback_query(F.data == 'gmail_send_for_verification', UserState.GMAIL_AWAITING_VERIFICATION)
@@ -237,7 +239,8 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
             bot,
             text=admin_notification,
             keyboard=inline.get_admin_gmail_final_check_keyboard(user_id),
-            task_type="gmail_final_check"
+            task_type="gmail_final_check",
+            scheduler=scheduler
         )
     except Exception as e:
         await callback.message.answer("Не удалось отправить аккаунт на проверку. Попробуйте позже.")
@@ -304,18 +307,28 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     
-    data_lines = message.text.strip().split('\n')
-    if len(data_lines) != 4:
-        await message.answer("Неверный формат. Нужно 4 строки: Имя, Фамилия, Пароль, Почта. Попробуйте снова.")
+    # <<< ИЗМЕНЕНИЕ: Используем парсер >>>
+    is_success, parsed_data = parse_gmail_data(message.text)
+    
+    if not is_success:
+        await message.answer(parsed_data) # parsed_data содержит текст ошибки
         return
         
-    name, surname, password, email = data_lines
+    name = parsed_data.get('name')
+    surname = parsed_data.get('surname')
+    password = parsed_data.get('password')
+    email = parsed_data.get('email')
+    
     full_email = f"{email}@gmail.com"
+    # Формируем имя и фамилию для сообщения
+    full_name_text = f"Имя: <code>{name}</code>\n"
+    if surname:
+        full_name_text += f"Фамилия: <code>{surname}</code>\n"
+
     user_message = (
         "✅ Администратор одобрил ваш запрос и прислал данные для создания аккаунта:\n\n"
         "<b>Данные для создания:</b>\n"
-        f"Имя: <code>{name}</code>\n"
-        f"Фамилия: <code>{surname}</code>\n"
+        f"{full_name_text}"
         f"Пароль: <code>{password}</code>\n"
         f"Почта: <code>{full_email}</code>\n\n"
         f"⏳ У вас есть <b>{Durations.TASK_GMAIL_VERIFICATION_TIMEOUT} минут</b>, чтобы создать аккаунт и нажать кнопку 'Отправить на проверку'."

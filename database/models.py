@@ -46,12 +46,22 @@ class User(Base):
     
     # --- Поле для режима DND ---
     dnd_enabled = Column(Boolean, default=False, nullable=False)
+    
+    # --- НОВЫЕ ПОЛЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
+    is_intern = Column(Boolean, default=False, nullable=False)
+    is_busy_intern = Column(Boolean, default=False, nullable=False)
+
 
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
     operations = relationship("OperationHistory", back_populates="user")
     unban_requests = relationship("UnbanRequest", back_populates="user") # НОВАЯ СВЯЗЬ
+    
+    # --- НОВЫЕ СВЯЗИ ДЛЯ СТАЖИРОВКИ ---
+    internship_application = relationship("InternshipApplication", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    internship_tasks = relationship("InternshipTask", back_populates="intern")
+    internship_mistakes = relationship("InternshipMistake", back_populates="intern")
 
 
 class Review(Base):
@@ -189,3 +199,51 @@ class UnbanRequest(Base):
     reviewed_by_admin_id = Column(BigInteger, nullable=True)
     
     user = relationship("User", back_populates="unban_requests")
+
+# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
+
+class InternshipApplication(Base):
+    __tablename__ = 'internship_applications'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), unique=True, nullable=False)
+    username = Column(String, nullable=True)
+    age = Column(String, nullable=False)
+    hours_per_day = Column(String, nullable=False)
+    platforms = Column(String, nullable=False)
+    status = Column(Enum('pending', 'approved', 'rejected', 'archived_success', name='internship_app_status_enum'), default='pending', nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    user = relationship("User", back_populates="internship_application")
+
+class InternshipTask(Base):
+    __tablename__ = 'internship_tasks'
+    
+    id = Column(Integer, primary_key=True)
+    intern_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    platform = Column(String, nullable=False)
+    task_type = Column(String, nullable=False)
+    goal_count = Column(Integer, nullable=False)
+    current_progress = Column(Integer, default=0)
+    error_count = Column(Integer, default=0)
+    estimated_salary = Column(Float, default=0.0)
+    status = Column(Enum('active', 'completed', 'fired', name='internship_task_status_enum'), default='active', nullable=False)
+    assigned_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_task_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    intern = relationship("User", back_populates="internship_tasks")
+    mistakes = relationship("InternshipMistake", back_populates="task", cascade="all, delete-orphan")
+
+class InternshipMistake(Base):
+    __tablename__ = 'internship_mistakes'
+    
+    id = Column(Integer, primary_key=True)
+    intern_task_id = Column(Integer, ForeignKey('internship_tasks.id'), nullable=False)
+    intern_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    review_id = Column(Integer, nullable=True) # ID отзыва или другой связанной сущности
+    reason = Column(String, nullable=False)
+    penalty_amount = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    task = relationship("InternshipTask", back_populates="mistakes")
+    intern = relationship("User", back_populates="internship_mistakes")

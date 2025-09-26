@@ -71,6 +71,13 @@ class UserState(StatesGroup):
     # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ АМНИСТИИ ---
     UNBAN_AWAITING_REASON = State()
 
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК (ПОЛЬЗОВАТЕЛЬ) ---
+    INTERNSHIP_APP_START = State()
+    INTERNSHIP_APP_AGE = State()
+    INTERNSHIP_APP_HOURS = State()
+    INTERNSHIP_APP_PLATFORMS = State()
+    INTERNSHIP_APP_CONFIRM = State()
+
 
 class AdminState(StatesGroup):
     # Состояния для указания причин
@@ -125,3 +132,7 @@ class AdminState(StatesGroup):
     REWARD_SET_PLACES_COUNT = State()
     REWARD_SET_AMOUNT_FOR_PLACE = State()
     REWARD_SET_TIMER = State()
+
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК (АДМИН) ---
+    INTERNSHIP_CANDIDATE_TASK_GOAL = State()
+    INTERNSHIP_FIRE_REASON = State()

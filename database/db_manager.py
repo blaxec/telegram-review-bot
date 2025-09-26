@@ -10,7 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from database.models import (Base, User, Review, Link, WithdrawalRequest, 
                              PromoCode, PromoActivation, SupportTicket,
-                             RewardSetting, SystemSetting, OperationHistory, UnbanRequest)
+                             RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
+                             InternshipApplication, InternshipTask, InternshipMistake) # ИМПОРТ НОВЫХ МОДЕЛЕЙ
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -1025,3 +1026,112 @@ async def delete_promo_code(promo_id: int) -> bool:
             )
             # rowcount > 0 означает, что удаление прошло успешно
             return result.rowcount > 0
+
+# --- НОВЫЙ РАЗДЕЛ: Функции для системы стажировок ---
+
+async def create_internship_application(user_id: int, username: str, age: str, hours: str, platforms: str) -> Optional[InternshipApplication]:
+    """Создает новую заявку на стажировку."""
+    async with async_session() as session:
+        async with session.begin():
+            new_app = InternshipApplication(
+                user_id=user_id,
+                username=username,
+                age=age,
+                hours_per_day=hours,
+                platforms=platforms
+            )
+            session.add(new_app)
+            await session.flush()
+            await session.refresh(new_app)
+            return new_app
+
+async def get_internship_application(user_id: int) -> Optional[InternshipApplication]:
+    """Получает заявку пользователя на стажировку."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(InternshipApplication).where(InternshipApplication.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+async def get_internship_stats_counts() -> Dict[str, int]:
+    """Получает количество анкет, кандидатов и стажеров для админ-панели."""
+    async with async_session() as session:
+        pending_apps_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'pending')
+        candidates_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'approved')
+        interns_q = select(func.count(User.id)).where(User.is_intern == True)
+        
+        pending_apps_res = await session.execute(pending_apps_q)
+        candidates_res = await session.execute(candidates_q)
+        interns_res = await session.execute(interns_q)
+        
+        return {
+            "applications": pending_apps_res.scalar_one(),
+            "candidates": candidates_res.scalar_one(),
+            "interns": interns_res.scalar_one()
+        }
+
+async def get_paginated_applications(status: str, page: int = 1, limit: int = 5) -> Tuple[List[InternshipApplication], int]:
+    """Получает список анкет с пагинацией."""
+    async with async_session() as session:
+        query = select(InternshipApplication).where(InternshipApplication.status == status).order_by(InternshipApplication.created_at)
+        count_query = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == status)
+        
+        total_count = await session.scalar(count_query)
+        
+        paginated_query = query.offset((page - 1) * limit).limit(limit)
+        result = await session.execute(paginated_query)
+        apps = result.scalars().all()
+        
+        return apps, total_count
+
+async def get_application_by_id(app_id: int) -> Optional[InternshipApplication]:
+    """Получает анкету по ID."""
+    async with async_session() as session:
+        return await session.get(InternshipApplication, app_id)
+
+async def update_application_status(app_id: int, new_status: str) -> bool:
+    """Обновляет статус анкеты."""
+    async with async_session() as session:
+        async with session.begin():
+            app = await session.get(InternshipApplication, app_id)
+            if not app:
+                return False
+            app.status = new_status
+            return True
+
+async def get_active_intern_task(intern_id: int) -> Optional[InternshipTask]:
+    """Получает текущую активную задачу стажера."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(InternshipTask).where(
+                InternshipTask.intern_id == intern_id,
+                InternshipTask.status == 'active'
+            )
+        )
+        return result.scalar_one_or_none()
+
+async def find_available_intern() -> Optional[User]:
+    """Находит одного свободного стажера с самой давней датой последней задачи."""
+    async with async_session() as session:
+        query = select(User).join(InternshipTask, User.id == InternshipTask.intern_id).where(
+            User.is_intern == True,
+            User.is_busy_intern == False,
+            InternshipTask.status == 'active'
+        ).order_by(InternshipTask.last_task_at.asc()).limit(1)
+        
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+async def set_intern_busy(intern_id: int, is_busy: bool):
+    """Устанавливает флаг занятости для стажера и обновляет время последней задачи."""
+    async with async_session() as session:
+        async with session.begin():
+            user_stmt = update(User).where(User.id == intern_id).values(is_busy_intern=is_busy)
+            task_stmt = update(InternshipTask).where(
+                InternshipTask.intern_id == intern_id,
+                InternshipTask.status == 'active'
+            ).values(last_task_at=datetime.datetime.utcnow())
+            
+            await session.execute(user_stmt)
+            if is_busy: # Обновляем время только когда берет задачу
+                await session.execute(task_stmt)

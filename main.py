@@ -39,7 +39,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin, gmail,
-                      stats, promo, other, ban_system, referral, admin_roles)
+                      stats, promo, other, ban_system, referral, admin_roles, internship) # ИМПОРТ НОВОГО ХЭНДЛЕРА
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -69,6 +69,7 @@ async def set_bot_commands(bot: Bot):
 
     # Команды для ГЛАВНОГО администратора (включают все команды обычного)
     super_admin_commands = admin_commands + [
+        BotCommand(command="internships", description="🎓 Управление стажировками"),
         BotCommand(command="roles", description="🛠️ Управление ролями админов"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
@@ -148,6 +149,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(admin_roles.router)
+    dp.include_router(internship.router) # РЕГИСТРАЦИЯ НОВОГО РОУТЕРА
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
     dp.include_router(earning.router)

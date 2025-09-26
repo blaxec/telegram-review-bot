@@ -43,6 +43,13 @@ from logic.admin_logic import (
     get_unban_requests_page,
     process_unban_request_logic
 )
+# ИМПОРТ НОВОЙ ЛОГИКИ
+from logic.internship_logic import (
+    format_applications_page, 
+    format_single_application,
+    format_candidates_page,
+    format_interns_page
+)
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
@@ -1282,7 +1289,81 @@ async def process_timer_duration(message: Message, state: FSMContext):
     
     await message.answer(f"✅ Интервал выдачи наград установлен на {hours} часов. Изменения вступят в силу после следующего цикла.")
     await show_reward_settings_menu(message, state)
+
+# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ СИСТЕМОЙ СТАЖИРОВОК ---
+
+@router.message(Command("internships"), IsSuperAdmin())
+async def internships_main_menu(message: Message, state: FSMContext):
+    """Главное меню управления стажировками."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     
+    stats = await db_manager.get_internship_stats_counts()
+    await message.answer(
+        "<b>Панель управления стажировками</b>",
+        reply_markup=await inline.get_admin_internships_main_menu(stats)
+    )
+
+@router.callback_query(F.data.startswith("admin_internships:view:"), IsSuperAdmin())
+async def view_internship_list(callback: CallbackQuery, state: FSMContext):
+    """Показывает списки анкет, кандидатов или стажеров."""
+    await callback.answer()
+    _, _, list_type, page_str = callback.data.split(":")
+    page = int(page_str)
+    
+    if list_type == "applications":
+        apps, total = await db_manager.get_paginated_applications("pending", page)
+        total_pages = ceil(total / 5) if total > 0 else 1
+        text = format_applications_page(apps, page, total_pages)
+        keyboard = inline.get_pagination_keyboard("admin_internships:view:applications", page, total_pages)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
+@router.message(Command(F.text.startswith("view_app_")), IsSuperAdmin())
+async def view_single_application(message: Message, state: FSMContext):
+    """Показывает детальную информацию по одной анкете."""
+    try:
+        app_id = int(message.text.split("_")[2])
+    except (IndexError, ValueError):
+        return
+
+    app = await db_manager.get_application_by_id(app_id)
+    if not app:
+        await message.answer("Анкета не найдена.")
+        return
+        
+    text = format_single_application(app)
+    await message.answer(text, reply_markup=inline.get_admin_application_review_keyboard(app))
+
+@router.callback_query(F.data.startswith("admin_internships:action:"), IsSuperAdmin())
+async def process_application_action(callback: CallbackQuery, bot: Bot):
+    """Обрабатывает одобрение или отклонение анкеты."""
+    await callback.answer()
+    _, _, action, app_id_str = callback.data.split(":")
+    app_id = int(app_id_str)
+    
+    app = await db_manager.get_application_by_id(app_id)
+    if not app or app.status != 'pending':
+        await callback.message.edit_text("Эта анкета уже была обработана.", reply_markup=None)
+        return
+
+    if action == "approve":
+        await db_manager.update_application_status(app_id, "approved")
+        await callback.message.edit_text(f"✅ Анкета @{app.username} одобрена.", reply_markup=None)
+        try:
+            await bot.send_message(app.user_id, "🎉 Поздравляем! Ваша анкета на стажировку была одобрена. Ожидайте назначения первого задания.")
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {app.user_id} об одобрении анкеты: {e}")
+    
+    elif action == "reject":
+        await db_manager.update_application_status(app_id, "rejected")
+        await callback.message.edit_text(f"❌ Анкета @{app.username} отклонена.", reply_markup=None)
+        try:
+            await bot.send_message(app.user_id, "К сожалению, ваша анкета на стажировку была отклонена.")
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {app.user_id} об отклонении анкеты: {e}")
+
 
 # --- Обработчики состояний (FSM) ---
 

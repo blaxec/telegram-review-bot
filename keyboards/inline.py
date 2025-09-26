@@ -5,7 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import Rewards, GOOGLE_API_KEYS, TRANSFER_COMMISSION_PERCENT
 from aiogram import Bot
 from logic import admin_roles
-from database.models import UnbanRequest
+from database.models import UnbanRequest, InternshipApplication
 
 # --- /start и навигация ---
 
@@ -563,4 +563,62 @@ def get_current_settings_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура под сообщением с текущими настройками."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🗑 Удалить сообщение", callback_data="roles_delete_msg")
+    return builder.as_markup()
+
+# --- НОВЫЙ РАЗДЕЛ: Клавиатуры для системы стажировок ---
+
+def get_internship_application_start_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для начала подачи анкеты."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Заполнить анкету", callback_data="internship_app:start")
+    builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_internship_platform_selection_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для выбора платформ в анкете."""
+    builder = InlineKeyboardBuilder()
+    # data-атрибуты: 'toggle', название платформы, текст кнопки
+    builder.button(text="Google Карты", callback_data="internship_toggle:google:Google Карты")
+    builder.button(text="Яндекс (с текстом)", callback_data="internship_toggle:yandex_text:Яндекс (с текстом)")
+    builder.button(text="Яндекс (без текста)", callback_data="internship_toggle:yandex_no_text:Яндекс (без текста)")
+    builder.button(text="✅ Далее", callback_data="internship_app:platforms_done")
+    builder.button(text="❌ Отмена", callback_data="cancel_action")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_intern_cabinet_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура рабочего кабинета стажера."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📜 История ошибок", callback_data="intern_cabinet:mistakes")
+    builder.button(text="❌ Уволиться", callback_data="intern_cabinet:resign")
+    builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_intern_resign_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения увольнения."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, я уверен", callback_data="intern_cabinet:resign_confirm")
+    builder.button(text="⬅️ Нет, вернуться", callback_data="internship_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+async def get_admin_internships_main_menu(stats: dict) -> InlineKeyboardMarkup:
+    """Главное меню управления стажировками для админа."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"📝 Анкеты ({stats.get('applications', 0)})", callback_data="admin_internships:view:applications:1")
+    builder.button(text=f"🧑‍🎓 Кандидаты ({stats.get('candidates', 0)})", callback_data="admin_internships:view:candidates:1")
+    builder.button(text=f"👨‍💻 Стажёры ({stats.get('interns', 0)})", callback_data="admin_internships:view:interns:1")
+    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_admin_application_review_keyboard(app: InternshipApplication) -> InlineKeyboardMarkup:
+    """Клавиатура для просмотра и решения по анкете."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Одобрить", callback_data=f"admin_internships:action:approve:{app.id}")
+    builder.button(text="❌ Отклонить", callback_data=f"admin_internships:action:reject:{app.id}")
+    builder.button(text="⬅️ Назад к списку", callback_data="admin_internships:view:applications:1")
+    builder.adjust(2, 1)
     return builder.as_markup()
