@@ -545,6 +545,11 @@ async def get_promo_by_code(code: str, for_update: bool = False) -> Union[PromoC
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
+async def get_promo_by_id(promo_id: int) -> Union[PromoCode, None]:
+    """Получает промокод по его числовому ID."""
+    async with async_session() as session:
+        return await session.get(PromoCode, promo_id)
+
 async def get_user_promo_activation(user_id: int, promo_code_id: int) -> Union[PromoActivation, None]:
     async with async_session() as session:
         result = await session.execute(

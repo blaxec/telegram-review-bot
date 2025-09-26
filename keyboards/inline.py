@@ -40,7 +40,7 @@ def get_operation_history_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_cancel_to_profile_keyboard() -> InlineKeyboardMarkup:
-    """НОВАЯ ФУНКЦИЯ: Создает кнопку "Отмена", возвращающую в профиль."""
+    """Создает кнопку "Отмена", возвращающую в профиль."""
     buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -304,7 +304,7 @@ def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder.button(text="➕ Добавить быстрые 🚀", callback_data=f"admin_refs:add:fast:no_photo:{platform}")
     builder.button(text="➕ Добавить быстрые с фото 🚀📸", callback_data=f"admin_refs:add:fast:photo:{platform}")
     builder.button(text="⬅️ Назад к выбору платформ", callback_data="admin_refs:back_to_selection")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
 def get_back_to_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:

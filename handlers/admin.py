@@ -39,15 +39,15 @@ from logic.admin_logic import (
     reject_final_review_logic,
     format_banned_user_page,
     format_promo_code_page,
-    get_paginated_links_text, # НОВЫЙ ИМПОРТ
-    get_unban_requests_page, # НОВЫЙ ИМПОРТ
-    process_unban_request_logic # НОВЫЙ ИМПОРТ
+    get_paginated_links_text,
+    get_unban_requests_page,
+    process_unban_request_logic
 )
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
 from logic.cleanup_logic import check_and_expire_links
 from logic import admin_roles
-from logic.notification_manager import send_notification_to_admins # ИЗМЕНЕНИЕ
+from logic.notification_manager import send_notification_to_admins
 from utils.access_filters import IsAdmin, IsSuperAdmin
 
 router = Router()
@@ -186,7 +186,6 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     )
     
     if callback.message:
-        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
         cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
         prompt_msg = await callback.message.edit_text(
             f"Выбрана платформа: <i>{platform}</i>.\n"
@@ -200,7 +199,6 @@ async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.ADD_LINKS, F.text, IsSuperAdmin())
 async def admin_add_links_handler(message: Message, state: FSMContext):
     data = await state.get_data()
-    # ИЗМЕНЕНИЕ: Удаляем предыдущее сообщение с инпутом и промпт
     await delete_previous_messages(message, state)
 
     platform = data.get("platform_for_links")
@@ -239,10 +237,10 @@ async def admin_view_refs_stats(callback: CallbackQuery):
 async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
     """Отображает первую страницу списка ссылок с фильтрами."""
     await callback.answer()
+    await state.set_state(AdminState.LINK_LIST_VIEW)
     
     parts = callback.data.split(':')
     platform = parts[2]
-    # Устанавливаем фильтр по умолчанию "all"
     filter_type = parts[3] if len(parts) > 3 else "all"
     
     await state.update_data(link_list_filter=filter_type)
@@ -260,9 +258,9 @@ async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: 
     if callback.message:
         await callback.message.edit_text(page_text, reply_markup=keyboard, disable_web_page_preview=True)
 
-@router.callback_query(F.data.startswith("links_page:"), IsSuperAdmin())
+@router.callback_query(F.data.startswith("links_page:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def link_list_paginator(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает пагинацию и смену фильтров."""
+    """Обрабатывает пагинацию."""
     await callback.answer()
     
     _, platform, page_str = callback.data.split(":")
@@ -273,15 +271,14 @@ async def link_list_paginator(callback: CallbackQuery, state: FSMContext):
     
     await show_links_page(callback, state, platform, filter_type, page)
 
-@router.callback_query(F.data.startswith("admin_refs:delete_start:"), IsSuperAdmin())
+@router.callback_query(F.data.startswith("admin_refs:delete_start:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     platform = callback.data.split(':')[2]
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
     if callback.message:
-        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
-        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
+        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:list:{platform}")
         prompt_msg = await callback.message.edit_text(
             "Введите ID ссылок, которые хотите удалить.\n"
             "Можно ввести несколько ID через пробел или запятую.", 
@@ -291,7 +288,6 @@ async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.DELETE_LINK_ID, IsSuperAdmin())
 async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: Bot):
-    # Удаляем сообщение с ID и промпт
     await delete_previous_messages(message, state)
     data = await state.get_data()
     platform = data.get("platform_for_deletion")
@@ -331,11 +327,9 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     if not summary_text:
          summary_text = "Не найдено корректных ID для удаления."
     
-    # Отправляем временное сообщение и сразу же "нажимаем" на кнопку, чтобы обновить список
     temp_message = await message.answer(summary_text)
     await state.clear()
     
-    # Имитируем нажатие на кнопку для возврата к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message, 
@@ -343,7 +337,7 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     )
     await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
-@router.callback_query(F.data.startswith("admin_refs:return_start:"), IsSuperAdmin())
+@router.callback_query(F.data.startswith("admin_refs:return_start:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса возврата ссылки в 'available'."""
     await callback.answer()
@@ -351,8 +345,7 @@ async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.RETURN_LINK_ID)
     await state.update_data(platform_for_return=platform)
     if callback.message:
-        # ИЗМЕНЕНИЕ: Добавляем платформу в callback_data для корректного возврата
-        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
+        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:list:{platform}")
         prompt_msg = await callback.message.edit_text(
             "Введите ID 'зависшей' ссылки (в статусе 'assigned'), которую хотите вернуть в доступные:", 
             reply_markup=cancel_button
@@ -1097,7 +1090,6 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     
     if identifier.isdigit():
         promo_id = int(identifier)
-        # ИСПРАВЛЕНИЕ: Нужно искать по ID, а не по коду
         promo_to_delete = await db_manager.get_promo_by_id(promo_id) 
     else:
         promo_to_delete = await db_manager.get_promo_by_code(identifier)
@@ -1128,7 +1120,7 @@ async def show_amnesty_list(message: Message, state: FSMContext):
 async def show_amnesty_page(message_or_callback: Message | CallbackQuery, state: FSMContext, page: int):
     requests = await db_manager.get_pending_unban_requests(page=page)
     total_requests_count = await db_manager.get_pending_unban_requests_count()
-    requests_per_page = 5 # Меньше, т.к. текста больше
+    requests_per_page = 5
     total_pages = ceil(total_requests_count / requests_per_page) if total_requests_count > 0 else 1
 
     text = await get_unban_requests_page(requests, page, total_pages)
@@ -1156,7 +1148,6 @@ async def amnesty_action_handler(callback: CallbackQuery, state: FSMContext, bot
     
     await callback.answer(message_text, show_alert=True)
     
-    # Обновляем список, чтобы убрать обработанный запрос
     await show_amnesty_page(callback, state, 1)
 
 
@@ -1469,4 +1460,19 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     if not success:
         await message.answer("❌ Произошла при бане пользователя.")
         await state.clear()
-       
+        return
+
+    try:
+        user_notification = (
+            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b>\n\n"
+            f"<b>Причина:</b> {ban_reason}\n\n"
+            "Вам закрыт доступ ко всем функциям бота. "
+            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
+        )
+        await bot.send_message(user_id_to_ban, user_notification)
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
+
+    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
+    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
+    await state.clear()
