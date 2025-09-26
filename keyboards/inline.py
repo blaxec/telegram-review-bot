@@ -3,9 +3,9 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import Rewards, GOOGLE_API_KEYS, TRANSFER_COMMISSION_PERCENT
-# НОВЫЕ ИМПОРТЫ
 from aiogram import Bot
 from logic import admin_roles
+from database.models import UnbanRequest
 
 # --- /start и навигация ---
 
@@ -17,8 +17,8 @@ def get_back_to_main_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='⬅️ Главное меню', callback_data='go_main_menu')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_cancel_inline_keyboard() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_action')]]
+def get_cancel_inline_keyboard(callback_data: str = 'cancel_action') -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data=callback_data)]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Раздел "Профиль" ---
@@ -39,6 +39,11 @@ def get_operation_history_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='⬅️ Назад в профиль', callback_data='go_profile')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_cancel_to_profile_keyboard() -> InlineKeyboardMarkup:
+    """НОВАЯ ФУНКЦИЯ: Создает кнопку "Отмена", возвращающую в профиль."""
+    buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 # --- Раздел "Статистика" ---
 
 def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
@@ -49,31 +54,18 @@ def get_stats_keyboard(is_anonymous: bool) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- Передача и вывод звезд ---
+def get_skip_comment_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text='⏩ Пропустить', callback_data=f'{prefix}_skip_comment')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- Передача звезд ---
-def get_transfer_amount_keyboard() -> InlineKeyboardMarkup:
-    commission_text = f"(комиссия {TRANSFER_COMMISSION_PERCENT}%)" if TRANSFER_COMMISSION_PERCENT > 0 else ""
+def get_attach_media_keyboard(prefix: str) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text=f'🔢 Ввести сумму {commission_text}', callback_data='transfer_amount_other')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='🖼️ Да, прикрепить', callback_data=f'{prefix}_attach_media_yes')],
+        [InlineKeyboardButton(text='🙅‍♂️ Нет, пропустить', callback_data=f'{prefix}_attach_media_no')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_transfer_show_nick_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text='👍 Да', callback_data='transfer_show_nick_yes')],
-        [InlineKeyboardButton(text='🙈 Нет (Анонимно)', callback_data='transfer_show_nick_no')]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def get_ask_comment_keyboard(prefix: str) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text='✍️ Да', callback_data=f'{prefix}_ask_comment_yes')],
-        [InlineKeyboardButton(text='🙅‍♂️ Нет', callback_data=f'{prefix}_ask_comment_no')]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-# --- Вывод звезд ---
 def get_withdraw_amount_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [
@@ -85,7 +77,7 @@ def get_withdraw_amount_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='100 ⭐', callback_data='withdraw_amount_100'),
         ],
         [InlineKeyboardButton(text='🔢 Другая сумма', callback_data='withdraw_amount_other')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -93,7 +85,14 @@ def get_withdraw_recipient_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='👤 Себе', callback_data='withdraw_recipient_self')],
         [InlineKeyboardButton(text='👥 Указать пользователя', callback_data='withdraw_recipient_other')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_action')]
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_ask_comment_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text='✍️ Да', callback_data=f'{prefix}_ask_comment_yes')],
+        [InlineKeyboardButton(text='🙅‍♂️ Нет', callback_data=f'{prefix}_ask_comment_no')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -153,7 +152,7 @@ def get_write_review_platform_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# --- Google Отзывы ---
+# --- Google и Yandex Отзывы ---
 
 def get_google_init_keyboard() -> InlineKeyboardMarkup:
     buttons = [
@@ -196,7 +195,6 @@ def get_task_confirmation_keyboard(platform: str) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='👍 Выполнено', callback_data=f'{platform}_confirm_task')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- Yandex Отзывы ---
 def get_yandex_review_type_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='С текстом (50 ⭐)', callback_data='yandex_review_type:with_text')],
@@ -293,7 +291,6 @@ def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Google Карты", callback_data="admin_refs:select_platform:google_maps")
     builder.button(text="Яндекс (с текстом)", callback_data="admin_refs:select_platform:yandex_with_text")
     builder.button(text="Яндекс (без текста)", callback_data="admin_refs:select_platform:yandex_without_text")
-    builder.button(text="🔄 Найти и пометить просроченные", callback_data="admin_refs:expire_manual")
     builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -302,17 +299,12 @@ def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📊 Статистика", callback_data=f"admin_refs:stats:{platform}")
     builder.button(text="📄 Показать список", callback_data=f"admin_refs:list:{platform}")
-    builder.button(text="➕ Добавить ссылки", callback_data=f"admin_refs:add_choose_type:{platform}")
+    builder.button(text="➕ Добавить обычные", callback_data=f"admin_refs:add:regular:no_photo:{platform}")
+    builder.button(text="➕ Добавить с фото 📸", callback_data=f"admin_refs:add:regular:photo:{platform}")
+    builder.button(text="➕ Добавить быстрые 🚀", callback_data=f"admin_refs:add:fast:no_photo:{platform}")
+    builder.button(text="➕ Добавить быстрые с фото 🚀📸", callback_data=f"admin_refs:add:fast:photo:{platform}")
     builder.button(text="⬅️ Назад к выбору платформ", callback_data="admin_refs:back_to_selection")
-    builder.adjust(1)
-    return builder.as_markup()
-    
-def get_admin_add_link_type_keyboard(platform: str) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Обычные", callback_data=f"admin_refs:add:regular:{platform}")
-    builder.button(text="➕ Быстрые 🚀", callback_data=f"admin_refs:add:fast:{platform}")
-    builder.button(text="⬅️ Назад", callback_data=f"admin_refs:select_platform:{platform}")
-    builder.adjust(2,1)
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 def get_back_to_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
@@ -320,30 +312,36 @@ def get_back_to_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder.button(text='⬅️ Назад', callback_data=f'admin_refs:select_platform:{platform}')
     return builder.as_markup()
 
-def get_admin_refs_list_keyboard(platform: str) -> InlineKeyboardMarkup:
+def get_link_list_control_keyboard(platform: str, current_page: int, total_pages: int, filter_type: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text='🗑️ Удалить ссылку из базы', callback_data=f'admin_refs:delete_start:{platform}')
-    builder.button(text='↪️ Вернуть ссылку в доступные', callback_data=f'admin_refs:return_start:{platform}')
-    builder.button(text='⬅️ Назад к меню платформы', callback_data=f'admin_refs:select_platform:{platform}')
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_admin_hold_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
-    buttons = [
-        [
-            InlineKeyboardButton(text='✅ Одобрить', callback_data=f'admin_hold_approve:{review_id}'),
-            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'admin_hold_reject:{review_id}')
-        ]
+    
+    filters = [
+        ("Все", "all"), ("🚀", "fast"), 
+        ("📸", "photo"), ("📄", "regular")
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def get_admin_gmail_data_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text='✅ Отправить данные', callback_data=f'admin_gmail_send_data:{user_id}')
-    builder.button(text='❌ Отклонить', callback_data=f'admin_verify:reject:gmail_data_request:{user_id}')
-    builder.button(text='⚠️ Выдать предупреждение', callback_data=f'admin_verify:warn:gmail_data_request:{user_id}')
-    builder.adjust(2,1)
+    filter_buttons = []
+    for text, f_type in filters:
+        btn_text = f"✅ {text}" if filter_type == f_type else text
+        filter_buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"admin_refs:list:{platform}:{f_type}"))
+    builder.row(*filter_buttons)
+    
+    pagination_buttons = []
+    if current_page > 1:
+        pagination_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"links_page:{platform}:{current_page-1}"))
+    if total_pages > 1:
+        pagination_buttons.append(InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop"))
+    if current_page < total_pages:
+        pagination_buttons.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"links_page:{platform}:{current_page+1}"))
+    if pagination_buttons:
+        builder.row(*pagination_buttons)
+        
+    builder.row(
+        InlineKeyboardButton(text='🗑️ Удалить', callback_data=f'admin_refs:delete_start:{platform}'),
+        InlineKeyboardButton(text='↪️ Вернуть', callback_data=f'admin_refs:return_start:{platform}')
+    )
+    builder.row(InlineKeyboardButton(text='⬅️ Назад к меню платформы', callback_data=f'admin_refs:select_platform:{platform}'))
     return builder.as_markup()
+
 
 def get_admin_gmail_final_check_keyboard(user_id: int) -> InlineKeyboardMarkup:
     buttons = [
@@ -388,17 +386,17 @@ def get_reward_settings_menu_keyboard(current_timer_hours: int) -> InlineKeyboar
     builder.button(text="✏️ Изменить кол-во призовых мест", callback_data="reward_setting:set_places")
     builder.button(text="💰 Изменить награды", callback_data="reward_setting:set_amounts")
     builder.button(text=f"⏰ Таймер выдачи (сейчас: {current_timer_hours} ч)", callback_data="reward_setting:set_timer")
-    builder.button(text="⬅️ Назад", callback_data="cancel_action")
+    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
     builder.adjust(1)
     return builder.as_markup()
 
-def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int, show_close: bool = True) -> InlineKeyboardMarkup:
     """Создает клавиатуру для пагинации списков."""
     builder = InlineKeyboardBuilder()
     
-    back_button = InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:page:{current_page-1}")
+    back_button = InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:page:{current_page-1}")
     page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop")
-    forward_button = InlineKeyboardButton(text="➡️ Вперед", callback_data=f"{prefix}:page:{current_page+1}")
+    forward_button = InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:page:{current_page+1}")
 
     row = []
     if current_page > 1:
@@ -411,33 +409,24 @@ def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int) ->
     if row:
         builder.row(*row)
     
-    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data=f"{prefix}:close"))
+    if show_close:
+        builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="go_main_menu"))
     return builder.as_markup()
+
 
 def get_promo_list_keyboard(current_page: int, total_pages: int) -> InlineKeyboardMarkup:
     """Создает клавиатуру для списка промокодов с пагинацией и кнопкой удаления."""
     builder = InlineKeyboardBuilder()
     
-    back_button = InlineKeyboardButton(text="⬅️ Назад", callback_data=f"promolist:page:{current_page-1}")
-    page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop")
-    forward_button = InlineKeyboardButton(text="➡️ Вперед", callback_data=f"promolist:page:{current_page+1}")
-
-    pagination_row = []
-    if current_page > 1:
-        pagination_row.append(back_button)
-    if total_pages > 1:
-        pagination_row.append(page_button)
-    if current_page < total_pages:
-        pagination_row.append(forward_button)
-    
-    if pagination_row:
-        builder.row(*pagination_row)
+    pagination_markup = get_pagination_keyboard("promolist", current_page, total_pages, show_close=False)
+    for row in pagination_markup.inline_keyboard:
+        builder.row(*row)
 
     builder.row(InlineKeyboardButton(text="🗑️ Удалить промокод", callback_data="promolist:delete_start"))
-    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="promolist:close"))
+    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="go_main_menu"))
     return builder.as_markup()
 
-# --- Клавиатуры для поддержки ---
+# --- Клавиатуры для поддержки и амнистии ---
 def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='✍️ Ответить на вопрос', callback_data=f'support_answer:{ticket_id}')
@@ -445,15 +434,24 @@ def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMa
     builder.adjust(1)
     return builder.as_markup()
 
-def get_unban_request_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для админа с запросом на разбан."""
-    buttons = [
-        [
-            InlineKeyboardButton(text="✅ Разбанить", callback_data=f"unban_approve:{user_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"unban_reject:{user_id}")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def get_amnesty_keyboard(requests: list[UnbanRequest], current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    for req in requests:
+        user = req.user
+        username = f"@{user.username}" if user.username else f"ID {user.id}"
+        ban_count_text = f"({user.unban_count + 1}-й раз)" if user.unban_count > 0 else "(1-й раз)"
+        builder.row(
+            InlineKeyboardButton(text=f"✅ Одобрить для {username} {ban_count_text}", callback_data=f"amnesty:action:approve:{req.id}"),
+            InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"amnesty:action:reject:{req.id}")
+        )
+    
+    pagination_markup = get_pagination_keyboard("amnesty", current_page, total_pages, show_close=True)
+    for row in pagination_markup.inline_keyboard:
+        builder.row(*row)
+        
+    return builder.as_markup()
+
 
 # --- Клавиатуры для промокодов ---
 

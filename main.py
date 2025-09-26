@@ -54,7 +54,8 @@ async def set_bot_commands(bot: Bot):
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="stars", description="✨ Мой профиль и баланс"),
-        BotCommand(command="promo", description="🎁 Ввести промокод")
+        BotCommand(command="promo", description="🎁 Ввести промокод"),
+        BotCommand(command="unban_request", description="🙏 Подать запрос на разбан")
     ]
     
     # Команды для ОБЫЧНЫХ администраторов

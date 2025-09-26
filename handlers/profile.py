@@ -52,7 +52,6 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     
     keyboard = inline.get_profile_keyboard()
     
-    # Логика для редактирования или отправки нового сообщения
     is_message = isinstance(message_or_callback, Message)
     target_message = message_or_callback if is_message else message_or_callback.message
 

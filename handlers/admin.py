@@ -1024,6 +1024,7 @@ async def ban_user_start(message: Message, state: FSMContext):
 
 @router.message(Command("banlist"), IsSuperAdmin())
 async def show_ban_list(message: Message, state: FSMContext):
+    await message.delete()
     await state.set_state(AdminState.BAN_LIST_VIEW)
     await show_banned_users_page(message, state, 1)
 
@@ -1051,6 +1052,7 @@ async def banlist_pagination_handler(callback: CallbackQuery, state: FSMContext)
 
 @router.message(Command("promolist"), IsSuperAdmin())
 async def show_promo_list(message: Message, state: FSMContext):
+    await message.delete()
     await state.set_state(AdminState.PROMO_LIST_VIEW)
     await show_promo_codes_page(message, state, 1)
 
@@ -1095,7 +1097,8 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     
     if identifier.isdigit():
         promo_id = int(identifier)
-        promo_to_delete = await db_manager.get_promo_by_code(str(promo_id))
+        # ИСПРАВЛЕНИЕ: Нужно искать по ID, а не по коду
+        promo_to_delete = await db_manager.get_promo_by_id(promo_id) 
     else:
         promo_to_delete = await db_manager.get_promo_by_code(identifier)
 
@@ -1118,6 +1121,7 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
 
 @router.message(Command("amnesty"), IsSuperAdmin())
 async def show_amnesty_list(message: Message, state: FSMContext):
+    await message.delete()
     await state.set_state(AdminState.AMNESTY_LIST_VIEW)
     await show_amnesty_page(message, state, 1)
 
@@ -1194,7 +1198,7 @@ async def ask_places_count(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.REWARD_SET_PLACES_COUNT)
     prompt_msg = await callback.message.edit_text(
         "Введите новое количество призовых мест (например, 3). Это действие сбросит текущие суммы наград.",
-        reply_markup=inline.get_cancel_inline_keyboard()
+        reply_markup=inline.get_cancel_inline_keyboard("go_main_menu")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -1219,8 +1223,8 @@ async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(AdminState.REWARD_SET_AMOUNT_FOR_PLACE)
     prompt_msg = await callback.message.edit_text(
-        "Введите данные для изменения награды в формате: <code>МЕСТО СУММА</code>\nНапример: <code>1 50.5</code> или <code>3 15</code>",
-        reply_markup=inline.get_cancel_inline_keyboard()
+        "Введите данные для изменения наград. Каждая настройка с новой строки в формате: <code>МЕСТО СУММА</code>\n\nНапример:\n<code>1 50.5</code>\n<code>2 30</code>\n<code>3 15.0</code>",
+        reply_markup=inline.get_cancel_inline_keyboard("go_main_menu")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -1228,28 +1232,38 @@ async def ask_reward_amount(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.REWARD_SET_AMOUNT_FOR_PLACE, F.text, IsSuperAdmin())
 async def process_reward_amount(message: Message, state: FSMContext):
     await delete_previous_messages(message, state)
-    try:
-        place_str, amount_str = message.text.split()
-        place = int(place_str)
-        amount = float(amount_str.replace(',', '.'))
-        if place <= 0 or amount < 0: raise ValueError
-    except (ValueError, TypeError):
-        await message.answer("❌ Неверный формат. Используйте: <code>МЕСТО СУММА</code>, например: <code>1 50.5</code>")
+    
+    lines = message.text.strip().split('\n')
+    updates = {}
+    errors = []
+
+    for i, line in enumerate(lines, 1):
+        try:
+            place_str, amount_str = line.split()
+            place = int(place_str)
+            amount = float(amount_str.replace(',', '.'))
+            if place <= 0 or amount < 0: raise ValueError
+            updates[place] = amount
+        except (ValueError, TypeError):
+            errors.append(f"Строка {i}: Неверный формат. Используйте: `МЕСТО СУММА`.")
+
+    if errors:
+        await message.answer("❌ Обнаружены ошибки:\n\n" + "\n".join(errors))
         return
 
     settings = await db_manager.get_reward_settings()
     settings_dict = {s.place: s for s in settings}
+    
+    for place, amount in updates.items():
+        if place not in settings_dict:
+            await message.answer(f"❌ Призовое место №{place} не настроено. Сначала установите количество призовых мест.")
+            return
+        settings_dict[place].reward_amount = amount
 
-    if place not in settings_dict:
-        await message.answer(f"❌ Призовое место №{place} не настроено. Сначала установите количество призовых мест.")
-        return
-    
-    settings_dict[place].reward_amount = amount
-    
     new_settings_list = [{"place": p, "reward_amount": s.reward_amount} for p, s in settings_dict.items()]
     await db_manager.update_reward_settings(new_settings_list)
 
-    await message.answer(f"✅ Награда для {place}-го места установлена на {amount} ⭐.")
+    await message.answer(f"✅ Награды успешно обновлены.")
     await show_reward_settings_menu(message, state)
 
 
@@ -1259,7 +1273,7 @@ async def ask_timer_duration(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.REWARD_SET_TIMER)
     prompt_msg = await callback.message.edit_text(
         "Введите интервал автоматической выдачи наград в часах (например, 24).",
-        reply_markup=inline.get_cancel_inline_keyboard()
+        reply_markup=inline.get_cancel_inline_keyboard("go_main_menu")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -1455,19 +1469,4 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
     if not success:
         await message.answer("❌ Произошла при бане пользователя.")
         await state.clear()
-        return
-
-    try:
-        user_notification = (
-            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b>\n\n"
-            f"<b>Причина:</b> {ban_reason}\n\n"
-            "Вам закрыт доступ ко всем функциям бота. "
-            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
-        )
-        await bot.send_message(user_id_to_ban, user_notification)
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
-
-    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.")
-    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
-    await state.clear()
+       
