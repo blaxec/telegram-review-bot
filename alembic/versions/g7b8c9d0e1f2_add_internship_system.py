@@ -26,7 +26,7 @@ def upgrade() -> None:
     op.add_column('users', sa.Column('is_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
     op.add_column('users', sa.Column('is_busy_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
 
-    # Manually define ENUM types to add checkfirst=True
+    # Manually create ENUM types to avoid conflicts
     internship_app_status_enum = sa.Enum('pending', 'approved', 'rejected', 'archived_success', name='internship_app_status_enum')
     internship_app_status_enum.create(op.get_bind(), checkfirst=True)
     
