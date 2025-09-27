@@ -1474,6 +1474,37 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
     await message.answer(response_text)
     if success: await state.clear()
 
+@router.message(AdminState.MENTOR_REJECT_REASON, IsAdmin())
+async def process_mentor_rejection_reason(message: Message, state: FSMContext, bot: Bot):
+    """Ментор вводит причину отклонения работы стажера."""
+    await delete_previous_messages(message, state)
+    if not message.text:
+        await message.answer("Причина не может быть пустой. Пожалуйста, введите текст.")
+        return
+
+    data = await state.get_data()
+    review_id = data.get('review_id_for_intern_rejection')
+    reason = message.text
+    admin_username = message.from_user.username or "Admin"
+
+    if not review_id:
+        await message.answer("Ошибка: не удалось найти ID отзыва для обработки. Состояние сброшено.")
+        await state.clear()
+        return
+
+    success, message_text = await handle_mentor_verdict(
+        review_id=review_id,
+        is_approved_by_mentor=False, # Это отклонение
+        reason=reason,
+        bot=bot,
+        admin_username=admin_username
+    )
+    
+    # Уведомляем ментора о результате
+    await message.answer(message_text)
+
+    await state.clear()
+
 @router.message(AdminState.FINE_USER_ID, IsAdmin())
 async def fine_user_get_id(message: Message, state: FSMContext):
     if not message.text: return
