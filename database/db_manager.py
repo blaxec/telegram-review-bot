@@ -27,9 +27,6 @@ async def init_db():
     engine = create_async_engine(DATABASE_URL)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
 # --- Операции с историей ---
 async def log_operation(session, user_id: int, op_type: str, amount: float, description: str):
     """Записывает операцию в историю. Использует переданную сессию."""
