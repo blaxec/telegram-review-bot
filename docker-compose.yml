@@ -60,7 +60,8 @@ services:
     # -----------------------
     volumes:
       - .:/app
-    command: python main.py
+    command: >
+      sh -c "alembic upgrade head && python main.py"
     networks:
       - telegram_bot_net
 
