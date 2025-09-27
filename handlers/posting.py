@@ -5,10 +5,9 @@ import json
 import logging
 from math import ceil
 from typing import Set
-
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.filters import StateFilter
+from aiogram.filters import StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (CallbackQuery, InputMediaPhoto, InputMediaVideo,
                            Message)
