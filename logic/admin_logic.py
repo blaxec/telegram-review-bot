@@ -595,37 +595,53 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
 
 # --- ЛОГИКА ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
 
-async def process_intern_decision_logic(bot: Bot, review_id: int, mentor_decision_is_correct: bool, reason: str):
+async def handle_mentor_verdict(review_id: int, is_approved_by_mentor: bool, reason: str, bot: Bot, admin_username: str) -> tuple[bool, str]:
     """
     Обрабатывает решение ментора по проверке, выполненной стажером.
-    Начисляет прогресс или штраф.
+    Обновляет БД, начисляет прогресс/штраф, уведомляет стажера и ментора.
     """
-    final_salary = await db_manager.process_intern_decision(review_id, mentor_decision_is_correct, reason)
+    # Получаем информацию о стажере до обработки
+    review_before = await db_manager.get_review_by_id(review_id)
+    if not review_before or not review_before.user:
+        return False, "Ошибка: не найден отзыв или связанный с ним стажер."
+    intern_before = review_before.user
     
-    review = await db_manager.get_review_by_id(review_id)
-    if not review: return
+    # 1. Обрабатываем решение в базе данных. Эта функция сделает все:
+    #    - снимет флаг is_busy_intern
+    #    - добавит/убавит прогресс/ошибки
+    #    - если стажировка завершена, снимет флаг is_intern и выплатит зарплату
+    await db_manager.process_intern_decision(review_id, is_approved_by_mentor, reason)
 
-    intern = await db_manager.get_user(review.user_id)
-    if not intern: return
+    # 2. Получаем обновленную информацию о стажере
+    intern_after = await db_manager.get_user(intern_before.id)
 
-    if final_salary is not None: # Стажировка завершена
-        try:
+    # 3. Уведомляем стажера и суперадмина
+    try:
+        # Если флаг is_intern был True, а стал False, значит стажировка завершилась
+        if intern_before.is_intern and not intern_after.is_intern:
             await bot.send_message(
-                intern.id,
+                intern_after.id,
                 f"🎉 Поздравляем! Вы завершили стажировку. "
-                f"Ваша итоговая зарплата составила <b>{final_salary:.2f} ⭐</b> и уже зачислена на баланс."
+                f"Итоговая зарплата зачислена на ваш баланс. Проверьте историю операций."
             )
             await bot.send_message(
                 SUPER_ADMIN_ID,
-                f"✅ Стажер @{intern.username} завершил задание. Итоговая зарплата: {final_salary:.2f} ⭐."
+                f"✅ Стажер @{intern_after.username} завершил задание. Зарплата выплачена."
             )
-        except Exception as e:
-            logger.error(f"Failed to notify intern {intern.id} about completion: {e}")
-    else: # Стажировка продолжается
-        try:
-            if mentor_decision_is_correct:
-                await bot.send_message(intern.id, f"✅ Ваша проверка отзыва #{review_id} совпала с решением ментора. Так держать!")
+        else:  # Стажировка продолжается
+            if is_approved_by_mentor:
+                await bot.send_message(intern_after.id, f"✅ Ваша проверка отзыва #{review_id} совпала с решением ментора. Так держать!")
             else:
-                await bot.send_message(intern.id, f"❌ Ваша проверка отзыва #{review_id} не совпала с решением ментора. Засчитана ошибка. Причина: {reason}")
-        except Exception as e:
-            logger.error(f"Failed to notify intern {intern.id} about task result: {e}")
+                await bot.send_message(intern_after.id, f"❌ Ваша проверка отзыва #{review_id} не совпала с решением ментора. Засчитана ошибка.\n<b>Причина:</b> {reason}")
+    except Exception as e:
+        logger.error(f"Failed to notify intern {intern_after.id} about mentor's verdict: {e}")
+
+    # 4. Одобряем/отклоняем сам отзыв (для пользователя, который его отправил)
+    if is_approved_by_mentor:
+        await approve_final_review_logic(review_id, bot)
+    else:
+        await reject_final_review_logic(review_id, bot)
+
+    # 5. Формируем ответ для ментора, который нажал кнопку
+    mentor_message = f"✅ Вердикт для стажера @{intern_after.username} по отзыву #{review_id} записан."
+    return True, mentor_message
