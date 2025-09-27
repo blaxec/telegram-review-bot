@@ -26,9 +26,12 @@ def upgrade() -> None:
     op.add_column('users', sa.Column('is_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
     op.add_column('users', sa.Column('is_busy_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
 
-    # Manually create ENUM types to avoid conflicts
-    op.execute("CREATE TYPE internship_app_status_enum AS ENUM ('pending', 'approved', 'rejected', 'archived_success')")
-    op.execute("CREATE TYPE internship_task_status_enum AS ENUM ('active', 'completed', 'fired')")
+    # Manually define ENUM types to add checkfirst=True
+    internship_app_status_enum = sa.Enum('pending', 'approved', 'rejected', 'archived_success', name='internship_app_status_enum')
+    internship_app_status_enum.create(op.get_bind(), checkfirst=True)
+    
+    internship_task_status_enum = sa.Enum('active', 'completed', 'fired', name='internship_task_status_enum')
+    internship_task_status_enum.create(op.get_bind(), checkfirst=True)
 
     # Create internship_applications table
     op.create_table('internship_applications',
@@ -38,7 +41,7 @@ def upgrade() -> None:
     sa.Column('age', sa.String(), nullable=False),
     sa.Column('hours_per_day', sa.String(), nullable=False),
     sa.Column('platforms', sa.String(), nullable=False),
-    sa.Column('status', sa.Enum('pending', 'approved', 'rejected', 'archived_success', name='internship_app_status_enum'), nullable=False),
+    sa.Column('status', internship_app_status_enum, nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -55,7 +58,7 @@ def upgrade() -> None:
     sa.Column('current_progress', sa.Integer(), nullable=True),
     sa.Column('error_count', sa.Integer(), nullable=True),
     sa.Column('estimated_salary', sa.Float(), nullable=True),
-    sa.Column('status', sa.Enum('active', 'completed', 'fired', name='internship_task_status_enum'), nullable=False),
+    sa.Column('status', internship_task_status_enum, nullable=False),
     sa.Column('assigned_at', sa.DateTime(), nullable=True),
     sa.Column('last_task_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['intern_id'], ['users.id'], ),
@@ -87,6 +90,6 @@ def downgrade() -> None:
     op.drop_column('users', 'is_intern')
     
     # Manually drop ENUM types
-    op.execute("DROP TYPE internship_task_status_enum")
-    op.execute("DROP TYPE internship_app_status_enum")
+    sa.Enum(name='internship_task_status_enum').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='internship_app_status_enum').drop(op.get_bind(), checkfirst=True)
     # ### end Alembic commands ###
