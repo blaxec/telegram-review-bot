@@ -26,6 +26,10 @@ def upgrade() -> None:
     op.add_column('users', sa.Column('is_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
     op.add_column('users', sa.Column('is_busy_intern', sa.Boolean(), nullable=False, server_default=sa.text('false')))
 
+    # Manually create ENUM types to avoid conflicts
+    op.execute("CREATE TYPE internship_app_status_enum AS ENUM ('pending', 'approved', 'rejected', 'archived_success')")
+    op.execute("CREATE TYPE internship_task_status_enum AS ENUM ('active', 'completed', 'fired')")
+
     # Create internship_applications table
     op.create_table('internship_applications',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -81,4 +85,8 @@ def downgrade() -> None:
     op.drop_table('internship_applications')
     op.drop_column('users', 'is_busy_intern')
     op.drop_column('users', 'is_intern')
-    # ### end Alembic commands ###```
+    
+    # Manually drop ENUM types
+    op.execute("DROP TYPE internship_task_status_enum")
+    op.execute("DROP TYPE internship_app_status_enum")
+    # ### end Alembic commands ###

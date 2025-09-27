@@ -12,7 +12,7 @@ from database.models import (Base, User, Review, Link, WithdrawalRequest,
                              PromoCode, PromoActivation, SupportTicket,
                              RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
                              InternshipApplication, InternshipTask, InternshipMistake,
-                             Administrator, PostTemplate) # ИМПОРТИРОВАНЫ НОВЫЕ МОДЕЛИ
+                             Administrator, PostTemplate)
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,13 @@ async def init_db():
 
     engine = create_async_engine(DATABASE_URL)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Следующие две строки больше не нужны, так как Alembic теперь
+    # полностью управляет созданием и обновлением таблиц. Эта команда
+    # конфликтовала с Alembic, вызывая ошибку "type already exists".
+    # async with engine.begin() as conn:
+    #     await conn.run_sync(Base.metadata.create_all)
 
 # --- Операции с историей ---
 async def log_operation(session, user_id: int, op_type: str, amount: float, description: str):
