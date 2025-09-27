@@ -1,11 +1,16 @@
 # file: alembic/env.py
 
+# --- ИЗМЕНЕНИЕ: Добавьте эти две строки в самое начало ---
+from dotenv import load_dotenv
+load_dotenv()
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 import asyncio
 from logging.config import fileConfig
+import os
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-# ИСПРАВЛЕНИЕ: Импортируем create_async_engine напрямую
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
@@ -14,7 +19,6 @@ from alembic import context
 from database.models import Base
 # импортируем URL базы данных из конфига
 from config import DATABASE_URL
-
 
 # это объект Alembic Config, который предоставляет доступ к
 # значениям в .ini файле.
@@ -25,12 +29,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Устанавливаем URL базы данных из нашего конфига, если он есть
-# Это нужно для оффлайн-режима
-if DATABASE_URL:
+# --- Умная установка URL для Alembic ---
+# 1. Сначала пытаемся получить URL для ЛОКАЛЬНОГО запуска из переменных окружения.
+alembic_db_url = os.getenv("DATABASE_URL_ALEMBIC")
+if alembic_db_url:
+    config.set_main_option("sqlalchemy.url", alembic_db_url)
+# 2. Если его нет, берем из конфига приложения (для запуска в Docker)
+elif DATABASE_URL:
     sync_db_url = DATABASE_URL.replace("+asyncpg", "")
     config.set_main_option("sqlalchemy.url", sync_db_url)
-
 
 # Добавьте сюда метаданные вашей модели для поддержки Autogenerate
 target_metadata = Base.metadata
@@ -60,8 +67,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # ИСПРАВЛЕНИЕ: Создаем движок напрямую из нашего асинхронного DATABASE_URL,
-    # а не из конфигурации alembic.ini, чтобы гарантированно использовать asyncpg.
+    # При онлайн-миграции мы ВСЕГДА используем асинхронный URL из config.py
     connectable = create_async_engine(
         DATABASE_URL,
         poolclass=pool.NullPool,
