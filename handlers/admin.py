@@ -20,7 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
-from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations, Limits
+from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations, Limits, Rewards
 from database import db_manager
 from references import reference_manager
 from logic.admin_logic import (
@@ -40,13 +40,15 @@ from logic.admin_logic import (
     format_promo_code_page,
     get_paginated_links_text,
     get_unban_requests_page,
-    process_unban_request_logic
+    process_unban_request_logic,
+    handle_mentor_verdict
 )
 from logic.internship_logic import (
     format_applications_page, 
     format_single_application,
     format_candidates_page,
-    format_interns_page
+    format_interns_page,
+    format_single_intern
 )
 from logic.ai_helper import generate_review_text
 from logic.ocr_helper import analyze_screenshot
@@ -851,7 +853,28 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
 async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     """Админ одобряет отзыв после холда и выплачивает награду."""
     review_id = int(callback.data.split(':')[1])
+    admin_username = callback.from_user.username or "Admin"
     
+    # ПРОВЕРКА НА СТАЖЕРА
+    review = await db_manager.get_review_by_id(review_id)
+    if review and review.user and review.user.is_busy_intern:
+        success, message_text = await handle_mentor_verdict(
+            review_id=review_id, 
+            is_approved_by_mentor=True, 
+            reason="Проверка совпала с решением ментора",
+            bot=bot,
+            admin_username=admin_username
+        )
+        await callback.answer(message_text, show_alert=True)
+        if success and callback.message:
+            new_caption = (callback.message.caption or "") + f"\n\n{message_text}"
+            try:
+                # Обновляем сообщение с медиа-группой
+                await bot.edit_message_caption(chat_id=callback.message.chat.id, message_id=callback.message.message_id, caption=new_caption, reply_markup=None)
+            except TelegramBadRequest: pass
+        return
+
+    # Стандартная логика
     responsible_admin = await admin_roles.get_other_hold_admin()
     if callback.from_user.id != responsible_admin:
         admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
@@ -876,10 +899,24 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
             pass
 
 @router.callback_query(F.data.startswith('final_verify_reject:'), IsAdmin())
-async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot):
+async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Админ отклоняет отзыв после холда."""
     review_id = int(callback.data.split(':')[1])
+    review = await db_manager.get_review_by_id(review_id)
     
+    # ПРОВЕРКА НА СТАЖЕРА
+    if review and review.user and review.user.is_busy_intern:
+        await state.set_state(AdminState.MENTOR_REJECT_REASON)
+        await state.update_data(review_id_for_intern_rejection=review_id)
+        prompt_msg = await callback.message.answer(
+            f"❗️Это была проверка стажера @{review.user.username}.\n"
+            f"✍️ <b>Введите причину отклонения.</b> Эта причина будет записана в историю ошибок стажера, и ему будет начислен штраф."
+        )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        await callback.answer("Ожидание причины для стажера...")
+        return
+
+    # Стандартная логика
     responsible_admin = await admin_roles.get_other_hold_admin()
     if callback.from_user.id != responsible_admin:
         admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
@@ -991,14 +1028,13 @@ async def ban_user_start(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
     await state.clear()
-    
     args = message.text.split()
     if len(args) < 2:
         msg = await message.answer("Использование: <code>/ban ID_пользователя_или_@username</code>")
         asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
         return
     
-    identifier = args[1]
+    identifier = args[1] # ИСПРАВЛЕНО
     user_id_to_ban = await db_manager.find_user_by_identifier(identifier)
 
     if not user_id_to_ban:
@@ -1045,7 +1081,7 @@ async def show_banned_users_page(message_or_callback: Message | CallbackQuery, s
 @router.callback_query(F.data.startswith("banlist:page:"), AdminState.BAN_LIST_VIEW, IsSuperAdmin())
 async def banlist_pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    page = int(callback.data.split(":")[2])
+    page = int(callback.data.split(":")[2]) # ИСПРАВЛЕНО
     await show_banned_users_page(callback, state, page)
 
 
@@ -1073,7 +1109,7 @@ async def show_promo_codes_page(message_or_callback: Message | CallbackQuery, st
 @router.callback_query(F.data.startswith("promolist:page:"), AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
 async def promolist_pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    page = int(callback.data.split(":")[2])
+    page = int(callback.data.split(":")[2]) # ИСПРАВЛЕНО
     await show_promo_codes_page(callback, state, page)
 
 @router.callback_query(F.data == "promolist:delete_start", AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
@@ -1141,7 +1177,7 @@ async def show_amnesty_page(message_or_callback: Message | CallbackQuery, state:
 @router.callback_query(F.data.startswith("amnesty:page:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
 async def amnesty_pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    page = int(callback.data.split(":")[2])
+    page = int(callback.data.split(":")[2]) # ИСПРАВЛЕНО
     await show_amnesty_page(callback, state, page)
 
 @router.callback_query(F.data.startswith("amnesty:action:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
@@ -1338,7 +1374,7 @@ async def view_internship_list(callback: CallbackQuery, state: FSMContext):
 async def view_single_application(message: Message, state: FSMContext):
     """Показывает детальную информацию по одной анкете."""
     try:
-        app_id = int(message.text.split("_")[2])
+        app_id = int(message.text.split("_")[2]) # ИСПРАВЛЕНО
     except (IndexError, ValueError):
         return
 
@@ -1528,7 +1564,7 @@ async def promo_reward_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, IsSuperAdmin())
 async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    condition = callback.data.split(":")[1]
+    condition = callback.data.split(":")[1] # ИСПРАВЛЕНО
     data = await state.get_data()
     new_promo = await db_manager.create_promo_code(
         code=data['promo_name'], total_uses=data['promo_uses'],

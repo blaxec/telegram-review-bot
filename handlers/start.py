@@ -216,6 +216,26 @@ async def process_agreement(callback: CallbackQuery, state: FSMContext):
 
 # --- Универсальные обработчики отмены и возврата ---
 
+async def generic_cancel_logic(user_id: int, bot: Bot, state: FSMContext):
+    """Общая логика отмены для обоих типов кнопок."""
+    current_state = await state.get_state()
+    if current_state is None:
+        return "Нечего отменять. Вы уже в главном меню."
+
+    # Освобождаем ссылку, если она была взята
+    await reference_manager.release_reference_from_user(user_id, 'available')
+    
+    # Проверяем, был ли пользователь занятым стажером
+    user = await db_manager.get_user(user_id)
+    if user and user.is_busy_intern:
+        await db_manager.set_intern_busy_status(user_id, is_busy=False)
+        logger.info(f"User {user_id} cancelled a task, their intern busy status has been reset.")
+        # Здесь можно добавить уведомление ментору, если это необходимо
+    
+    await state.clear()
+    await state.set_state(UserState.MAIN_MENU)
+    return "Действие отменено."
+
 @router.message(F.text == '❌ Отмена')
 async def cancel_handler_reply(message: Message, state: FSMContext):
     """Обработчик кнопки 'Отмена', сбрасывает любое состояние."""
@@ -224,19 +244,12 @@ async def cancel_handler_reply(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
         
-    current_state = await state.get_state()
-    if current_state is None:
-        await message.answer("Нечего отменять. Вы уже в главном меню.")
-        return
-
-    await reference_manager.release_reference_from_user(message.from_user.id, 'available')
-
-    await state.clear()
+    response_text = await generic_cancel_logic(message.from_user.id, message.bot, state)
+    
     await message.answer(
-        "Действие отменено.",
+        response_text,
         reply_markup=reply.get_main_menu_keyboard()
     )
-    await state.set_state(UserState.MAIN_MENU)
 
 
 @router.callback_query(F.data == 'cancel_action')
@@ -251,16 +264,9 @@ async def cancel_handler_inline(callback: CallbackQuery, state: FSMContext):
         if callback.message:
             await callback.message.delete()
     except TelegramBadRequest as e:
-        print(f"Error deleting message: {e}")
+        logger.warning(f"Error deleting message on inline cancel: {e}")
 
-    current_state = await state.get_state()
-    if current_state is None:
-        return
-
-    await reference_manager.release_reference_from_user(callback.from_user.id, 'available')
-
-    await state.clear()
-    await state.set_state(UserState.MAIN_MENU)
+    await generic_cancel_logic(callback.from_user.id, callback.bot, state)
 
 
 @router.callback_query(F.data == 'go_main_menu')

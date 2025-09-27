@@ -1,6 +1,7 @@
 # file: handlers/internship.py
 
 import logging
+from math import ceil
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery

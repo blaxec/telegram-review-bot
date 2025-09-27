@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from database import db_manager
-from states.user_states import UserState
+from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from references import reference_manager
 from logic.promo_logic import check_and_apply_promo_reward

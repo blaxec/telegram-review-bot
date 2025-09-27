@@ -5,7 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import Rewards, GOOGLE_API_KEYS, TRANSFER_COMMISSION_PERCENT
 from aiogram import Bot
 from logic import admin_roles
-from database.models import UnbanRequest, InternshipApplication
+from database.models import UnbanRequest, InternshipApplication, User
 
 # --- /start и навигация ---
 
@@ -596,11 +596,13 @@ def get_internship_platform_selection_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-def get_intern_cabinet_keyboard() -> InlineKeyboardMarkup:
+def get_intern_cabinet_keyboard(is_busy: bool) -> InlineKeyboardMarkup:
     """Клавиатура рабочего кабинета стажера."""
     builder = InlineKeyboardBuilder()
     builder.button(text="📜 История ошибок", callback_data="intern_cabinet:mistakes")
-    builder.button(text="❌ Уволиться", callback_data="intern_cabinet:resign")
+    # Кнопка "Уволиться" активна только если стажер не занят
+    if not is_busy:
+        builder.button(text="❌ Уволиться", callback_data="intern_cabinet:resign")
     builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -609,7 +611,7 @@ def get_intern_resign_confirm_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура подтверждения увольнения."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Да, я уверен", callback_data="intern_cabinet:resign_confirm")
-    builder.button(text="⬅️ Нет, вернуться", callback_data="internship_main")
+    builder.button(text="⬅️ Нет, вернуться", callback_data="internship_main") # Возвращает к основному экрану стажировки
     builder.adjust(1)
     return builder.as_markup()
 
@@ -630,4 +632,31 @@ def get_admin_application_review_keyboard(app: InternshipApplication) -> InlineK
     builder.button(text="❌ Отклонить", callback_data=f"admin_internships:action:reject:{app.id}")
     builder.button(text="⬅️ Назад к списку", callback_data="admin_internships:view:applications:1")
     builder.adjust(2, 1)
+    return builder.as_markup()
+
+def get_admin_intern_view_keyboard(intern: User) -> InlineKeyboardMarkup:
+    """Клавиатура для управления активным стажером."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔥 Уволить", callback_data=f"admin_internships:fire_start:{intern.id}")
+    builder.button(text="📜 История ошибок", callback_data=f"admin_internships:view_mistakes:{intern.id}:1")
+    builder.button(text="⬅️ Назад к списку", callback_data="admin_internships:view:interns:1")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+def get_admin_intern_task_setup_keyboard(candidate_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора типа задачи для кандидата."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Проверка профилей (Google/Yandex)", callback_data=f"admin_internships:set_task:{candidate_id}:profile_check")
+    # Добавить другие типы задач по мере необходимости
+    # builder.button(text="Регистрация Gmail", callback_data=f"admin_internships:set_task:{candidate_id}:gmail_registration")
+    builder.button(text="⬅️ Назад к кандидатам", callback_data="admin_internships:view:candidates:1")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_admin_intern_task_confirm_keyboard(candidate_id: int, platform: str, task_type: str, goal: int, salary: float) -> InlineKeyboardMarkup:
+    """Клавиатура для финального подтверждения назначения задачи."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Назначить задачу", callback_data=f"admin_internships:confirm_task:{candidate_id}:{platform}:{task_type}:{goal}:{salary}")
+    builder.button(text="❌ Отмена", callback_data=f"admin_internships:view:candidates:1")
+    builder.adjust(1)
     return builder.as_markup()

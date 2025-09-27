@@ -136,3 +136,4 @@ class AdminState(StatesGroup):
     # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК (АДМИН) ---
     INTERNSHIP_CANDIDATE_TASK_GOAL = State()
     INTERNSHIP_FIRE_REASON = State()
+    MENTOR_REJECT_REASON = State() # Для ввода причины отклонения работы стажера
