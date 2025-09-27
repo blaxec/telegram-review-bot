@@ -1369,12 +1369,11 @@ async def view_internship_list(callback: CallbackQuery, state: FSMContext):
         keyboard = inline.get_pagination_keyboard("admin_internships:view:interns", page, total_pages)
         await callback.message.edit_text(text, reply_markup=keyboard)
 
-
-@router.message(Command(F.text.startswith("view_app_")), IsSuperAdmin())
+@router.message(F.text.startswith("/view_app_"), IsSuperAdmin())
 async def view_single_application(message: Message, state: FSMContext):
     """Показывает детальную информацию по одной анкете."""
     try:
-        app_id = int(message.text.split("_")[2]) # ИСПРАВЛЕНО
+        app_id = int(message.text.split("_")[2])
     except (IndexError, ValueError):
         return
 
@@ -1386,7 +1385,7 @@ async def view_single_application(message: Message, state: FSMContext):
     text = format_single_application(app)
     await message.answer(text, reply_markup=inline.get_admin_application_review_keyboard(app))
 
-@router.message(Command(F.text.startswith("view_intern_")), IsSuperAdmin())
+@router.message(F.text.startswith("/view_intern_"), IsSuperAdmin())
 async def view_single_intern(message: Message, state: FSMContext):
     """Показывает детальную информацию по одному стажеру."""
     try:
@@ -1401,6 +1400,32 @@ async def view_single_intern(message: Message, state: FSMContext):
         
     text = format_single_intern(intern)
     await message.answer(text, reply_markup=inline.get_admin_intern_view_keyboard(intern))
+
+@router.message(F.text.startswith("/assign_task_"), IsSuperAdmin())
+async def assign_task_start(message: Message, state: FSMContext):
+    """Начало процесса назначения задачи кандидату."""
+    try:
+        candidate_id = int(message.text.split("_")[2])
+    except (IndexError, ValueError):
+        return
+
+    candidate_app = await db_manager.get_internship_application(candidate_id)
+    if not candidate_app or candidate_app.status != 'approved':
+        await message.answer("Кандидат не найден или его анкета не одобрена.")
+        return
+
+    await state.set_state(AdminState.INTERNSHIP_CANDIDATE_TASK_GOAL)
+    await state.update_data(
+        task_candidate_id=candidate_id,
+        task_candidate_username=candidate_app.username
+    )
+    prompt_msg = await message.answer(
+        f"Назначение задачи для @{candidate_app.username}.\n"
+        f"Желаемые платформы: {candidate_app.platforms}\n\n"
+        "<b>Шаг 1/3:</b> Выберите тип задания.",
+        reply_markup=inline.get_admin_intern_task_setup_keyboard(candidate_id)
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 
 @router.callback_query(F.data.startswith("admin_internships:action:"), IsSuperAdmin())
