@@ -1386,6 +1386,23 @@ async def view_single_application(message: Message, state: FSMContext):
     text = format_single_application(app)
     await message.answer(text, reply_markup=inline.get_admin_application_review_keyboard(app))
 
+@router.message(Command(F.text.startswith("view_intern_")), IsSuperAdmin())
+async def view_single_intern(message: Message, state: FSMContext):
+    """Показывает детальную информацию по одному стажеру."""
+    try:
+        intern_id = int(message.text.split("_")[2])
+    except (IndexError, ValueError):
+        return
+
+    intern = await db_manager.get_user(intern_id)
+    if not intern or not intern.is_intern:
+        await message.answer("Стажер не найден.")
+        return
+        
+    text = format_single_intern(intern)
+    await message.answer(text, reply_markup=inline.get_admin_intern_view_keyboard(intern))
+
+
 @router.callback_query(F.data.startswith("admin_internships:action:"), IsSuperAdmin())
 async def process_application_action(callback: CallbackQuery, bot: Bot):
     """Обрабатывает одобрение или отклонение анкеты."""

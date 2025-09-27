@@ -65,3 +65,33 @@ def format_interns_page(interns: List[User], page: int, total_pages: int) -> str
         
     text += f"\nСтраница {page}/{total_pages}"
     return text
+
+def format_single_intern(intern: User) -> str:
+    """Форматирует детальную информацию по одному стажеру."""
+    active_task = next((t for t in intern.internship_tasks if t.status == 'active'), None)
+
+    text = (
+        f"<b>Карточка стажера @{intern.username}</b> (ID: <code>{intern.id}</code>)\n\n"
+    )
+
+    if not active_task:
+        text += "<i>Нет активного задания.</i>"
+        return text
+
+    salary = active_task.estimated_salary or 0.0
+    penalty_per_error = (salary / active_task.goal_count) * 2 if active_task.goal_count > 0 else 0
+    total_penalty = active_task.error_count * penalty_per_error
+    final_salary = salary - total_penalty
+
+    text += (
+        "<b>Активное задание:</b>\n"
+        f" • Платформа: <code>{active_task.platform}</code>\n"
+        f" • Тип: <code>{active_task.task_type}</code>\n"
+        f" • Прогресс: <b>{active_task.current_progress} / {active_task.goal_count}</b>\n"
+        f" • Ошибок: <b>{active_task.error_count}</b>\n\n"
+        "<b>Финансы:</b>\n"
+        f" • Зарплата: {salary:.2f} ⭐\n"
+        f" • Штрафы: -{total_penalty:.2f} ⭐\n"
+        f" • <b>К выплате: {final_salary:.2f} ⭐</b>"
+    )
+    return text
