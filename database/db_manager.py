@@ -176,14 +176,14 @@ async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bo
 
             sender.balance -= total_to_deduct
             recipient.balance += amount
+            
+            # ИЗМЕНЕНИЕ: Логируем одной операцией для отправителя
+            sender_description = f"Получатель: {recipient.username or recipient_id}. Комиссия: {commission:.2f} ⭐"
+            await log_operation(session, sender_id, "TRANSFER_SENT", -total_to_deduct, sender_description)
 
-            # Логируем основную операцию перевода
-            await log_operation(session, sender_id, "TRANSFER_SENT", -amount, f"Получатель: {recipient.username or recipient_id}")
-            # Логируем списание комиссии ОТДЕЛЬНО, если она есть
-            if commission > 0:
-                await log_operation(session, sender_id, "FINE", -commission, f"Комиссия за перевод")
             # Логируем получение средств получателем
-            await log_operation(session, recipient_id, "TRANSFER_RECEIVED", amount, f"Отправитель: {sender.username or sender_id}")
+            recipient_description = f"Отправитель: {sender.username or sender_id}"
+            await log_operation(session, recipient_id, "TRANSFER_RECEIVED", amount, recipient_description)
 
         return True
 
@@ -993,7 +993,7 @@ async def delete_promo_code(promo_id: int) -> bool:
 
 # --- Функции для системы стажировок ---
 
-async def create_internship_application(user_id: int, username: str, age: str, hours: str, platforms: str) -> Optional[InternshipApplication]:
+async def create_internship_application(user_id: int, username: str, age: str, hours: str, response_time: str, platforms: str) -> Optional[InternshipApplication]:
     async with async_session() as session:
         async with session.begin():
             new_app = InternshipApplication(
@@ -1001,6 +1001,7 @@ async def create_internship_application(user_id: int, username: str, age: str, h
                 username=username,
                 age=age,
                 hours_per_day=hours,
+                response_time=response_time,
                 platforms=platforms
             )
             session.add(new_app)

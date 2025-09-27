@@ -230,7 +230,7 @@ async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext)
 
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
-async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -249,7 +249,9 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
             text=caption,
             photo_id=photo_file_id,
             keyboard=inline.get_admin_verification_keyboard(message.from_user.id, "google_profile"),
-            task_type="google_profile"
+            task_type="google_profile",
+            scheduler=scheduler,
+            original_user_id=message.from_user.id
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото профиля админу: {e}")
@@ -283,7 +285,7 @@ async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext)
 
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
-async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot):
+async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
 
@@ -304,7 +306,9 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
                 user_id=message.from_user.id, 
                 context="google_last_reviews"
             ),
-            task_type="google_last_reviews"
+            task_type="google_last_reviews",
+            scheduler=scheduler,
+            original_user_id=message.from_user.id
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
@@ -387,7 +391,9 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
             text=admin_notification_text,
             photo_id=profile_screenshot_id,
             keyboard=inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id),
-            task_type="google_issue_text"
+            task_type="google_issue_text",
+            scheduler=scheduler,
+            original_user_id=callback.from_user.id
         )
     except Exception as e:
         logger.error(f"Failed to send task to admin: {e}")
@@ -411,7 +417,7 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
 
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
-async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -455,7 +461,9 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
             photo_id=photo_file_id,
             keyboard=inline.get_admin_final_verdict_keyboard(review_id),
             task_type="google_final_verdict",
-            return_sent_messages=True
+            return_sent_messages=True,
+            scheduler=scheduler,
+            original_user_id=message.from_user.id
         )
         
         if sent_message_list:
@@ -538,7 +546,7 @@ async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
-async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot):
+async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -566,7 +574,9 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
                 user_id=message.from_user.id,
                 context="yandex_profile_screenshot"
             ),
-            task_type=task_type
+            task_type=task_type,
+            scheduler=scheduler,
+            original_user_id=message.from_user.id
         )
     except Exception as e:
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
@@ -656,7 +666,9 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
                 text=admin_notification_text,
                 photo_id=profile_screenshot_id,
                 keyboard=inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id),
-                task_type="yandex_with_text_issue_text"
+                task_type="yandex_with_text_issue_text",
+                scheduler=scheduler,
+                original_user_id=callback.from_user.id
             )
         except Exception as e:
             logger.error(f"Failed to send task to admin for Yandex: {e}")
@@ -702,7 +714,7 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
 
     
 @router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
-async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot):
+async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -755,7 +767,9 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
             photo_id=photo_file_id,
             keyboard=inline.get_admin_final_verdict_keyboard(review_id),
             task_type=task_type,
-            return_sent_messages=True
+            return_sent_messages=True,
+            scheduler=scheduler,
+            original_user_id=message.from_user.id
         )
         
         if sent_message_list:

@@ -202,6 +202,7 @@ class InternshipApplication(Base):
     username = Column(String, nullable=True)
     age = Column(String, nullable=False)
     hours_per_day = Column(String, nullable=False)
+    response_time = Column(String, nullable=True)
     platforms = Column(String, nullable=False)
     status = Column(Enum('pending', 'approved', 'rejected', 'archived_success', name='internship_app_status_enum'), default='pending', nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

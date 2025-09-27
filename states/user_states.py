@@ -8,6 +8,8 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
+    # ИЗМЕНЕНИЕ: Новое состояние для подтверждения
+    TRANSFER_CONFIRMATION = State()
     TRANSFER_AWAITING_MEDIA_CHOICE = State()
     TRANSFER_AWAITING_MEDIA = State()
     TRANSFER_COMMENT_INPUT = State()
@@ -72,6 +74,8 @@ class UserState(StatesGroup):
     INTERNSHIP_APP_START = State()
     INTERNSHIP_APP_AGE = State()
     INTERNSHIP_APP_HOURS = State()
+    # ИЗМЕНЕНИЕ: Новое состояние
+    INTERNSHIP_APP_RESPONSE_TIME = State()
     INTERNSHIP_APP_PLATFORMS = State()
     INTERNSHIP_APP_CONFIRM = State()
 

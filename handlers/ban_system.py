@@ -30,7 +30,11 @@ async def schedule_message_deletion(message: Message, delay: int):
 @router.message(Command("unban_request"))
 async def request_unban_start(message: Message, state: FSMContext):
     """Начало процесса подачи запроса на разбан."""
-    asyncio.create_task(schedule_message_deletion(message, Durations.DELETE_UNBAN_REQUEST_DELAY))
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+        
     user = await db_manager.get_user(message.from_user.id)
 
     if not user or not user.is_banned:

@@ -177,78 +177,50 @@ async def process_transfer_recipient(message: Message, state: FSMContext):
         return
 
     await state.update_data(recipient_id=recipient_id)
-    await state.set_state(UserState.TRANSFER_COMMENT_INPUT)
+    
+    # ИЗМЕНЕНИЕ: Переход к подтверждению вместо комментария
+    await ask_for_transfer_confirmation(message, state)
+
+async def ask_for_transfer_confirmation(message: Message, state: FSMContext):
+    """Показывает экран подтверждения перевода с расчетом комиссии."""
+    data = await state.get_data()
+    amount = data['transfer_amount']
+    recipient_id = data['recipient_id']
+    
+    recipient_user = await db_manager.get_user(recipient_id)
+    recipient_info = f"@{recipient_user.username}" if recipient_user and recipient_user.username else f"ID: {recipient_id}"
+    
+    commission = amount * (TRANSFER_COMMISSION_PERCENT / 100)
+    total_to_deduct = amount + commission
+
+    confirmation_text = (
+        f"<b>Подтверждение перевода</b>\n\n"
+        f"Вы собираетесь перевести <b>{amount:.2f} ⭐</b> пользователю {recipient_info}.\n\n"
+        f"Сумма перевода: {amount:.2f} ⭐\n"
+        f"Комиссия ({TRANSFER_COMMISSION_PERCENT}%): {commission:.2f} ⭐\n"
+        f"<b>Итого к списанию: {total_to_deduct:.2f} ⭐</b>\n\n"
+        "Подтверждаете операцию?"
+    )
+    
+    await state.set_state(UserState.TRANSFER_CONFIRMATION)
     prompt_msg = await message.answer(
-        "Введите комментарий к передаче или нажмите 'Пропустить'.",
-        reply_markup=inline.get_skip_comment_keyboard('transfer')
+        confirmation_text,
+        reply_markup=inline.get_transfer_confirmation_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
-@router.message(UserState.TRANSFER_COMMENT_INPUT, F.text)
-async def process_transfer_comment_input(message: Message, state: FSMContext):
-    await delete_prompt_message(message, state)
-    await message.delete()
-    await state.update_data(transfer_comment=message.text)
-    await ask_for_media(message, state, 'transfer')
-
-@router.callback_query(F.data == 'transfer_skip_comment', UserState.TRANSFER_COMMENT_INPUT)
-async def process_transfer_skip_comment(callback: CallbackQuery, state: FSMContext):
-    if callback.message:
-        await callback.message.delete()
-    await state.update_data(transfer_comment=None)
-    await ask_for_media(callback.message, state, 'transfer')
-
-async def ask_for_media(message: Message, state: FSMContext, prefix: str):
-    await state.set_state(UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
-    prompt_msg = await message.answer(
-        "Хотите прикрепить медиа (фото, видео, GIF)?",
-        reply_markup=inline.get_attach_media_keyboard(prefix)
-    )
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.callback_query(F.data == 'transfer_attach_media_no', UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
-async def process_transfer_no_media(callback: CallbackQuery, state: FSMContext, bot: Bot):
+@router.callback_query(F.data == 'transfer_confirm', UserState.TRANSFER_CONFIRMATION)
+async def process_transfer_confirmed(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработка подтверждения перевода."""
     if callback.message:
         await callback.message.delete()
     await finish_transfer(callback.from_user, state, bot)
-
-@router.callback_query(F.data == 'transfer_attach_media_yes', UserState.TRANSFER_AWAITING_MEDIA_CHOICE)
-async def process_transfer_yes_media(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserState.TRANSFER_AWAITING_MEDIA)
-    if callback.message:
-        prompt_msg = await callback.message.edit_text(
-            "Отправьте фото, видео или GIF.",
-            reply_markup=inline.get_cancel_to_profile_keyboard()
-        )
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(UserState.TRANSFER_AWAITING_MEDIA, F.photo | F.video | F.animation)
-async def process_transfer_media_input(message: Message, state: FSMContext, bot: Bot):
-    await delete_prompt_message(message, state)
-    
-    media_type = None
-    file_id = None
-    
-    if message.photo:
-        media_type = 'photo'
-        file_id = message.photo[-1].file_id
-    elif message.video:
-        media_type = 'video'
-        file_id = message.video.file_id
-    elif message.animation:
-        media_type = 'animation'
-        file_id = message.animation.file_id
-    
-    await state.update_data(media_type=media_type, file_id=file_id)
-    await finish_transfer(message.from_user, state, bot)
-    await message.delete()
 
 async def finish_transfer(user: User, state: FSMContext, bot: Bot):
     data = await state.get_data()
     sender_id, sender_username = user.id, user.username
     recipient_id, amount = data['recipient_id'], data['transfer_amount']
-    comment, media_type, file_id = data.get('transfer_comment'), data.get('media_type'), data.get('file_id')
-
+    
     success = await db_manager.transfer_stars(sender_id, recipient_id, amount)
 
     if not success:
@@ -256,23 +228,14 @@ async def finish_transfer(user: User, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    notification_text = f"✨ Вам переданы <b>{amount:.2f} ⭐</b> от @{sender_username}!"
-    if comment:
-        notification_text += f"\n\n<i>Комментарий:</i> {comment}"
+    notification_text = f"✨ Вам переведены <b>{amount:.2f} ⭐</b> от @{sender_username}!"
         
     try:
-        if media_type == 'photo':
-            await bot.send_photo(recipient_id, file_id, caption=notification_text)
-        elif media_type == 'video':
-            await bot.send_video(recipient_id, file_id, caption=notification_text)
-        elif media_type == 'animation':
-            await bot.send_animation(recipient_id, file_id, caption=notification_text)
-        else:
-            await bot.send_message(recipient_id, notification_text)
+        await bot.send_message(recipient_id, notification_text)
     except Exception as e:
         logger.error(f"Не удалось уведомить о переводе {recipient_id}: {e}")
 
-    await bot.send_message(sender_id, "✅ Звезды успешно переданы!", reply_markup=reply.get_main_menu_keyboard())
+    await bot.send_message(sender_id, "✅ Звезды успешно переведены!", reply_markup=reply.get_main_menu_keyboard())
     await state.clear()
 
 

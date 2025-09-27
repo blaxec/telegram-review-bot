@@ -30,6 +30,7 @@ def format_single_application(app: InternshipApplication) -> str:
         f"<b>Анкета кандидата @{app.username}</b> (ID: <code>{app.user_id}</code>)\n\n"
         f"<b>Возраст:</b> {app.age}\n"
         f"<b>Готовность работать:</b> {app.hours_per_day} ч/день\n"
+        f"<b>Скорость ответа:</b> {app.response_time}\n"
         f"<b>Желаемые платформы:</b> {app.platforms}\n"
         f"<b>Дата подачи:</b> {app.created_at.strftime('%d.%m.%Y %H:%M')} UTC"
     )

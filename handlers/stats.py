@@ -89,6 +89,10 @@ async def show_stats_menu(message_or_callback: Message | CallbackQuery):
 @router.message(F.text == '📊 Статистика', UserState.MAIN_MENU)
 async def stats_handler_message(message: Message, state: FSMContext):
     """Обработчик нажатия на кнопку 'Статистика'."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     await show_stats_menu(message)
 
 

@@ -65,12 +65,17 @@ async def update_preview_message(message: Message, state: FSMContext):
 
 # --- Основная логика ---
 
-@router.message(F.text == '/posts', IsSuperAdmin())
+@router.message(Command("posts"), IsSuperAdmin())
 async def start_post_constructor(message: Message, state: FSMContext):
     """Запускает FSM для создания поста."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
     await state.clear()
     await state.set_data({
-        "post_text": "<b>Ваш пост.</b>\n\nВы можете использовать <b>HTML</b>-теги и ссылки: [Пример ссылки](https://google.com)",
+        "post_text": "<b>Ваш пост.</b>\n\nВы можете использовать <b>HTML</b>-теги.",
         "post_media": [],
         "post_audience": set()
     })
@@ -89,7 +94,7 @@ async def start_post_constructor(message: Message, state: FSMContext):
 async def ask_for_text(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.POST_CONSTRUCTOR_AWAIT_TEXT)
     prompt_msg = await callback.message.answer(
-        "Введите новый текст для поста. Для форматирования используйте HTML-теги или Markdown-ссылки вида `[текст](url)`.",
+        "Введите новый текст для поста. Для форматирования используйте HTML-теги.",
         reply_markup=inline.get_cancel_inline_keyboard("post_constructor:cancel_input")
     )
     await state.update_data(text_prompt_id=prompt_msg.message_id)
@@ -116,6 +121,18 @@ async def show_audience_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=inline.get_post_audience_keyboard(audience_set)
     )
     await callback.answer()
+    
+# ИЗМЕНЕНИЕ: Обработка сохранения шаблона
+@router.callback_query(F.data == "post_constructor:save_template", IsSuperAdmin())
+async def ask_template_name(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminState.POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME)
+    prompt_msg = await callback.message.answer(
+        "Введите уникальное имя для сохранения этого шаблона (например, 'еженедельная_рассылка').",
+        reply_markup=inline.get_cancel_inline_keyboard("post_constructor:cancel_input")
+    )
+    await state.update_data(text_prompt_id=prompt_msg.message_id)
+    await callback.answer()
+
 
 @router.callback_query(F.data == "post_constructor:send", IsSuperAdmin())
 async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
@@ -127,7 +144,9 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нельзя отправить пустой пост!", show_alert=True)
         return
 
-    user_ids = await db_manager.get_user_ids_for_broadcast(data["post_audience"])
+    # ИЗМЕНЕНИЕ: Преобразуем set в list перед использованием
+    audience_list = list(data.get("post_audience", []))
+    user_ids = await db_manager.get_user_ids_for_broadcast(audience_list)
     if not user_ids:
         await callback.answer("❌ В выбранной аудитории нет пользователей для рассылки.", show_alert=True)
         return
@@ -144,7 +163,9 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
     await callback.answer()
 
     data = await state.get_data()
-    user_ids = await db_manager.get_user_ids_for_broadcast(data.get("post_audience", set()))
+    # ИЗМЕНЕНИЕ: Преобразуем set в list перед использованием
+    audience_list = list(data.get("post_audience", []))
+    user_ids = await db_manager.get_user_ids_for_broadcast(audience_list)
     
     await state.clear()
     
@@ -170,7 +191,6 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
                     InputMediaClass = InputMediaPhoto if media['type'] == 'photo' else InputMediaVideo
                     media_group.append(InputMediaClass(media=media['file_id'], caption=text if i == 0 else None))
                 await bot.send_media_group(user_id, media_group)
-                # Кнопку "закрыть" отправляем отдельным сообщением
                 await bot.send_message(user_id, "...", reply_markup=inline.get_close_post_keyboard())
 
             success_count += 1
@@ -181,7 +201,7 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
             logger.error(f"Broadcast failed for user {user_id} with unexpected error: {e}")
             error_count += 1
         
-        await asyncio.sleep(0.1) # Пауза для избежания лимитов
+        await asyncio.sleep(0.1) 
 
     end_time = asyncio.get_event_loop().time()
     total_time = end_time - start_time
@@ -195,31 +215,30 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
     await bot.send_message(callback.from_user.id, report_text)
 
 # --- Обработчики FSM ---
-
-# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.message(AdminState.POST_CONSTRUCTOR_AWAIT_TEXT, F.text)
 async def process_post_text(message: Message, state: FSMContext, bot: Bot):
-    await state.update_data(post_text=message.html_text) # Сохраняем с форматированием
+    await state.update_data(post_text=message.html_text)
     await state.set_state(None)
 
     data = await state.get_data()
-    # ИСПРАВЛЕНИЕ: Используем bot.send_message вместо message.answer для надежности
-    preview_msg = await bot.send_message(chat_id=message.chat.id, text="Обновляю превью...")
-    await update_preview_message(preview_msg, state)
-
+    preview_msg_id = data.get("preview_message_id")
+    
     # Удаляем старые сообщения
     try:
         await message.delete()
         if data.get('text_prompt_id'):
             await bot.delete_message(message.chat.id, data['text_prompt_id'])
-        if data.get('preview_message_id'):
-            await bot.delete_message(message.chat.id, data['preview_message_id'])
     except TelegramBadRequest:
         pass
     
-    await state.update_data(preview_message_id=preview_msg.message_id)
+    # Обновляем превью
+    if preview_msg_id:
+        try:
+            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat)
+            await update_preview_message(preview_message_obj, state)
+        except Exception as e:
+            logger.error(f"Could not update preview message after text input: {e}")
 
-# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.message(AdminState.POST_CONSTRUCTOR_AWAIT_MEDIA, F.photo | F.video)
 async def process_post_media(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -236,10 +255,9 @@ async def process_post_media(message: Message, state: FSMContext, bot: Bot):
     
     await state.update_data(post_media=media_list)
     await message.delete()
-    # Обновляем сообщение с кнопками
+
     try:
         if data.get('media_prompt_id'):
-            # ИСПРАВЛЕНИЕ: Используем bot.edit_message_text
             await bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=data['media_prompt_id'],
@@ -249,8 +267,43 @@ async def process_post_media(message: Message, state: FSMContext, bot: Bot):
     except TelegramBadRequest:
         pass
 
-# --- Другие колбэки ---
+@router.message(AdminState.POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME, F.text)
+async def process_save_template(message: Message, state: FSMContext, bot: Bot):
+    template_name = message.text.strip()
+    data = await state.get_data()
+    
+    # ИЗМЕНЕНИЕ: Преобразуем set в list перед JSON сериализацией
+    media_list = data.get("post_media", [])
+    
+    success, result_msg = await db_manager.save_post_template(
+        template_name=template_name,
+        text=data.get("post_text"),
+        media_json=json.dumps(media_list), # Теперь здесь list
+        created_by=message.from_user.id
+    )
+    
+    await message.answer(result_msg)
+    await state.set_state(None)
+    
+    # Удаляем старые сообщения
+    try:
+        await message.delete()
+        if data.get('text_prompt_id'):
+            await bot.delete_message(message.chat.id, data['text_prompt_id'])
+    except TelegramBadRequest:
+        pass
+        
+    # Обновляем превью
+    preview_msg_id = data.get("preview_message_id")
+    if preview_msg_id:
+        try:
+            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat)
+            await update_preview_message(preview_message_obj, state)
+        except Exception as e:
+            logger.error(f"Could not update preview message after saving template: {e}")
 
+
+# --- Другие колбэки ---
 @router.callback_query(F.data == "close_post")
 async def close_post_handler(callback: CallbackQuery):
     try:
@@ -280,36 +333,25 @@ async def back_to_constructor(callback: CallbackQuery, state: FSMContext):
     await update_preview_message(callback.message, state)
     await callback.answer()
 
-# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.callback_query(F.data == "post_constructor:cancel_input", StateFilter("*"), IsSuperAdmin())
 async def cancel_text_input(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Отменяет ввод текста/медиа и возвращает к конструктору."""
     await state.set_state(None)
-    await callback.message.delete() # Удаляем сообщение с кнопкой отмены
+    await callback.message.delete()
     data = await state.get_data()
     
-    # Удаляем сообщение с просьбой ввести данные
     prompt_id = data.get('text_prompt_id') or data.get('media_prompt_id')
     if prompt_id:
         try:
-            # ИСПРАВЛЕНИЕ: Используем bot.delete_message
             await bot.delete_message(callback.from_user.id, prompt_id)
         except TelegramBadRequest:
             pass
 
-    # Обновляем главное превью
     preview_id = data.get('preview_message_id')
     if preview_id:
         try:
-            # ИСПРАВЛЕНИЕ: Получаем объект Message для передачи в update_preview_message
-            preview_message_obj = await bot.edit_message_text(
-                chat_id=callback.from_user.id,
-                message_id=preview_id,
-                text="Отмена ввода..." # Временный текст
-            )
+            preview_message_obj = Message(message_id=preview_id, chat=callback.message.chat)
             await update_preview_message(preview_message_obj, state)
-        except TelegramBadRequest:
-            # Если не удалось отредактировать, отправляем новое
+        except Exception:
             new_preview_msg = await bot.send_message(callback.from_user.id, "Обновляю превью...")
             await update_preview_message(new_preview_msg, state)
             await state.update_data(preview_message_id=new_preview_msg.message_id)

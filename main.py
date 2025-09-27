@@ -25,7 +25,7 @@ from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin, gmail,
-                      stats, promo, other, ban_system, referral, admin_roles, internship, posting) # ДОБАВЛЕН posting
+                      stats, promo, other, ban_system, referral, admin_roles, internship, posting)
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -45,9 +45,9 @@ async def sync_base_admins():
             await db_manager.add_administrator(
                 user_id=ADMIN_ID_1,
                 role='super_admin',
-                is_tester=False, # По умолчанию не тестер
-                added_by=0, # Системное добавление
-                is_removable=False # Нельзя удалить
+                is_tester=False,
+                added_by=0, 
+                is_removable=False 
             )
             logger.info(f"Added non-removable super_admin from config: {ADMIN_ID_1}")
 
@@ -82,9 +82,9 @@ async def set_bot_commands(bot: Bot):
     ]
 
     super_admin_commands = admin_commands + [
-        BotCommand(command="panel", description="🛠️ Панель управления утилитами"), # ИЗМЕНЕНО
-        BotCommand(command="posts", description="📮 Система рассылок"), # НОВАЯ
-        BotCommand(command="roles_manage", description="👥 Управление админами"), # НОВАЯ
+        BotCommand(command="panel", description="🛠️ Панель управления утилитами"),
+        BotCommand(command="posts", description="📮 Система рассылок"),
+        BotCommand(command="roles_manage", description="👥 Управление админами"),
         BotCommand(command="internships", description="🎓 Управление стажировками"),
         BotCommand(command="roles", description="🛠️ Распределение ролей"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
@@ -141,7 +141,7 @@ async def main():
         return
 
     await db_manager.init_db()
-    await sync_base_admins() # Синхронизация админов при старте
+    await sync_base_admins()
 
     storage = RedisStorage.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -152,11 +152,10 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
-    # Подключение роутеров
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(admin_roles.router)
-    dp.include_router(posting.router) # НОВЫЙ РОУТЕР
+    dp.include_router(posting.router)
     dp.include_router(internship.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
