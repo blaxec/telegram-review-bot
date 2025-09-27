@@ -1218,3 +1218,35 @@ async def process_intern_decision(review_id: int, is_approved: bool, reason: Opt
 
             if task.current_progress >= task.goal_count:
                 await complete_internship(task)
+
+# --- Функции для управления администраторами ---
+async def get_administrator(user_id: int) -> Optional[Administrator]:
+    """Получает запись администратора по его ID."""
+    async with async_session() as session:
+        return await session.get(Administrator, user_id)
+
+async def add_administrator(user_id: int, role: str, is_tester: bool, added_by: int, is_removable: bool = True) -> bool:
+    """Добавляет нового администратора в базу данных."""
+    async with async_session() as session:
+        async with session.begin():
+            existing_admin = await session.get(Administrator, user_id)
+            if existing_admin:
+                logger.warning(f"Attempted to add existing administrator with ID {user_id}.")
+                return False
+            
+            new_admin = Administrator(
+                user_id=user_id,
+                role=role,
+                is_tester=is_tester,
+                added_by=added_by,
+                is_removable=is_removable
+            )
+            session.add(new_admin)
+        return True
+
+async def get_all_administrators_by_role() -> List[Administrator]:
+    """Получает список всех администраторов из базы данных."""
+    async with async_session() as session:
+        query = select(Administrator)
+        result = await session.execute(query)
+        return result.scalars().all()
