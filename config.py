@@ -19,6 +19,8 @@ ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 0))
 
 # СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного) для общей логики
 # Сначала берем ID из ADMIN_IDS, если их нет, формируем из ADMIN_ID_1 и ADMIN_ID_2
+# ЭТИ СПИСКИ СТАНУТ УСТАРЕВШИМИ ПОСЛЕ ПЕРЕХОДА НА ДИНАМИЧЕСКИЕ РОЛИ,
+# НО ОСТАВЛЕНЫ ДЛЯ ПЕРВОНАЧАЛЬНОЙ СИНХРОНИЗАЦИИ
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS")
 if ADMIN_IDS_STR:
     ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
@@ -29,20 +31,17 @@ else:
 if ADMIN_ID_1 and ADMIN_ID_1 not in ADMIN_IDS:
     ADMIN_IDS.insert(0, ADMIN_ID_1)
 
-# ID Тестировщиков для команды /skip
+# ID Тестировщиков для команды /skip (также станет устаревшим)
 TESTER_IDS_STR = os.getenv("TESTER_IDS", "")
 TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if tester_id.strip().isdigit()]
 
 # ID канала, куда будут отправляться заявки на вывод
 WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
 
-# --- Роли администраторов по умолчанию ---
+# --- Роли администраторов по умолчанию (останутся для системы ролей) ---
 class Defaults:
-    # Администратор, ответственный за большинство проверок скриншотов
     DEFAULT_SCREENSHOT_CHECK_ADMIN = ADMIN_ID_1
-    # Администратор, ответственный за выдачу текстов и данных
     DEFAULT_TEXT_PROVIDER_ADMIN = ADMIN_ID_1
-    # Администратор для финальной, самой ответственной проверки
     DEFAULT_FINAL_VERDICT_ADMIN = ADMIN_ID_2 if ADMIN_ID_2 else ADMIN_ID_1
 
 # --- Ключи для внешних API ---
@@ -52,9 +51,7 @@ GOOGLE_API_KEYS = [key for key in [GOOGLE_API_KEY_1, GOOGLE_API_KEY_2] if key]
 GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile")
 
 # --- ПАРАМЕТРЫ ПЛАТНОГО РАЗБАНА ---
-# Укажите токен, полученный от @BotFather при настройке платежей
 PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
-# Стоимость повторного разбана в Telegram Stars (минимальное значение - 1)
 PAID_UNBAN_COST_STARS = int(os.getenv("PAID_UNBAN_COST_STARS", 1))
 
 if not GOOGLE_API_KEYS:
@@ -121,12 +118,12 @@ class Durations:
 # --- Лимиты и пороги ---
 class Limits:
     MIN_WITHDRAWAL_AMOUNT = 15.0
-    MIN_TRANSFER_AMOUNT = 3.0 # ИЗМЕНЕНО
+    MIN_TRANSFER_AMOUNT = 10.0 # ИЗМЕНЕНО
     WARNINGS_THRESHOLD_FOR_BAN = 3
     LINKS_PER_PAGE = 10 # Для пагинации в админке
 
 # --- Комиссия за перевод ---
-TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 0.5)) # ИЗМЕНЕНО
+TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 5.0)) # ИЗМЕНЕНО
 
 # --- Настройки подключения к базам данных ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -136,12 +133,14 @@ if not DATABASE_URL:
     DB_HOST = os.getenv("DB_HOST", "postgres_db")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "telegram_bot_db")
-    DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    # ИЗМЕНЕНИЕ: Формируем URL с asyncpg по умолчанию
+    DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# ИЗМЕНЕНИЕ: Упрощенная логика замены протокола
+elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-elif DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
+elif DATABASE_URL.startswith("postgresql://"):
      DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 
 REDIS_URL = os.getenv("REDIS_URL")
 if REDIS_URL:

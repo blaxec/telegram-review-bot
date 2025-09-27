@@ -8,8 +8,8 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
-    TRANSFER_AWAITING_MEDIA_CHOICE = State() # НОВОЕ
-    TRANSFER_AWAITING_MEDIA = State() # НОВОЕ
+    TRANSFER_AWAITING_MEDIA_CHOICE = State()
+    TRANSFER_AWAITING_MEDIA = State()
     TRANSFER_COMMENT_INPUT = State()
     
     # Состояния для вывода звезд
@@ -32,9 +32,7 @@ class UserState(StatesGroup):
     GOOGLE_REVIEW_TASK_ACTIVE = State()
     GOOGLE_REVIEW_AWAITING_SCREENSHOT = State()
     
-    # --- НОВОЕ СОСТОЯНИЕ ДЛЯ ХОЛДА ---
     AWAITING_CONFIRMATION_SCREENSHOT = State()
-    # ---------------------------------
 
     # Состояния для отзыва в Yandex
     YANDEX_REVIEW_INIT = State()
@@ -68,10 +66,9 @@ class UserState(StatesGroup):
     REFERRAL_PATH_SELECTION = State()
     REFERRAL_YANDEX_SUBPATH_SELECTION = State()
     
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ АМНИСТИИ ---
     UNBAN_AWAITING_REASON = State()
 
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК (ПОЛЬЗОВАТЕЛЬ) ---
+    # Состояния для системы стажировок (пользователь)
     INTERNSHIP_APP_START = State()
     INTERNSHIP_APP_AGE = State()
     INTERNSHIP_APP_HOURS = State()
@@ -96,12 +93,12 @@ class AdminState(StatesGroup):
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
 
-    # Состояния для штрафа
+    # Состояния для штрафа (теперь запускаются из /panel)
     FINE_USER_ID = State()
     FINE_AMOUNT = State()
     FINE_REASON = State()
     
-    # Состояния для создания промокода
+    # Состояния для создания промокода (теперь запускаются из /panel)
     PROMO_CODE_NAME = State()
     PROMO_CONDITION = State()
     PROMO_REWARD = State()
@@ -116,24 +113,35 @@ class AdminState(StatesGroup):
     ADD_LINKS = State() 
     DELETE_LINK_ID = State()
     RETURN_LINK_ID = State()
-    LINK_LIST_VIEW = State() # НОВОЕ
+    LINK_LIST_VIEW = State()
 
-    # Состояния для процесса бана
+    # Состояния для процесса бана (теперь запускаются из /panel)
+    BAN_USER_IDENTIFIER = State()
     BAN_REASON = State()
 
     # Состояния для списков
     BAN_LIST_VIEW = State()
     PROMO_LIST_VIEW = State()
     PROMO_DELETE_CONFIRM = State()
-    AMNESTY_LIST_VIEW = State() # НОВОЕ
+    AMNESTY_LIST_VIEW = State()
     
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
+    # Состояния для управления наградами
     REWARD_SETTINGS_MENU = State()
     REWARD_SET_PLACES_COUNT = State()
     REWARD_SET_AMOUNT_FOR_PLACE = State()
     REWARD_SET_TIMER = State()
 
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК (АДМИН) ---
+    # Состояния для системы стажировок (админ)
     INTERNSHIP_CANDIDATE_TASK_GOAL = State()
     INTERNSHIP_FIRE_REASON = State()
-    MENTOR_REJECT_REASON = State() # Для ввода причины отклонения работы стажера
+    MENTOR_REJECT_REASON = State()
+
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ДИНАМИЧЕСКИХ РОЛЕЙ ---
+    ROLES_ADD_ADMIN_ID = State()
+    ROLES_ADD_ADMIN_ROLE = State()
+    ROLES_DELETE_CONFIRM = State()
+    
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ КОНСТРУКТОРА ПОСТОВ ---
+    POST_CONSTRUCTOR_AWAIT_TEXT = State()
+    POST_CONSTRUCTOR_AWAIT_MEDIA = State()
+    POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME = State()

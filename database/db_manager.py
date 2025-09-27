@@ -8,10 +8,11 @@ from sqlalchemy import select, update, and_, delete, func, desc, case, insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
-from database.models import (Base, User, Review, Link, WithdrawalRequest, 
+from database.models import (Base, User, Review, Link, WithdrawalRequest,
                              PromoCode, PromoActivation, SupportTicket,
                              RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
-                             InternshipApplication, InternshipTask, InternshipMistake)
+                             InternshipApplication, InternshipTask, InternshipMistake,
+                             Administrator, PostTemplate) # ИМПОРТИРОВАНЫ НОВЫЕ МОДЕЛИ
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ async_session = None
 
 async def init_db():
     global engine, async_session
-    
+
     engine = create_async_engine(DATABASE_URL)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -74,7 +75,7 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
                             f"User {user_id} tried to register with non-existent referrer_id {referrer_id}. "
                             f"Proceeding without referral."
                         )
-                
+
                 new_user = User(id=user_id, username=username, referrer_id=valid_referrer_id)
                 session.add(new_user)
 
@@ -141,7 +142,7 @@ async def get_referrer_info(user_id: int) -> str:
             result_username = await session.execute(query_username)
             username = result_username.scalar_one_or_none()
             return f"@{username}" if username else f"ID: {referrer_id}"
-        
+
         return "-"
 
 async def find_user_by_identifier(identifier: str) -> Union[int, None]:
@@ -155,25 +156,29 @@ async def find_user_by_identifier(identifier: str) -> Union[int, None]:
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
+# --- ИСПРАВЛЕНА ЛОГИКА КОМИССИИ ---
 async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bool:
     """Переводит звезды с учетом комиссии."""
     async with async_session() as session:
         async with session.begin():
             sender = await session.get(User, sender_id)
             recipient = await session.get(User, recipient_id)
-            
+
             commission = amount * (TRANSFER_COMMISSION_PERCENT / 100)
             total_to_deduct = amount + commission
-            
+
             if not sender or not recipient or sender.balance < total_to_deduct:
                 return False
-                
+
             sender.balance -= total_to_deduct
             recipient.balance += amount
-            
+
+            # Логируем основную операцию перевода
             await log_operation(session, sender_id, "TRANSFER_SENT", -amount, f"Получатель: {recipient.username or recipient_id}")
+            # Логируем списание комиссии ОТДЕЛЬНО, если она есть
             if commission > 0:
                 await log_operation(session, sender_id, "FINE", -commission, f"Комиссия за перевод")
+            # Логируем получение средств получателем
             await log_operation(session, recipient_id, "TRANSFER_RECEIVED", amount, f"Отправитель: {sender.username or sender_id}")
 
         return True
@@ -183,7 +188,7 @@ async def get_referrals(user_id: int) -> list:
         query = select(User.username).where(User.referrer_id == user_id)
         result = await session.execute(query)
         return result.scalars().all()
-        
+
 async def get_referral_earnings(user_id: int) -> float:
     user = await get_user(user_id)
     return user.referral_earnings if user else 0.0
@@ -272,7 +277,7 @@ async def move_review_to_hold(review_id: int, amount: float, hold_minutes: int) 
             if not review or review.status != 'pending':
                 logger.error(f"Failed to move review {review_id} to hold. Status was not 'pending'.")
                 return False
-            
+
             user = await session.get(User, review.user_id)
             if not user:
                 logger.error(f"Failed to move review {review_id} to hold. User {review.user_id} not found.")
@@ -302,11 +307,11 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             review = await session.get(Review, review_id)
             if not review or review.status not in ['pending', 'on_hold']:
                 return None
-            
+
             user = await session.get(User, review.user_id)
             if user and review.status == 'on_hold':
                 user.hold_balance -= review.amount
-            
+
             review.status = 'rejected'
             return review
 
@@ -317,7 +322,7 @@ async def admin_approve_review(review_id: int) -> Union[Review, None]:
             if not review or review.status not in ['on_hold', 'awaiting_confirmation']:
                 logger.warning(f"Admin approve failed for review {review_id}. Status was {review.status}, not 'awaiting_confirmation' or 'on_hold'.")
                 return None
-            
+
             user = await session.get(User, review.user_id)
             if user:
                 if user.hold_balance >= review.amount:
@@ -325,7 +330,7 @@ async def admin_approve_review(review_id: int) -> Union[Review, None]:
                 else:
                     logger.warning(f"User {user.id} hold balance ({user.hold_balance}) is less than review amount ({review.amount}) for review {review_id}. Setting hold to 0.")
                     user.hold_balance = 0
-                
+
                 user.balance += review.amount
                 await log_operation(session, user.id, "REVIEW_APPROVED", review.amount, f"Отзыв #{review.id} ({review.platform})")
 
@@ -352,10 +357,10 @@ async def db_get_available_reference(platform: str) -> Union[Link, None]:
                 Link.platform == platform,
                 Link.status == 'available'
             ).limit(1).with_for_update(skip_locked=True)
-            
+
             result = await session.execute(stmt)
             link_id = result.scalar_one_or_none()
-            
+
             if link_id:
                 link_obj = await session.get(Link, link_id)
                 return link_obj
@@ -365,7 +370,7 @@ async def db_update_link_status(link_id: int, status: str, user_id: int | None =
     async with async_session() as session:
         async with session.begin():
             stmt = update(Link).where(Link.id == link_id).values(
-                status=status, 
+                status=status,
                 assigned_to_user_id=user_id,
                 assigned_at=datetime.datetime.utcnow() if status == 'assigned' else None
             )
@@ -375,7 +380,7 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
     async with async_session() as session:
         base_query = select(Link).where(Link.platform == platform)
         count_query = select(func.count(Link.id)).where(Link.platform == platform)
-        
+
         if filter_type == 'fast':
             base_query = base_query.where(Link.is_fast_track == True)
             count_query = count_query.where(Link.is_fast_track == True)
@@ -387,13 +392,13 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
             count_query = count_query.where(Link.is_fast_track == False, Link.requires_photo == False)
 
         total_count = await session.scalar(count_query)
-        
+
         paginated_query = base_query.order_by(desc(Link.id)).offset((page - 1) * limit).limit(limit)
         result = await session.execute(paginated_query)
         links = result.scalars().all()
-        
+
         return total_count, links
-        
+
 async def db_get_link_stats(platform: str) -> Dict[str, int]:
     async with async_session() as session:
         query = (
@@ -406,11 +411,11 @@ async def db_get_link_stats(platform: str) -> Dict[str, int]:
         )
         result = await session.execute(query)
         stats = {status: count for status, count in result.all()}
-        
+
         total_query = select(func.count(Link.id)).where(Link.platform == platform)
         total_count = await session.scalar(total_query)
         stats['total'] = total_count
-        
+
         return stats
 
 async def db_delete_reference(link_id: int):
@@ -418,7 +423,7 @@ async def db_delete_reference(link_id: int):
         async with session.begin():
             unlink_stmt = update(Review).where(Review.link_id == link_id).values(link_id=None)
             await session.execute(unlink_stmt)
-            
+
             delete_stmt = delete(Link).where(Link.id == link_id)
             await session.execute(delete_stmt)
 
@@ -432,10 +437,10 @@ async def create_withdrawal_request(user_id: int, amount: float, recipient_info:
             user = await session.get(User, user_id)
             if not user or user.balance < amount:
                 return None
-            
+
             user.balance -= amount
             await log_operation(session, user_id, "WITHDRAWAL", -amount, f"Запрос на вывод для {recipient_info}")
-            
+
             new_request = WithdrawalRequest(
                 user_id=user_id,
                 amount=amount,
@@ -465,12 +470,12 @@ async def reject_withdrawal_request(request_id: int) -> Union[WithdrawalRequest,
             request = await session.get(WithdrawalRequest, request_id)
             if not request or request.status != 'pending':
                 return None
-            
+
             user = await session.get(User, request.user_id)
             if user:
                 user.balance += request.amount
                 await log_operation(session, user.id, "WITHDRAWAL", request.amount, "Отклонение запроса на вывод")
-            
+
             request.status = 'rejected'
             return request
 
@@ -480,7 +485,7 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             user = await session.get(User, user_id)
             if not user:
                 return False
-            
+
             user.google_cooldown_until = None
             user.yandex_with_text_cooldown_until = None
             user.yandex_without_text_cooldown_until = None
@@ -507,7 +512,7 @@ async def get_top_10_users() -> List[Tuple[int, str, float, int]]:
             .order_by(desc(User.balance))
             .limit(10)
         )
-        
+
         result = await session.execute(query)
         return result.all()
 
@@ -518,7 +523,7 @@ async def create_promo_code(code: str, condition: str, reward: float, total_uses
             existing = await session.execute(select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code)))
             if existing.scalar_one_or_none():
                 return None
-            
+
             new_promo = PromoCode(
                 code=code,
                 condition=condition,
@@ -536,7 +541,7 @@ async def get_promo_by_code(code: str, for_update: bool = False) -> Union[PromoC
             stmt = select(PromoCode).where(func.upper(PromoCode.code) == func.upper(code))
             if for_update:
                 stmt = stmt.with_for_update()
-            
+
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
@@ -574,7 +579,7 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
             query.options(selectinload(PromoActivation.promo_code)).limit(1)
         )
         return result.scalar_one_or_none()
-        
+
 async def create_promo_activation(user_id: int, promo_id: int, status: str) -> PromoActivation:
     async with async_session() as session:
         async with session.begin():
@@ -612,7 +617,7 @@ async def complete_promo_activation(activation_id: int) -> bool:
             activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
             if not activation or activation.status != 'pending_condition':
                 return False
-            
+
             promo_to_update = await session.get(PromoCode, activation.promo_code_id, with_for_update=True)
             if promo_to_update.current_uses >= promo_to_update.total_uses:
                 logger.warning(f"Promo '{promo_to_update.code}' has no uses left, but user {activation.user_id} tried to complete it.")
@@ -649,7 +654,7 @@ async def claim_support_ticket(ticket_id: int, admin_id: int) -> Union[SupportTi
             ticket = await session.get(SupportTicket, ticket_id)
             if not ticket or ticket.status != 'open':
                 return None
-            
+
             ticket.status = 'claimed'
             ticket.admin_id = admin_id
             return ticket
@@ -660,7 +665,7 @@ async def close_support_ticket(ticket_id: int) -> bool:
             ticket = await session.get(SupportTicket, ticket_id)
             if not ticket:
                 return False
-            
+
             ticket.status = 'closed'
             return True
 
@@ -670,13 +675,13 @@ async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> i
             user = await session.get(User, user_id)
             if not user:
                 return 0
-            
+
             user.support_warnings += 1
             current_warnings = user.support_warnings
 
             if hours is not None and hours > 0:
                 user.support_cooldown_until = datetime.datetime.utcnow() + datetime.timedelta(hours=hours)
-            
+
             return current_warnings
 
 # --- Функции для верификации после холда ---
@@ -716,14 +721,14 @@ async def cancel_hold(review_id: int) -> Optional[Review]:
             review = await session.get(Review, review_id, options=[selectinload(Review.user)])
             if not review or review.status != 'awaiting_confirmation':
                 return None
-            
+
             user = review.user
             if user and review.amount:
                 if user.hold_balance >= review.amount:
                     user.hold_balance -= review.amount
                 else:
                     user.hold_balance = 0
-            
+
             review.status = 'rejected'
             return review
 
@@ -733,7 +738,7 @@ async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
             review = await session.get(Review, review_id)
             if not review or review.status != 'awaiting_confirmation':
                 return None
-            
+
             user = await session.get(User, review.user_id)
             if user and review.amount:
                 if user.hold_balance >= review.amount:
@@ -749,7 +754,7 @@ async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> Li
     async with async_session() as session:
         async with session.begin():
             threshold_time = datetime.datetime.utcnow() - datetime.timedelta(hours=hours_threshold)
-            
+
             select_stmt = select(Link.id).where(
                 Link.status == 'assigned',
                 Link.assigned_at < threshold_time
@@ -759,7 +764,7 @@ async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> Li
 
             if not link_ids_to_expire:
                 return []
-            
+
             select_objects_stmt = select(Link).where(Link.id.in_(link_ids_to_expire))
             result_objects = await session.execute(select_objects_stmt)
             expired_links = result_objects.scalars().all()
@@ -772,7 +777,7 @@ async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> Li
                 assigned_at=None
             )
             await session.execute(update_stmt)
-            
+
             return expired_links
 
 
@@ -856,7 +861,7 @@ async def update_unban_request_status(request_id: int, status: str, admin_id: in
             request.status = status
             request.reviewed_by_admin_id = admin_id
             return True
-            
+
 async def get_unban_request_by_status(user_id: int, status: str) -> Optional[UnbanRequest]:
     async with async_session() as session:
         query = select(UnbanRequest).where(
@@ -876,7 +881,7 @@ async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -
             user.referral_path = path
             user.referral_subpath = subpath
             return True
-            
+
 # --- Функции для управления наградами ---
 async def get_reward_settings() -> List[RewardSetting]:
     async with async_session() as session:
@@ -926,10 +931,10 @@ async def get_pending_tasks_count() -> Dict[str, int]:
     async with async_session() as session:
         reviews_query = select(func.count(Review.id)).where(Review.status.in_(['pending', 'awaiting_confirmation']))
         tickets_query = select(func.count(SupportTicket.id)).where(SupportTicket.status == 'open')
-        
+
         reviews_count = await session.execute(reviews_query)
         tickets_count = await session.execute(tickets_query)
-        
+
         return {
             "reviews": reviews_count.scalar_one(),
             "tickets": tickets_count.scalar_one(),
@@ -1011,11 +1016,11 @@ async def get_internship_stats_counts() -> Dict[str, int]:
         pending_apps_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'pending')
         candidates_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'approved')
         interns_q = select(func.count(User.id)).where(User.is_intern == True)
-        
+
         pending_apps_res = await session.execute(pending_apps_q)
         candidates_res = await session.execute(candidates_q)
         interns_res = await session.execute(interns_q)
-        
+
         return {
             "applications": pending_apps_res.scalar_one(),
             "candidates": candidates_res.scalar_one(),
@@ -1026,13 +1031,13 @@ async def get_paginated_applications(status: str, page: int = 1, limit: int = 5)
     async with async_session() as session:
         query = select(InternshipApplication).where(InternshipApplication.status == status).order_by(InternshipApplication.created_at)
         count_query = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == status)
-        
+
         total_count = await session.scalar(count_query)
-        
+
         paginated_query = query.offset((page - 1) * limit).limit(limit)
         result = await session.execute(paginated_query)
         apps = result.scalars().all()
-        
+
         return apps, total_count
 
 async def get_paginated_interns(page: int = 1, limit: int = 5) -> Tuple[List[User], int]:
@@ -1045,7 +1050,7 @@ async def get_paginated_interns(page: int = 1, limit: int = 5) -> Tuple[List[Use
         paginated_query = query.offset((page - 1) * limit).limit(limit)
         result = await session.execute(paginated_query)
         interns = result.scalars().unique().all()
-        
+
         return interns, total_count
 
 async def get_application_by_id(app_id: int) -> Optional[InternshipApplication]:
@@ -1091,7 +1096,7 @@ async def find_available_intern(platform_family: str) -> Optional[User]:
         ).order_by(
             InternshipTask.last_task_at.asc().nulls_first()
         ).limit(1)
-        
+
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
@@ -1115,7 +1120,7 @@ async def create_intern_task(intern_id: int, platform: str, task_type: str, goal
             if not user: return None
 
             user.is_intern = True
-            
+
             new_task = InternshipTask(
                 intern_id=intern_id,
                 platform=platform,
@@ -1146,13 +1151,13 @@ async def get_intern_mistakes(intern_id: int, page: int = 1, limit: int = 5) -> 
     async with async_session() as session:
         query = select(InternshipMistake).where(InternshipMistake.intern_id == intern_id).order_by(desc(InternshipMistake.created_at))
         count_query = select(func.count(InternshipMistake.id)).where(InternshipMistake.intern_id == intern_id)
-        
+
         total_count = await session.scalar(count_query)
-        
+
         paginated_query = query.offset((page - 1) * limit).limit(limit)
         result = await session.execute(paginated_query)
         mistakes = result.scalars().all()
-        
+
         return mistakes, total_count
 
 async def complete_internship(task: InternshipTask) -> float:
@@ -1171,14 +1176,14 @@ async def complete_internship(task: InternshipTask) -> float:
             intern.is_busy_intern = False
             if intern.internship_application:
                 intern.internship_application.status = 'archived_success'
-            
+
             penalty = task.error_count * (task.estimated_salary / task.goal_count) * 2
             final_salary = task.estimated_salary - penalty
-            
+
             if final_salary > 0:
                 intern.balance += final_salary
                 await log_operation(session, intern.id, "TOP_REWARD", final_salary, "Зарплата за стажировку")
-            
+
             return final_salary
 
 async def process_intern_decision(review_id: int, is_approved: bool, reason: Optional[str] = None):
@@ -1191,7 +1196,7 @@ async def process_intern_decision(review_id: int, is_approved: bool, reason: Opt
 
             intern = review.user
             intern.is_busy_intern = False
-            
+
             task = await get_active_intern_task(intern.id)
             if not task: return
 

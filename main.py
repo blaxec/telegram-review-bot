@@ -6,7 +6,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import logging
 
-# --- АГРЕССИВНАЯ ОТЛАДКА В САМОМ НАЧАЛЕ ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -15,31 +14,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logger.info("--- СКРИПТ main.py ЗАПУЩЕН ---")
-bot_token_value = None
-try:
-    bot_token_value = os.getenv("BOT_TOKEN")
-    if bot_token_value:
-        logger.info(f"УСПЕХ: Переменная BOT_TOKEN успешно прочитана в Python. Длина токена: {len(bot_token_value)}.")
-    else:
-        logger.critical("!!! КРИТИЧЕСКАЯ ОШИБКА: Python не смог прочитать переменную BOT_TOKEN из окружения (os.getenv вернул None).")
-except Exception as e:
-    logger.critical(f"!!! КРИТИЧЕСКАЯ ОШИБКА: Произошло исключение при чтении BOT_TOKEN: {e}")
-# --- КОНЕЦ ОТЛАДКИ ---
-
 
 import asyncio
-import time
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
-# Обратите внимание, что BOT_TOKEN теперь импортируется после проверки
-from config import BOT_TOKEN, SUPER_ADMIN_ID, ADMIN_IDS, TESTER_IDS, Durations, REDIS_HOST, REDIS_PORT, PAYMENT_PROVIDER_TOKEN
-from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, Message, BotCommandScopeDefault
-from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
+from config import BOT_TOKEN, SUPER_ADMIN_ID, ADMIN_ID_1, ADMIN_ID_2, REDIS_HOST, REDIS_PORT
+from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, BotCommandScopeDefault
+from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin, gmail,
-                      stats, promo, other, ban_system, referral, admin_roles, internship)
+                      stats, promo, other, ban_system, referral, admin_roles, internship, posting) # ДОБАВЛЕН posting
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -47,9 +33,41 @@ from logic.reward_logic import distribute_rewards
 from logic.cleanup_logic import check_and_expire_links, process_expired_holds
 
 
+async def sync_base_admins():
+    """
+    Синхронизирует базовых администраторов из config.py с базой данных
+    при старте бота, чтобы гарантировать их наличие.
+    """
+    logger.info("Syncing base administrators from config to database...")
+    if ADMIN_ID_1:
+        admin1 = await db_manager.get_administrator(ADMIN_ID_1)
+        if not admin1:
+            await db_manager.add_administrator(
+                user_id=ADMIN_ID_1,
+                role='super_admin',
+                is_tester=False, # По умолчанию не тестер
+                added_by=0, # Системное добавление
+                is_removable=False # Нельзя удалить
+            )
+            logger.info(f"Added non-removable super_admin from config: {ADMIN_ID_1}")
+
+    if ADMIN_ID_2 and ADMIN_ID_2 != 0:
+        admin2 = await db_manager.get_administrator(ADMIN_ID_2)
+        if not admin2:
+            await db_manager.add_administrator(
+                user_id=ADMIN_ID_2,
+                role='admin',
+                is_tester=False,
+                added_by=0,
+                is_removable=False
+            )
+            logger.info(f"Added non-removable admin from config: {ADMIN_ID_2}")
+    logger.info("Base administrators sync complete.")
+
+
 async def set_bot_commands(bot: Bot):
     """
-    Устанавливает разные списки команд для админов, тестеров и обычных пользователей.
+    Устанавливает списки команд для всех ролей пользователей.
     """
     user_commands = [
         BotCommand(command="start", description="🚀 Перезапустить бота"),
@@ -58,27 +76,22 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="unban_request", description="🙏 Подать запрос на разбан")
     ]
     
-    # Команды для ОБЫЧНЫХ администраторов
     admin_commands = user_commands + [
         BotCommand(command="dnd", description="🌙/☀️ Включить/выключить ночной режим"),
         BotCommand(command="pending_tasks", description="📥 Посмотреть задачи в очереди"),
-        BotCommand(command="viewhold", description="⏳ Холд пользователя"),
-        BotCommand(command="reset_cooldown", description="❄️ Сбросить кулдауны"),
-        BotCommand(command="fine", description="💸 Выписать штраф"),
     ]
 
-    # Команды для ГЛАВНОГО администратора (включают все команды обычного)
     super_admin_commands = admin_commands + [
+        BotCommand(command="panel", description="🛠️ Панель управления утилитами"), # ИЗМЕНЕНО
+        BotCommand(command="posts", description="📮 Система рассылок"), # НОВАЯ
+        BotCommand(command="roles_manage", description="👥 Управление админами"), # НОВАЯ
         BotCommand(command="internships", description="🎓 Управление стажировками"),
-        BotCommand(command="roles", description="🛠️ Управление ролями админов"),
+        BotCommand(command="roles", description="🛠️ Распределение ролей"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
-        BotCommand(command="amnesty", description="🙏 Список запросов на разбан"),
+        BotCommand(command="amnesty", description="🙏 Запросы на разбан"),
         BotCommand(command="banlist", description="📜 Список забаненных"),
         BotCommand(command="promolist", description="📝 Список промокодов"),
-        BotCommand(command="ban", description="🚫 Забанить"),
-        BotCommand(command="unban", description="✅ Разбанить"),
-        BotCommand(command="create_promo", description="✨ Создать промокод")
     ]
 
     tester_commands = user_commands + [
@@ -88,33 +101,26 @@ async def set_bot_commands(bot: Bot):
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     logger.info("Default user commands have been set for all users.")
 
-    for admin_id in ADMIN_IDS:
+    all_admins = await db_manager.get_all_administrators_by_role()
+    for admin in all_admins:
         try:
-            if admin_id == SUPER_ADMIN_ID:
+            if admin.role == 'super_admin':
                 commands_to_set = super_admin_commands.copy()
-                if admin_id in TESTER_IDS:
+                if admin.is_tester:
                     tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
                     commands_to_set.extend(tester_only_commands)
-                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
-                logger.info(f"Super Admin commands set for admin ID: {admin_id}")
-            else:
+                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin.user_id))
+                logger.info(f"Super Admin commands set for admin ID: {admin.user_id}")
+            else: # role == 'admin'
                 commands_to_set = admin_commands.copy()
-                if admin_id in TESTER_IDS:
+                if admin.is_tester:
                      tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
                      commands_to_set.extend(tester_only_commands)
-                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin_id))
-                logger.info(f"Regular Admin commands set for admin ID: {admin_id}")
+                await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin.user_id))
+                logger.info(f"Regular Admin commands set for admin ID: {admin.user_id}")
         except Exception as e:
-            logger.error(f"Failed to set commands for admin {admin_id}: {e}")
-
-    non_admin_testers = [tid for tid in TESTER_IDS if tid not in ADMIN_IDS]
-    for tester_id in non_admin_testers:
-        try:
-            await bot.set_my_commands(tester_commands, scope=BotCommandScopeChat(chat_id=tester_id))
-            logger.info(f"Tester commands set for tester ID: {tester_id}")
-        except Exception as e:
-            logger.error(f"Failed to set commands for tester {tester_id}: {e}")
-
+            logger.error(f"Failed to set commands for admin {admin.user_id}: {e}")
+    
 
 async def handle_telegram_bad_request(event: ErrorEvent):
     if isinstance(event.exception, TelegramBadRequest) and ("query is too old" in event.exception.message or "query ID is invalid" in event.exception.message):
@@ -131,13 +137,13 @@ async def main():
     logger.info("--- Вход в функцию main() ---")
 
     if not BOT_TOKEN:
-        logger.critical("!!! ПРОВЕРКА ВНУТРИ main(): BOT_TOKEN не найден! Завершение работы. !!!")
+        logger.critical("!!! BOT_TOKEN не найден! Завершение работы. !!!")
         return
 
     await db_manager.init_db()
+    await sync_base_admins() # Синхронизация админов при старте
 
     storage = RedisStorage.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
-
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -146,9 +152,11 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
 
+    # Подключение роутеров
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(admin_roles.router)
+    dp.include_router(posting.router) # НОВЫЙ РОУТЕР
     dp.include_router(internship.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
@@ -181,9 +189,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    logger.info("--- Секция if __name__ == '__main__' ---")
-    if not bot_token_value:
-        logger.critical("!!! ПРОВЕРКА ПЕРЕД ЗАПУСКОМ: BOT_TOKEN не был прочитан. Запуск отменен. !!!")
+    if not BOT_TOKEN:
+        logger.critical("!!! BOT_TOKEN не был прочитан. Запуск отменен. !!!")
     else:
         try:
             asyncio.run(main())

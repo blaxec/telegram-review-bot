@@ -1,8 +1,8 @@
 # file: database/models.py
 
 import datetime
-from sqlalchemy import (Column, Integer, String, BigInteger,
-                        DateTime, ForeignKey, Float, Enum, Boolean)
+from sqlalchemy import (Column, Integer, String, BigInteger, JSON,
+                        DateTime, ForeignKey, Float, Enum, Boolean, Text)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -32,22 +32,19 @@ class User(Base):
     
     is_anonymous_in_stats = Column(Boolean, default=False, nullable=False)
     
-    # --- Поля для системы бана ---
     is_banned = Column(Boolean, default=False, nullable=False)
     banned_at = Column(DateTime, nullable=True)
     ban_reason = Column(String, nullable=True)
     last_unban_request_at = Column(DateTime, nullable=True)
-    unban_count = Column(Integer, default=0, nullable=False) # НОВОЕ ПОЛЕ
+    unban_count = Column(Integer, default=0, nullable=False)
     
     phone_number = Column(String, nullable=True)
 
     support_warnings = Column(Integer, default=0, nullable=False)
     support_cooldown_until = Column(DateTime, nullable=True)
     
-    # --- Поле для режима DND ---
     dnd_enabled = Column(Boolean, default=False, nullable=False)
     
-    # --- НОВЫЕ ПОЛЯ ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
     is_intern = Column(Boolean, default=False, nullable=False)
     is_busy_intern = Column(Boolean, default=False, nullable=False)
 
@@ -56,9 +53,8 @@ class User(Base):
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
     operations = relationship("OperationHistory", back_populates="user")
-    unban_requests = relationship("UnbanRequest", back_populates="user") # НОВАЯ СВЯЗЬ
+    unban_requests = relationship("UnbanRequest", back_populates="user")
     
-    # --- НОВЫЕ СВЯЗИ ДЛЯ СТАЖИРОВКИ ---
     internship_application = relationship("InternshipApplication", back_populates="user", uselist=False, cascade="all, delete-orphan")
     internship_tasks = relationship("InternshipTask", back_populates="intern")
     internship_mistakes = relationship("InternshipMistake", back_populates="intern")
@@ -71,7 +67,6 @@ class Review(Base):
     user_id = Column(BigInteger, ForeignKey('users.id'))
     platform = Column(String)
     link_id = Column(Integer, ForeignKey('links.id'), nullable=True)
-    # Статусы: pending, on_hold, awaiting_confirmation, approved, rejected
     status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     hold_until = Column(DateTime, nullable=True)
@@ -98,7 +93,7 @@ class Link(Base):
     assigned_to_user_id = Column(BigInteger, nullable=True)
     assigned_at = Column(DateTime, nullable=True)
     is_fast_track = Column(Boolean, default=False, nullable=False)
-    requires_photo = Column(Boolean, default=False, nullable=False) # НОВОЕ ПОЛЕ
+    requires_photo = Column(Boolean, default=False, nullable=False)
 
 
 class WithdrawalRequest(Base):
@@ -187,7 +182,6 @@ class OperationHistory(Base):
 
     user = relationship("User", back_populates="operations")
 
-# --- НОВАЯ ТАБЛИЦА ДЛЯ ЗАПРОСОВ НА РАЗБАН ---
 class UnbanRequest(Base):
     __tablename__ = 'unban_requests'
     
@@ -199,8 +193,6 @@ class UnbanRequest(Base):
     reviewed_by_admin_id = Column(BigInteger, nullable=True)
     
     user = relationship("User", back_populates="unban_requests")
-
-# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
 
 class InternshipApplication(Base):
     __tablename__ = 'internship_applications'
@@ -240,10 +232,31 @@ class InternshipMistake(Base):
     id = Column(Integer, primary_key=True)
     intern_task_id = Column(Integer, ForeignKey('internship_tasks.id'), nullable=False)
     intern_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
-    review_id = Column(Integer, nullable=True) # ID отзыва или другой связанной сущности
+    review_id = Column(Integer, nullable=True)
     reason = Column(String, nullable=False)
     penalty_amount = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     task = relationship("InternshipTask", back_populates="mistakes")
     intern = relationship("User", back_populates="internship_mistakes")
+
+# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ МОДУЛЕЙ 2 и 3 ---
+
+class Administrator(Base):
+    __tablename__ = 'administrators'
+
+    user_id = Column(BigInteger, primary_key=True)
+    role = Column(Enum('admin', 'super_admin', name='admin_role_enum'), nullable=False, default='admin')
+    is_tester = Column(Boolean, nullable=False, default=False)
+    is_removable = Column(Boolean, nullable=False, default=True) # Защита от удаления базовых админов
+    added_by = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class PostTemplate(Base):
+    __tablename__ = 'post_templates'
+    
+    id = Column(Integer, primary_key=True)
+    template_name = Column(String, unique=True, nullable=False)
+    text = Column(Text, nullable=True)
+    media_json = Column(Text, nullable=True) # Храним JSON как строку
+    created_by = Column(BigInteger, nullable=False)
