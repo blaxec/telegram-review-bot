@@ -40,13 +40,13 @@ async def send_notification_to_admins(
         platform_map = {
             "google": "google",
             "yandex": "yandex",
-            "gmail": "gmail" # Стажер должен быть готов к любым задачам
+            "gmail": "gmail"
         }
         task_platform_family = next((v for k, v in platform_map.items() if k in task_type), None)
 
         if task_platform_family:
             intern = await db_manager.find_available_intern(task_platform_family)
-            if intern:
+            if intern and original_user_id:
                 logger.info(f"Task '{task_type}' is being routed to available intern ID: {intern.id}")
                 
                 await db_manager.set_intern_busy_status(intern.id, is_busy=True)

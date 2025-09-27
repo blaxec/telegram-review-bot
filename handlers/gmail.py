@@ -16,7 +16,7 @@ from database import db_manager
 from config import Rewards, Durations
 from logic.user_notifications import format_timedelta, send_cooldown_expired_notification
 from logic.promo_logic import check_and_apply_promo_reward
-from logic.gmail_logic import parse_gmail_data # <<< ИЗМЕНЕНИЕ: Импорт из нового файла
+from logic.gmail_logic import parse_gmail_data
 from logic import admin_roles
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -156,11 +156,12 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
 
     try:
         await send_notification_to_admins(
-            bot,
+            bot=bot,
             text=admin_notification,
-            keyboard=inline.get_admin_verification_keyboard(user_id, context),
             task_type="gmail_device_model",
-            scheduler=scheduler
+            scheduler=scheduler,
+            keyboard=inline.get_admin_verification_keyboard(user_id, context),
+            original_user_id=user_id
         )
     except Exception as e:
         await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
@@ -236,11 +237,12 @@ async def send_gmail_for_verification(callback: CallbackQuery, state: FSMContext
     )
     try:
         await send_notification_to_admins(
-            bot,
+            bot=bot,
             text=admin_notification,
-            keyboard=inline.get_admin_gmail_final_check_keyboard(user_id),
             task_type="gmail_final_check",
-            scheduler=scheduler
+            scheduler=scheduler,
+            keyboard=inline.get_admin_gmail_final_check_keyboard(user_id),
+            original_user_id=user_id
         )
     except Exception as e:
         await callback.message.answer("Не удалось отправить аккаунт на проверку. Попробуйте позже.")
@@ -307,7 +309,6 @@ async def process_admin_gmail_data(message: Message, state: FSMContext, bot: Bot
     admin_data = await state.get_data()
     user_id = admin_data.get('gmail_user_id')
     
-    # <<< ИЗМЕНЕНИЕ: Используем парсер >>>
     is_success, parsed_data = parse_gmail_data(message.text)
     
     if not is_success:

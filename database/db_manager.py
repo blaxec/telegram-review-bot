@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from database.models import (Base, User, Review, Link, WithdrawalRequest, 
                              PromoCode, PromoActivation, SupportTicket,
                              RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
-                             InternshipApplication, InternshipTask, InternshipMistake) # ИМПОРТ НОВЫХ МОДЕЛЕЙ
+                             InternshipApplication, InternshipTask, InternshipMistake)
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,8 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
 
 async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
-        return await session.get(User, user_id, options=[selectinload(User.reviews)])
+        return await session.get(User, user_id, options=[selectinload(User.reviews), selectinload(User.internship_tasks)])
+
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
     user = await get_user(user_id)
@@ -170,7 +171,6 @@ async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bo
             sender.balance -= total_to_deduct
             recipient.balance += amount
             
-            # Логируем операции
             await log_operation(session, sender_id, "TRANSFER_SENT", -amount, f"Получатель: {recipient.username or recipient_id}")
             if commission > 0:
                 await log_operation(session, sender_id, "FINE", -commission, f"Комиссия за перевод")
@@ -210,7 +210,6 @@ async def check_platform_cooldown(user_id: int, platform: str) -> Union[datetime
     return None
 
 async def set_platform_cooldown(user_id: int, platform: str, hours: float) -> Union[datetime.datetime, None]:
-    """Устанавливает кулдаун и возвращает время его окончания."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -256,7 +255,6 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
     return review_id
 
 async def db_update_review_admin_message_id(review_id: int, admin_message_id: int) -> bool:
-    """Обновляет admin_message_id для существующего отзыва."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -313,7 +311,6 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             return review
 
 async def admin_approve_review(review_id: int) -> Union[Review, None]:
-    """ФИНАЛЬНОЕ одобрение отзыва. Переводит статус из 'awaiting_confirmation' или 'on_hold' в 'approved' и начисляет баланс."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -375,7 +372,6 @@ async def db_update_link_status(link_id: int, status: str, user_id: int | None =
             await session.execute(stmt)
 
 async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all") -> Tuple[int, List[Link]]:
-    """Получает ссылки с пагинацией и фильтрацией."""
     async with async_session() as session:
         base_query = select(Link).where(Link.platform == platform)
         count_query = select(func.count(Link.id)).where(Link.platform == platform)
@@ -399,7 +395,6 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
         return total_count, links
         
 async def db_get_link_stats(platform: str) -> Dict[str, int]:
-    """Получает статистику по ссылкам для платформы."""
     async with async_session() as session:
         query = (
             select(
@@ -496,7 +491,6 @@ async def reset_user_cooldowns(user_id: int) -> bool:
             return True
 
 async def get_top_10_users() -> List[Tuple[int, str, float, int]]:
-    """Возвращает ID, имя, баланс и кол-во отзывов для топ-10 пользователей."""
     async with async_session() as session:
         query = (
             select(
@@ -547,7 +541,6 @@ async def get_promo_by_code(code: str, for_update: bool = False) -> Union[PromoC
             return result.scalar_one_or_none()
 
 async def get_promo_by_id(promo_id: int) -> Union[PromoCode, None]:
-    """Получает промокод по его числовому ID."""
     async with async_session() as session:
         return await session.get(PromoCode, promo_id)
 
@@ -585,7 +578,6 @@ async def find_pending_promo_activation(user_id: int, condition: str = '%') -> U
 async def create_promo_activation(user_id: int, promo_id: int, status: str) -> PromoActivation:
     async with async_session() as session:
         async with session.begin():
-            """Создает активацию промокода, используя переданную сессию."""
             new_activation = PromoActivation(
                 user_id=user_id,
                 promo_code_id=promo_id,
@@ -617,7 +609,6 @@ async def delete_promo_activation(activation_id: int) -> bool:
 async def complete_promo_activation(activation_id: int) -> bool:
     async with async_session() as session:
         async with session.begin():
-            """Завершает активацию, используя переданную сессию."""
             activation = await session.get(PromoActivation, activation_id, options=[selectinload(PromoActivation.promo_code)])
             if not activation or activation.status != 'pending_condition':
                 return False
@@ -674,7 +665,6 @@ async def close_support_ticket(ticket_id: int) -> bool:
             return True
 
 async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> int:
-    """Добавляет предупреждение и, если нужно, кулдаун для системы поддержки."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -689,9 +679,8 @@ async def add_support_warning_and_cooldown(user_id: int, hours: int = None) -> i
             
             return current_warnings
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ ПРОЦЕССА ВЕРИФИКАЦИИ ПОСЛЕ ХОЛДА ---
+# --- Функции для верификации после холда ---
 async def get_reviews_past_hold() -> List[Review]:
-    """Находит все отзывы в статусе 'on_hold', у которых истекло время холда."""
     async with async_session() as session:
         now = datetime.datetime.utcnow()
         query = select(Review).where(
@@ -704,7 +693,6 @@ async def get_reviews_past_hold() -> List[Review]:
         return result.scalars().all()
 
 async def update_review_status(review_id: int, new_status: str) -> bool:
-    """Обновляет статус конкретного отзыва."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -714,7 +702,6 @@ async def update_review_status(review_id: int, new_status: str) -> bool:
             return True
 
 async def save_confirmation_screenshot(review_id: int, file_id: str) -> bool:
-    """Сохраняет file_id подтверждающего скриншота."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -724,7 +711,6 @@ async def save_confirmation_screenshot(review_id: int, file_id: str) -> bool:
             return True
 
 async def cancel_hold(review_id: int) -> Optional[Review]:
-    """Отменяет холд, если пользователь не прислал скриншот. Статус -> rejected."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id, options=[selectinload(Review.user)])
@@ -742,7 +728,6 @@ async def cancel_hold(review_id: int) -> Optional[Review]:
             return review
 
 async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
-    """Отклоняет отзыв на финальном этапе проверки. Статус -> rejected."""
     async with async_session() as session:
         async with session.begin():
             review = await session.get(Review, review_id)
@@ -758,9 +743,6 @@ async def admin_reject_final_confirmation(review_id: int) -> Optional[Review]:
 
             review.status = 'rejected'
             return review
-
-# --- КОНЕЦ НОВЫХ ФУНКЦИЙ ---
-
 
 # --- Функции для системы бана и просроченных ссылок ---
 async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> List[Link]:
@@ -795,7 +777,6 @@ async def db_find_and_expire_old_assigned_links(hours_threshold: int = 24) -> Li
 
 
 async def reset_all_expired_links() -> int:
-    """Сбрасывает статус всех 'expired' ссылок на 'available'."""
     async with async_session() as session:
         async with session.begin():
             stmt = update(Link).where(Link.status == 'expired').values(status='available')
@@ -803,7 +784,6 @@ async def reset_all_expired_links() -> int:
             return result.rowcount
 
 async def ban_user(user_id: int, reason: str) -> bool:
-    """Устанавливает флаг is_banned, причину и дату бана."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -815,7 +795,6 @@ async def ban_user(user_id: int, reason: str) -> bool:
             return True
 
 async def unban_user(user_id: int, is_first_unban: bool = False) -> bool:
-    """Снимает бан с пользователя и увеличивает счетчик разбанов."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -829,16 +808,14 @@ async def unban_user(user_id: int, is_first_unban: bool = False) -> bool:
             return True
 
 async def update_last_unban_request_time(user_id: int):
-    """Обновляет время последнего запроса на разбан для пользователя."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
             if user:
                 user.last_unban_request_at = datetime.datetime.utcnow()
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ СИСТЕМЫ АМНИСТИИ ---
+# --- Функции для системы амнистии ---
 async def create_unban_request(user_id: int, reason: str) -> Optional[UnbanRequest]:
-    """Создает новый запрос на разбан в базе данных."""
     async with async_session() as session:
         async with session.begin():
             new_request = UnbanRequest(user_id=user_id, reason=reason, status='pending')
@@ -848,7 +825,6 @@ async def create_unban_request(user_id: int, reason: str) -> Optional[UnbanReque
             return new_request
 
 async def get_pending_unban_requests(page: int = 1, limit: int = 5) -> List[UnbanRequest]:
-    """Получает список ожидающих запросов на разбан с пагинацией."""
     async with async_session() as session:
         query = (
             select(UnbanRequest)
@@ -862,19 +838,16 @@ async def get_pending_unban_requests(page: int = 1, limit: int = 5) -> List[Unba
         return result.scalars().all()
 
 async def get_pending_unban_requests_count() -> int:
-    """Возвращает общее количество ожидающих запросов на разбан."""
     async with async_session() as session:
         query = select(func.count(UnbanRequest.id)).where(UnbanRequest.status == 'pending')
         result = await session.execute(query)
         return result.scalar_one()
 
 async def get_unban_request_by_id(request_id: int) -> Optional[UnbanRequest]:
-    """Получает запрос на разбан по его ID."""
     async with async_session() as session:
         return await session.get(UnbanRequest, request_id, options=[selectinload(UnbanRequest.user)])
 
 async def update_unban_request_status(request_id: int, status: str, admin_id: int) -> bool:
-    """Обновляет статус запроса на разбан."""
     async with async_session() as session:
         async with session.begin():
             request = await session.get(UnbanRequest, request_id)
@@ -885,7 +858,6 @@ async def update_unban_request_status(request_id: int, status: str, admin_id: in
             return True
             
 async def get_unban_request_by_status(user_id: int, status: str) -> Optional[UnbanRequest]:
-    """Находит запрос на разбан для пользователя по статусу."""
     async with async_session() as session:
         query = select(UnbanRequest).where(
             UnbanRequest.user_id == user_id,
@@ -896,7 +868,6 @@ async def get_unban_request_by_status(user_id: int, status: str) -> Optional[Unb
 
 # --- Функции для реферальной системы ---
 async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -> bool:
-    """Сохраняет выбранный пользователем реферальный путь."""
     async with async_session() as session:
         async with session.begin():
             user = await session.get(User, user_id)
@@ -906,15 +877,13 @@ async def set_user_referral_path(user_id: int, path: str, subpath: str = None) -
             user.referral_subpath = subpath
             return True
             
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ НАГРАДАМИ ---
+# --- Функции для управления наградами ---
 async def get_reward_settings() -> List[RewardSetting]:
-    """Получает все настройки наград из базы."""
     async with async_session() as session:
         result = await session.execute(select(RewardSetting).order_by(RewardSetting.place))
         return result.scalars().all()
 
 async def update_reward_settings(settings: List[Dict[str, Union[int, float]]]):
-    """Полностью перезаписывает настройки наград."""
     async with async_session() as session:
         async with session.begin():
             await session.execute(delete(RewardSetting))
@@ -923,13 +892,11 @@ async def update_reward_settings(settings: List[Dict[str, Union[int, float]]]):
                 session.add_all(objects)
 
 async def get_system_setting(key: str) -> Optional[str]:
-    """Получает значение системной настройки по ключу."""
     async with async_session() as session:
         setting = await session.get(SystemSetting, key)
         return setting.value if setting else None
 
 async def set_system_setting(key: str, value: str):
-    """Устанавливает или обновляет значение системной настройки."""
     async with async_session() as session:
         async with session.begin():
             setting = await session.get(SystemSetting, key)
@@ -939,9 +906,8 @@ async def set_system_setting(key: str, value: str):
                 new_setting = SystemSetting(key=key, value=value)
                 session.add(new_setting)
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ DND, СПИСКОВ БАНОВ И ПРОМО ---
+# --- Функции для DND, списков банов и промо ---
 async def toggle_dnd_status(admin_id: int) -> bool:
-    """Переключает DND-статус для админа и возвращает новый статус."""
     async with async_session() as session:
         async with session.begin():
             admin = await session.get(User, admin_id)
@@ -951,16 +917,13 @@ async def toggle_dnd_status(admin_id: int) -> bool:
             return admin.dnd_enabled
 
 async def get_active_admins(admin_ids: List[int]) -> List[int]:
-    """Возвращает список ID админов из переданного списка, у которых выключен DND."""
     async with async_session() as session:
         query = select(User.id).where(User.id.in_(admin_ids), User.dnd_enabled == False)
         result = await session.execute(query)
         return result.scalars().all()
 
 async def get_pending_tasks_count() -> Dict[str, int]:
-    """Считает количество задач, ожидающих модерации."""
     async with async_session() as session:
-        # pending - отзывы до холда, awaiting_confirmation - отзывы после холда
         reviews_query = select(func.count(Review.id)).where(Review.status.in_(['pending', 'awaiting_confirmation']))
         tickets_query = select(func.count(SupportTicket.id)).where(SupportTicket.status == 'open')
         
@@ -973,7 +936,6 @@ async def get_pending_tasks_count() -> Dict[str, int]:
         }
 
 async def get_banned_users(page: int = 1, limit: int = 6) -> List[User]:
-    """Получает список забаненных пользователей для страницы."""
     async with async_session() as session:
         query = (
             select(User)
@@ -986,14 +948,12 @@ async def get_banned_users(page: int = 1, limit: int = 6) -> List[User]:
         return result.scalars().all()
 
 async def get_banned_users_count() -> int:
-    """Возвращает общее количество забаненных пользователей."""
     async with async_session() as session:
         query = select(func.count(User.id)).where(User.is_banned == True)
         result = await session.execute(query)
         return result.scalar_one()
 
 async def get_all_promo_codes(page: int = 1, limit: int = 6) -> List[PromoCode]:
-    """Получает список всех АКТИВНЫХ промокодов для страницы."""
     async with async_session() as session:
         query = (
             select(PromoCode)
@@ -1006,31 +966,25 @@ async def get_all_promo_codes(page: int = 1, limit: int = 6) -> List[PromoCode]:
         return result.scalars().all()
 
 async def get_promo_codes_count() -> int:
-    """Возвращает общее количество АКТИВНЫХ промокодов."""
     async with async_session() as session:
         query = select(func.count(PromoCode.id)).where(PromoCode.current_uses < PromoCode.total_uses)
         result = await session.execute(query)
         return result.scalar_one()
 
 async def delete_promo_code(promo_id: int) -> bool:
-    """Полностью удаляет промокод и связанные с ним активации."""
     async with async_session() as session:
         async with session.begin():
-            # Сначала удаляем все активации, связанные с этим промокодом
             await session.execute(
                 delete(PromoActivation).where(PromoActivation.promo_code_id == promo_id)
             )
-            # Теперь удаляем сам промокод
             result = await session.execute(
                 delete(PromoCode).where(PromoCode.id == promo_id)
             )
-            # rowcount > 0 означает, что удаление прошло успешно
             return result.rowcount > 0
 
-# --- НОВЫЙ РАЗДЕЛ: Функции для системы стажировок ---
+# --- Функции для системы стажировок ---
 
 async def create_internship_application(user_id: int, username: str, age: str, hours: str, platforms: str) -> Optional[InternshipApplication]:
-    """Создает новую заявку на стажировку."""
     async with async_session() as session:
         async with session.begin():
             new_app = InternshipApplication(
@@ -1046,7 +1000,6 @@ async def create_internship_application(user_id: int, username: str, age: str, h
             return new_app
 
 async def get_internship_application(user_id: int) -> Optional[InternshipApplication]:
-    """Получает заявку пользователя на стажировку."""
     async with async_session() as session:
         result = await session.execute(
             select(InternshipApplication).where(InternshipApplication.user_id == user_id)
@@ -1054,7 +1007,6 @@ async def get_internship_application(user_id: int) -> Optional[InternshipApplica
         return result.scalar_one_or_none()
 
 async def get_internship_stats_counts() -> Dict[str, int]:
-    """Получает количество анкет, кандидатов и стажеров для админ-панели."""
     async with async_session() as session:
         pending_apps_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'pending')
         candidates_q = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == 'approved')
@@ -1071,7 +1023,6 @@ async def get_internship_stats_counts() -> Dict[str, int]:
         }
 
 async def get_paginated_applications(status: str, page: int = 1, limit: int = 5) -> Tuple[List[InternshipApplication], int]:
-    """Получает список анкет с пагинацией."""
     async with async_session() as session:
         query = select(InternshipApplication).where(InternshipApplication.status == status).order_by(InternshipApplication.created_at)
         count_query = select(func.count(InternshipApplication.id)).where(InternshipApplication.status == status)
@@ -1084,13 +1035,24 @@ async def get_paginated_applications(status: str, page: int = 1, limit: int = 5)
         
         return apps, total_count
 
+async def get_paginated_interns(page: int = 1, limit: int = 5) -> Tuple[List[User], int]:
+    async with async_session() as session:
+        query = select(User).where(User.is_intern == True).options(selectinload(User.internship_tasks)).order_by(User.id)
+        count_query = select(func.count(User.id)).where(User.is_intern == True)
+
+        total_count = await session.scalar(count_query)
+
+        paginated_query = query.offset((page - 1) * limit).limit(limit)
+        result = await session.execute(paginated_query)
+        interns = result.scalars().unique().all()
+        
+        return interns, total_count
+
 async def get_application_by_id(app_id: int) -> Optional[InternshipApplication]:
-    """Получает анкету по ID."""
     async with async_session() as session:
         return await session.get(InternshipApplication, app_id)
 
 async def update_application_status(app_id: int, new_status: str) -> bool:
-    """Обновляет статус анкеты."""
     async with async_session() as session:
         async with session.begin():
             app = await session.get(InternshipApplication, app_id)
@@ -1100,7 +1062,6 @@ async def update_application_status(app_id: int, new_status: str) -> bool:
             return True
 
 async def get_active_intern_task(intern_id: int) -> Optional[InternshipTask]:
-    """Получает текущую активную задачу стажера."""
     async with async_session() as session:
         result = await session.execute(
             select(InternshipTask).where(
@@ -1110,28 +1071,145 @@ async def get_active_intern_task(intern_id: int) -> Optional[InternshipTask]:
         )
         return result.scalar_one_or_none()
 
-async def find_available_intern() -> Optional[User]:
-    """Находит одного свободного стажера с самой давней датой последней задачи."""
+async def find_available_intern(platform_family: str) -> Optional[User]:
     async with async_session() as session:
-        query = select(User).join(InternshipTask, User.id == InternshipTask.intern_id).where(
+        candidate_ids_query = select(InternshipApplication.user_id).where(
+            InternshipApplication.platforms.like(f"%{platform_family}%")
+        )
+        candidate_ids_result = await session.execute(candidate_ids_query)
+        candidate_ids = candidate_ids_result.scalars().all()
+
+        if not candidate_ids:
+            return None
+
+        query = select(User).join(
+            InternshipTask, User.id == InternshipTask.intern_id, isouter=True
+        ).where(
+            User.id.in_(candidate_ids),
             User.is_intern == True,
             User.is_busy_intern == False,
-            InternshipTask.status == 'active'
-        ).order_by(InternshipTask.last_task_at.asc()).limit(1)
+        ).order_by(
+            InternshipTask.last_task_at.asc().nulls_first()
+        ).limit(1)
         
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
-async def set_intern_busy(intern_id: int, is_busy: bool):
-    """Устанавливает флаг занятости для стажера и обновляет время последней задачи."""
+async def set_intern_busy_status(intern_id: int, is_busy: bool):
     async with async_session() as session:
         async with session.begin():
             user_stmt = update(User).where(User.id == intern_id).values(is_busy_intern=is_busy)
-            task_stmt = update(InternshipTask).where(
-                InternshipTask.intern_id == intern_id,
-                InternshipTask.status == 'active'
-            ).values(last_task_at=datetime.datetime.utcnow())
-            
             await session.execute(user_stmt)
-            if is_busy: # Обновляем время только когда берет задачу
+
+            if is_busy:
+                task_stmt = update(InternshipTask).where(
+                    InternshipTask.intern_id == intern_id,
+                    InternshipTask.status == 'active'
+                ).values(last_task_at=datetime.datetime.utcnow())
                 await session.execute(task_stmt)
+
+async def create_intern_task(intern_id: int, platform: str, task_type: str, goal_count: int, salary: float) -> Optional[InternshipTask]:
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, intern_id)
+            if not user: return None
+
+            user.is_intern = True
+            
+            new_task = InternshipTask(
+                intern_id=intern_id,
+                platform=platform,
+                task_type=task_type,
+                goal_count=goal_count,
+                estimated_salary=salary
+            )
+            session.add(new_task)
+            await session.flush()
+            await session.refresh(new_task)
+            return new_task
+
+async def fire_intern(intern_id: int, reason: str):
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, intern_id, options=[selectinload(User.internship_tasks)])
+            if not user or not user.is_intern:
+                return
+
+            user.is_intern = False
+            user.is_busy_intern = False
+
+            active_task = next((t for t in user.internship_tasks if t.status == 'active'), None)
+            if active_task:
+                active_task.status = 'fired'
+
+async def get_intern_mistakes(intern_id: int, page: int = 1, limit: int = 5) -> Tuple[List[InternshipMistake], int]:
+    async with async_session() as session:
+        query = select(InternshipMistake).where(InternshipMistake.intern_id == intern_id).order_by(desc(InternshipMistake.created_at))
+        count_query = select(func.count(InternshipMistake.id)).where(InternshipMistake.intern_id == intern_id)
+        
+        total_count = await session.scalar(count_query)
+        
+        paginated_query = query.offset((page - 1) * limit).limit(limit)
+        result = await session.execute(paginated_query)
+        mistakes = result.scalars().all()
+        
+        return mistakes, total_count
+
+async def complete_internship(task: InternshipTask) -> float:
+    async with async_session() as session:
+        async with session.begin():
+            intern = await session.get(User, task.intern_id, options=[selectinload(User.internship_application)])
+            if not intern:
+                return 0.0
+
+            task_to_update = await session.get(InternshipTask, task.id)
+            if not task_to_update:
+                return 0.0
+
+            task_to_update.status = 'completed'
+            intern.is_intern = False
+            intern.is_busy_intern = False
+            if intern.internship_application:
+                intern.internship_application.status = 'archived_success'
+            
+            penalty = task.error_count * (task.estimated_salary / task.goal_count) * 2
+            final_salary = task.estimated_salary - penalty
+            
+            if final_salary > 0:
+                intern.balance += final_salary
+                await log_operation(session, intern.id, "TOP_REWARD", final_salary, "Зарплата за стажировку")
+            
+            return final_salary
+
+async def process_intern_decision(review_id: int, is_approved: bool, reason: Optional[str] = None):
+    async with async_session() as session:
+        async with session.begin():
+            # Находим, какой стажер работал над этим отзывом
+            review = await session.get(Review, review_id, options=[selectinload(Review.user)])
+            if not review or not review.user.is_busy_intern:
+                return # Это не была задача стажера
+
+            intern = review.user
+            intern.is_busy_intern = False
+            
+            task = await get_active_intern_task(intern.id)
+            if not task: return
+
+            mentor_decision_is_correct = is_approved
+
+            if mentor_decision_is_correct:
+                task.current_progress += 1
+            else:
+                task.error_count += 1
+                penalty_amount = (task.estimated_salary / task.goal_count) * 2
+                new_mistake = InternshipMistake(
+                    intern_task_id=task.id,
+                    intern_id=intern.id,
+                    review_id=review_id,
+                    reason=reason or "Причина не указана",
+                    penalty_amount=penalty_amount
+                )
+                session.add(new_mistake)
+
+            if task.current_progress >= task.goal_count:
+                await complete_internship(task)

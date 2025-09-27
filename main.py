@@ -39,7 +39,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin, gmail,
-                      stats, promo, other, ban_system, referral, admin_roles, internship) # ИМПОРТ НОВОГО ХЭНДЛЕРА
+                      stats, promo, other, ban_system, referral, admin_roles, internship)
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
@@ -149,7 +149,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(admin_roles.router)
-    dp.include_router(internship.router) # РЕГИСТРАЦИЯ НОВОГО РОУТЕРА
+    dp.include_router(internship.router)
     dp.include_router(promo.router)
     dp.include_router(ban_system.router)
     dp.include_router(earning.router)

@@ -560,34 +560,20 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
             except Exception: pass
             return True, f"✅ Пользователь {user.id} разбанен бесплатно."
         else:  # Последующие разбаны - платные
-            
-            # --- НАЧАЛО ЗАГЛУШКИ ---
-            # Этот блок кода имитирует успешную оплату.
-            # Когда получите токен, удалите этот блок и раскомментируйте следующий.
-            
-            logger.warning(f"!!! PAYMENT STUB: Simulating successful payment for unban request {request.id} for user {user.id} !!!")
-            await db_manager.unban_user(user.id) # Сразу разбаниваем
-            await db_manager.update_unban_request_status(request.id, 'approved', admin_id) # Сразу одобряем
-            try:
-                # Отправляем сообщение, имитирующее успешную оплату
-                await bot.send_message(
-                    user.id,
-                    "🎉 <b>(ТЕСТОВЫЙ РЕЖИМ)</b> Ваш платный разбан был успешно обработан!\n\n"
-                    "Вы были разблокированы и снова можете пользоваться всеми функциями бота."
-                )
-            except Exception: pass
-            return True, f"✅ Пользователь {user.id} разбанен (в режиме заглушки)."
-            # --- КОНЕЦ ЗАГЛУШКИ ---
-
-            """
-            # --- НАСТОЯЩИЙ КОД ДЛЯ ПЛАТЕЖЕЙ ---
-            # РАСКОММЕНТИРУЙТЕ ЭТОТ БЛОК, КОГДА ПОЛУЧИТЕ ТОКЕН
-            
             if not PAYMENT_PROVIDER_TOKEN:
-                return False, "❌ Ошибка: не настроен токен для платежей. Невозможно выставить счет."
-            
+                logger.warning(f"!!! PAYMENT STUB: Simulating successful payment for unban request {request.id} for user {user.id} due to missing token !!!")
+                await db_manager.unban_user(user.id)
+                await db_manager.update_unban_request_status(request.id, 'approved', admin_id)
+                try:
+                    await bot.send_message(
+                        user.id,
+                        "🎉 <b>(РЕЖИМ ЗАГЛУШКИ)</b> Ваш платный разбан был успешно обработан!\n\n"
+                        "Вы были разблокированы и снова можете пользоваться всеми функциями бота."
+                    )
+                except Exception: pass
+                return True, f"✅ Пользователь {user.id} разбанен (в режиме заглушки)."
+
             await db_manager.update_unban_request_status(request.id, 'payment_pending', admin_id)
-            
             try:
                 await bot.send_invoice(
                     chat_id=user.id,
@@ -600,12 +586,46 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
                 )
             except Exception as e:
                 logger.error(f"Failed to send invoice for unban request {request.id} to user {user.id}: {e}")
-                await db_manager.update_unban_request_status(request.id, 'pending', admin_id) # Возвращаем в пендинг
+                await db_manager.update_unban_request_status(request.id, 'pending', admin_id)
                 return False, f"❌ Не удалось отправить счет пользователю {user.id}."
             
             return True, f"✅ Пользователю {user.id} выставлен счет на платный разбан."
             
-            # --- КОНЕЦ НАСТОЯЩЕГО КОДА ---
-            """
-            
     return False, "Неизвестное действие."
+
+# --- ЛОГИКА ДЛЯ СИСТЕМЫ СТАЖИРОВОК ---
+
+async def process_intern_decision_logic(bot: Bot, review_id: int, mentor_decision_is_correct: bool, reason: str):
+    """
+    Обрабатывает решение ментора по проверке, выполненной стажером.
+    Начисляет прогресс или штраф.
+    """
+    final_salary = await db_manager.process_intern_decision(review_id, mentor_decision_is_correct, reason)
+    
+    review = await db_manager.get_review_by_id(review_id)
+    if not review: return
+
+    intern = await db_manager.get_user(review.user_id)
+    if not intern: return
+
+    if final_salary is not None: # Стажировка завершена
+        try:
+            await bot.send_message(
+                intern.id,
+                f"🎉 Поздравляем! Вы завершили стажировку. "
+                f"Ваша итоговая зарплата составила <b>{final_salary:.2f} ⭐</b> и уже зачислена на баланс."
+            )
+            await bot.send_message(
+                SUPER_ADMIN_ID,
+                f"✅ Стажер @{intern.username} завершил задание. Итоговая зарплата: {final_salary:.2f} ⭐."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify intern {intern.id} about completion: {e}")
+    else: # Стажировка продолжается
+        try:
+            if mentor_decision_is_correct:
+                await bot.send_message(intern.id, f"✅ Ваша проверка отзыва #{review_id} совпала с решением ментора. Так держать!")
+            else:
+                await bot.send_message(intern.id, f"❌ Ваша проверка отзыва #{review_id} не совпала с решением ментора. Засчитана ошибка. Причина: {reason}")
+        except Exception as e:
+            logger.error(f"Failed to notify intern {intern.id} about task result: {e}")

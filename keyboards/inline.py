@@ -262,6 +262,15 @@ def get_admin_verification_keyboard(user_id: int, context: str) -> InlineKeyboar
     builder.adjust(1, 2, 1)
     return builder.as_markup()
 
+def get_intern_verification_keyboard(user_id: int, context: str) -> InlineKeyboardMarkup:
+    """Создает клавиатуру верификации для стажера (без кнопок ИИ)."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Подтвердить", callback_data=f"intern_verify:confirm:{context}:{user_id}")
+    builder.button(text="❌ Отклонить", callback_data=f"intern_verify:reject:{context}:{user_id}")
+    builder.button(text="⚠️ Выдать предупреждение", callback_data=f"intern_verify:warn:{context}:{user_id}")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
 def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text='✍️ Написать текст вручную', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')

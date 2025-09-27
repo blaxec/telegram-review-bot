@@ -1,6 +1,5 @@
 # file: telegram-review-bot-main/handlers/admin.py
 
-
 import datetime
 import logging
 import asyncio
@@ -43,7 +42,6 @@ from logic.admin_logic import (
     get_unban_requests_page,
     process_unban_request_logic
 )
-# ИМПОРТ НОВОЙ ЛОГИКИ
 from logic.internship_logic import (
     format_applications_page, 
     format_single_application,
@@ -503,9 +501,10 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 try:
                     user_info = await bot.get_chat(user_id)
                     await send_notification_to_admins(
-                        bot,
+                        bot=bot,
                         text=f"❗️Пользователь @{user_info.username} (ID: {user_id}) ожидает данные для создания Gmail. Вы назначены ответственным.",
-                        task_type="gmail_issue_data"
+                        task_type="gmail_issue_data",
+                        scheduler=Dispatcher.get_current().get("scheduler")
                     )
                 except Exception: pass
             else:
@@ -1319,6 +1318,21 @@ async def view_internship_list(callback: CallbackQuery, state: FSMContext):
         text = format_applications_page(apps, page, total_pages)
         keyboard = inline.get_pagination_keyboard("admin_internships:view:applications", page, total_pages)
         await callback.message.edit_text(text, reply_markup=keyboard)
+
+    elif list_type == "candidates":
+        apps, total = await db_manager.get_paginated_applications("approved", page)
+        total_pages = ceil(total / 5) if total > 0 else 1
+        text = format_candidates_page(apps, page, total_pages)
+        keyboard = inline.get_pagination_keyboard("admin_internships:view:candidates", page, total_pages)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
+    elif list_type == "interns":
+        interns, total = await db_manager.get_paginated_interns(page)
+        total_pages = ceil(total / 5) if total > 0 else 1
+        text = format_interns_page(interns, page, total_pages)
+        keyboard = inline.get_pagination_keyboard("admin_internships:view:interns", page, total_pages)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
 
 @router.message(Command(F.text.startswith("view_app_")), IsSuperAdmin())
 async def view_single_application(message: Message, state: FSMContext):

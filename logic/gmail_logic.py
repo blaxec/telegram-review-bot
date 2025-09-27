@@ -22,7 +22,7 @@ def parse_gmail_data(pasted_text: str) -> Tuple[bool, Union[Dict[str, Optional[s
     patterns = {
         'name': r"Имя:\s*(.+)",
         'surname': r"Фамилия:\s*(.+)",
-        'email': r"Email:\s*(.+)",
+        'email': r"(?:Email|Почта):\s*(.+)",
         'password': r"Пароль:\s*(.+)"
     }
     
@@ -37,8 +37,9 @@ def parse_gmail_data(pasted_text: str) -> Tuple[bool, Union[Dict[str, Optional[s
 
     # Проверяем, что все обязательные поля были найдены
     required_fields = ['name', 'email', 'password']
-    if not all(field in data for field in required_fields):
-        error_message = "Ошибка: Не удалось распознать все обязательные поля (Имя, Email, Пароль) в тексте. Пожалуйста, проверьте скопированный текст и попробуйте снова."
+    missing_fields = [field for field in required_fields if field not in data]
+    if missing_fields:
+        error_message = f"Ошибка: Не удалось распознать все обязательные поля ({', '.join(missing_fields).capitalize()}) в тексте. Пожалуйста, проверьте скопированный текст и попробуйте снова."
         return False, error_message
 
     # Обработка и очистка полученных данных
@@ -47,7 +48,7 @@ def parse_gmail_data(pasted_text: str) -> Tuple[bool, Union[Dict[str, Optional[s
     if 'surname' in data:
         surname_val = data['surname'].lower()
         # Если значение - крестик или слово "нет", считаем фамилию отсутствующей
-        if surname_val in ['✖', 'x', 'нет']:
+        if surname_val in ['✖', 'x', 'нет', '-']:
             data['surname'] = None
     else:
         # Если ключ "Фамилия" вообще не был найден в тексте

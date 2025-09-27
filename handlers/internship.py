@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
-from aiogram.utils.keyboard import InlineKeyboardBuilder # <<< ИСПРАВЛЕНИЕ: Добавлен импорт
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from states.user_states import UserState
 from keyboards import inline, reply
@@ -24,13 +24,18 @@ async def internship_entry_point(message: Message, state: FSMContext):
     Высокоприоритетная точка входа в раздел стажировки.
     Проверяет статус пользователя и направляет в нужный раздел.
     """
-    await state.clear() # Сбрасываем любое предыдущее состояние
+    # Сбрасываем любое предыдущее состояние, кроме состояний самой стажировки
+    current_state = await state.get_state()
+    internship_states = [s.state for s in UserState if s.state.startswith("UserState:INTERNSHIP_")]
+    if current_state not in internship_states:
+        await state.clear()
+        
     user_id = message.from_user.id
     user = await db_manager.get_user(user_id)
 
     # 1. Если пользователь - активный стажер
     if user and user.is_intern:
-        await show_intern_cabinet(message)
+        await show_intern_cabinet(message, state)
         return
 
     # 2. Проверяем анкету
@@ -56,16 +61,21 @@ async def internship_entry_point(message: Message, state: FSMContext):
 
 # --- РАБОЧИЙ КАБИНЕТ СТАЖЕРА ---
 
-async def show_intern_cabinet(message: Message):
+async def show_intern_cabinet(message: Message, state: FSMContext):
     """Отображает рабочий кабинет активного стажера."""
+    await state.set_state(UserState.MAIN_MENU) # Возвращаем в основное меню, чтобы другие команды работали
     task = await db_manager.get_active_intern_task(message.from_user.id)
+    user = await db_manager.get_user(message.from_user.id)
+    
     if not task:
         await message.answer("Произошла ошибка: не найдено ваше активное задание. Обратитесь к администратору.")
         return
 
-    salary = task.estimated_salary
-    penalty = task.error_count * (task.estimated_salary / task.goal_count) * 2 # Двойной штраф
-    final_salary = salary - penalty
+    salary = task.estimated_salary or 0.0
+    # Штраф равен двойной стоимости одной задачи
+    penalty_per_error = (salary / task.goal_count) * 2 if task.goal_count > 0 else 0
+    total_penalty = task.error_count * penalty_per_error
+    final_salary = salary - total_penalty
 
     text = (
         "<b>Добро пожаловать в ваш рабочий кабинет!</b>\n\n"
@@ -77,11 +87,58 @@ async def show_intern_cabinet(message: Message):
         f" • Ошибок допущено: <b>{task.error_count}</b>\n\n"
         "<b>Расчетная зарплата:</b>\n"
         f" • Изначально: {salary:.2f} ⭐\n"
-        f" • Штрафы: -{penalty:.2f} ⭐\n"
+        f" • Штрафы: -{total_penalty:.2f} ⭐\n"
         f" • <b>К выплате: {final_salary:.2f} ⭐</b>"
     )
 
-    await message.answer(text, reply_markup=inline.get_intern_cabinet_keyboard())
+    await message.answer(text, reply_markup=inline.get_intern_cabinet_keyboard(is_busy=user.is_busy_intern))
+
+
+@router.callback_query(F.data == "intern_cabinet:resign")
+async def resign_request(callback: CallbackQuery):
+    """Запрос подтверждения увольнения."""
+    user = await db_manager.get_user(callback.from_user.id)
+    if user.is_busy_intern:
+        await callback.answer("Вы не можете уволиться, пока выполняете микро-задачу. Завершите ее и попробуйте снова.", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        "Вы уверены, что хотите уволиться со стажировки? Весь текущий прогресс будет аннулирован.",
+        reply_markup=inline.get_intern_resign_confirm_keyboard()
+    )
+
+@router.callback_query(F.data == "intern_cabinet:resign_confirm")
+async def resign_confirm(callback: CallbackQuery, bot: Bot):
+    """Подтверждение увольнения."""
+    await db_manager.fire_intern(callback.from_user.id, "Уволился по собственному желанию")
+    await callback.message.edit_text("Вы были уволены со стажировки.", reply_markup=inline.get_back_to_main_menu_keyboard())
+    await bot.send_message(SUPER_ADMIN_ID, f"❗️ Стажер @{callback.from_user.username} (ID: {callback.from_user.id}) уволился по собственному желанию.")
+
+
+@router.callback_query(F.data.startswith("intern_cabinet:mistakes"))
+async def show_mistakes_history(callback: CallbackQuery, state: FSMContext):
+    """Показывает историю ошибок стажера."""
+    page = int(callback.data.split(":")[-1]) if ":" in callback.data else 1
+    
+    mistakes, total = await db_manager.get_intern_mistakes(callback.from_user.id, page=page)
+    total_pages = ceil(total / 5) if total > 0 else 1
+    
+    text = "<b>📜 История ваших ошибок:</b>\n\n"
+    if not mistakes:
+        text += "Ошибок не найдено. Отличная работа!"
+    else:
+        for mistake in mistakes:
+            date_str = mistake.created_at.strftime('%d.%m.%Y')
+            text += (
+                f"<b>Дата:</b> {date_str} | <b>Штраф:</b> {mistake.penalty_amount:.2f} ⭐\n"
+                f"<b>Причина:</b> <i>{mistake.reason}</i>\n"
+                f"<i>(ID отзыва: {mistake.review_id})</i>\n\n"
+            )
+
+    await callback.message.edit_text(
+        text, 
+        reply_markup=inline.get_pagination_keyboard("intern_cabinet:mistakes", page, total_pages, show_close=False)
+    )
 
 # --- FSM ДЛЯ ПОДАЧИ АНКЕТЫ ---
 
