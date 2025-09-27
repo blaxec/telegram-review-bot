@@ -118,7 +118,7 @@ async def show_audience_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @router.callback_query(F.data == "post_constructor:send", IsSuperAdmin())
-async def confirm_and_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if not data.get("post_audience"):
         await callback.answer("❌ Сначала выберите аудиторию для рассылки!", show_alert=True)
@@ -196,12 +196,14 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
 
 # --- Обработчики FSM ---
 
+# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.message(AdminState.POST_CONSTRUCTOR_AWAIT_TEXT, F.text)
-async def process_post_text(message: Message, state: FSMContext):
+async def process_post_text(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(post_text=message.html_text) # Сохраняем с форматированием
     await state.set_state(None)
 
     data = await state.get_data()
+    # ИСПРАВЛЕНИЕ: Используем bot.send_message вместо message.answer для надежности
     preview_msg = await bot.send_message(chat_id=message.chat.id, text="Обновляю превью...")
     await update_preview_message(preview_msg, state)
 
@@ -217,9 +219,9 @@ async def process_post_text(message: Message, state: FSMContext):
     
     await state.update_data(preview_message_id=preview_msg.message_id)
 
-
+# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.message(AdminState.POST_CONSTRUCTOR_AWAIT_MEDIA, F.photo | F.video)
-async def process_post_media(message: Message, state: FSMContext):
+async def process_post_media(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     media_list = data.get("post_media", [])
     
@@ -237,6 +239,7 @@ async def process_post_media(message: Message, state: FSMContext):
     # Обновляем сообщение с кнопками
     try:
         if data.get('media_prompt_id'):
+            # ИСПРАВЛЕНИЕ: Используем bot.edit_message_text
             await bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=data['media_prompt_id'],
@@ -277,25 +280,38 @@ async def back_to_constructor(callback: CallbackQuery, state: FSMContext):
     await update_preview_message(callback.message, state)
     await callback.answer()
 
+# ИСПРАВЛЕНИЕ: Добавлен bot: Bot в сигнатуру
 @router.callback_query(F.data == "post_constructor:cancel_input", StateFilter("*"), IsSuperAdmin())
-async def cancel_text_input(callback: CallbackQuery, state: FSMContext):
+async def cancel_text_input(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Отменяет ввод текста/медиа и возвращает к конструктору."""
     await state.set_state(None)
+    await callback.message.delete() # Удаляем сообщение с кнопкой отмены
     data = await state.get_data()
+    
     # Удаляем сообщение с просьбой ввести данные
     prompt_id = data.get('text_prompt_id') or data.get('media_prompt_id')
     if prompt_id:
         try:
-            await bot.delete_message(callback.message.chat.id, prompt_id)
+            # ИСПРАВЛЕНИЕ: Используем bot.delete_message
+            await bot.delete_message(callback.from_user.id, prompt_id)
         except TelegramBadRequest:
             pass
+
     # Обновляем главное превью
-    preview_msg = await bot.send_message(chat_id=callback.message.chat.id, text="Обновляю превью...")
-    await update_preview_message(preview_msg, state)
-    # Удаляем старое превью
-    if data.get('preview_message_id'):
+    preview_id = data.get('preview_message_id')
+    if preview_id:
         try:
-            await bot.delete_message(callback.message.chat.id, data.get('preview_message_id'))
-        except TelegramBadRequest: pass
-    await state.update_data(preview_message_id=preview_msg.message_id)
-    await callback.answer()
+            # ИСПРАВЛЕНИЕ: Получаем объект Message для передачи в update_preview_message
+            preview_message_obj = await bot.edit_message_text(
+                chat_id=callback.from_user.id,
+                message_id=preview_id,
+                text="Отмена ввода..." # Временный текст
+            )
+            await update_preview_message(preview_message_obj, state)
+        except TelegramBadRequest:
+            # Если не удалось отредактировать, отправляем новое
+            new_preview_msg = await bot.send_message(callback.from_user.id, "Обновляю превью...")
+            await update_preview_message(new_preview_msg, state)
+            await state.update_data(preview_message_id=new_preview_msg.message_id)
+
+    await callback.answer("Ввод отменен.")
