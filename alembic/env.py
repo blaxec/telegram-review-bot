@@ -5,22 +5,24 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 
-from database.models import Base
-target_metadata = Base.metadata
+# --- ВАЖНО: Никаких импортов из config.py! ---
 
+# это объект Alembic Config, который предоставляет доступ к
+# значениям в .ini файле.
 config = context.config
 
+# Интерпретируем config файл для Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# --- ИМПОРТИРУЕМ МОДЕЛИ ЗДЕСЬ ---
+from database.models import Base
+target_metadata = Base.metadata
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
+    # Берет URL из alembic.ini
     url = config.get_main_option("sqlalchemy.url")
-
-    # --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
-    print(f"DEBUG OFFLINE URL: {repr(url)}") 
-    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
-    
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -32,13 +34,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
-    url_from_config = config.get_section(config.config_ini_section, {})
-    print(f"DEBUG ONLINE URL FROM CONFIG: {repr(url_from_config)}")
-    # --- КОНЕЦ ДОБАВЛЕНИЯ ---
-    
+    # Создает движок на основе секции [alembic] в alembic.ini
     connectable = engine_from_config(
-        url_from_config, # Используем переменную, чтобы видеть ту же строку
+        config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
