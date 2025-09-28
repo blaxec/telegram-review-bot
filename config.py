@@ -11,11 +11,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # ID Главного Администратора (полный доступ)
 # Используется для эксклюзивных команд и как получатель критических уведомлений
-ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", 0))
+ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1") or 0)
 SUPER_ADMIN_ID = ADMIN_ID_1 # Создаем псевдоним для нового кода с фильтрами
 
 # ID второго администратора (если есть) для ролей по умолчанию
-ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", 0))
+ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2") or 0)
 
 # СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного) для общей логики
 # Сначала берем ID из ADMIN_IDS, если их нет, формируем из ADMIN_ID_1 и ADMIN_ID_2
@@ -36,7 +36,7 @@ TESTER_IDS_STR = os.getenv("TESTER_IDS", "")
 TESTER_IDS = [int(tester_id) for tester_id in TESTER_IDS_STR.split(',') if tester_id.strip().isdigit()]
 
 # ID канала, куда будут отправляться заявки на вывод
-WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID", 0))
+WITHDRAWAL_CHANNEL_ID = int(os.getenv("WITHDRAWAL_CHANNEL_ID") or 0)
 
 # --- Роли администраторов по умолчанию (останутся для системы ролей) ---
 class Defaults:
@@ -52,7 +52,7 @@ GROQ_MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.1-70b-versatile")
 
 # --- ПАРАМЕТРЫ ПЛАТНОГО РАЗБАНА ---
 PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
-PAID_UNBAN_COST_STARS = int(os.getenv("PAID_UNBAN_COST_STARS", 1))
+PAID_UNBAN_COST_STARS = int(os.getenv("PAID_UNBAN_COST_STARS") or 1)
 
 if not GOOGLE_API_KEYS:
     logger.warning("!!! КОНФИГУРАЦИЯ: Не найдены GOOGLE_API_KEY_1 и GOOGLE_API_KEY_2 в .env файле.")
@@ -123,7 +123,7 @@ class Limits:
     LINKS_PER_PAGE = 10 # Для пагинации в админке
 
 # --- Комиссия за перевод ---
-TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT", 5.0)) # ИЗМЕНЕНО
+TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT") or 5.0)
 
 # --- Настройки подключения к базам данных ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -133,9 +133,9 @@ if not DATABASE_URL:
     DB_HOST = os.getenv("DB_HOST", "postgres_db")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "telegram_bot_db")
-    # ИЗМЕНЕНИЕ: Формируем URL с asyncpg по умолчанию
+    # Формируем URL с asyncpg по умолчанию
     DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-# ИЗМЕНЕНИЕ: Упрощенная логика замены протокола
+# Упрощенная логика замены протокола
 elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
@@ -149,4 +149,4 @@ if REDIS_URL:
     REDIS_PORT = redis_parsed_url.port
 else:
     REDIS_HOST = os.getenv("REDIS_HOST", "redis_db")
-    REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+    REDIS_PORT = int(os.getenv("REDIS_PORT") or 6379)
