@@ -4,11 +4,10 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
-import os
-from dotenv import load_dotenv
 
-# --- ИЗМЕНЕНИЕ: Загружаем .env ---
-load_dotenv()
+# импортируем Base из ваших моделей, чтобы Alembic знал о них
+from database.models import Base
+target_metadata = Base.metadata
 
 # это объект Alembic Config, который предоставляет доступ к
 # значениям в .ini файле.
@@ -18,28 +17,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# --- ИЗМЕНЕНИЕ: Простая и надежная установка URL ---
-# Приоритет:
-# 1. Переменная DATABASE_URL_ALEMBIC из .env (для локального `alembic revision`)
-# 2. Переменная DATABASE_URL из config.py (для `alembic upgrade` внутри Docker)
-
-db_url = os.getenv("DATABASE_URL_ALEMBIC")
-if not db_url:
-    from config import DATABASE_URL
-    db_url = DATABASE_URL
-
-# Убираем асинхронный драйвер, так как autogenerate работает в синхронном режиме
-if db_url:
-    config.set_main_option("sqlalchemy.url", db_url.replace("+asyncpg", ""))
-
-# импортируем Base из ваших моделей, чтобы Alembic знал о них
-from database.models import Base
-target_metadata = Base.metadata
-
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
+    """
+    Запускается в 'офлайн' режиме.
+    Этот режим используется командой `alembic revision --autogenerate`.
+    Он берет URL напрямую из alembic.ini.
+    """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -53,22 +37,32 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    # Эта функция будет вызываться ТОЛЬКО при `alembic upgrade`,
-    # где connectable создается из правильного URL
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    """
+    Запускается в 'онлайн' режиме.
+    Этот режим используется командой `alembic upgrade` внутри Docker.
+    """
+    # В этом режиме мы ИГНОРИРУЕМ alembic.ini и берем конфигурацию из кода,
+    # чтобы использовать правильный URL (`...postgres_db...`)
+    from config import DATABASE_URL
+    from sqlalchemy.ext.asyncio import create_async_engine
+    import asyncio
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+    # Для Alembic нужен синхронный URL
+    sync_db_url = DATABASE_URL.replace("+asyncpg", "")
 
-        with context.begin_transaction():
-            context.run_migrations()
+    connectable = create_async_engine(sync_db_url)
+
+    async def run_async_migrations():
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations, target_metadata)
+
+    asyncio.run(run_async_migrations())
+
+
+def do_run_migrations(connection, target_metadata):
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 if context.is_offline_mode():
