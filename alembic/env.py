@@ -4,10 +4,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
-
-# импортируем Base из ваших моделей, чтобы Alembic знал о них
-from database.models import Base
-target_metadata = Base.metadata
+import os
 
 # это объект Alembic Config, который предоставляет доступ к
 # значениям в .ini файле.
@@ -17,6 +14,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# --- ВАЖНО: импортируем модели ПОСЛЕ настройки URL ---
+# Сначала настраиваем URL, потом импортируем все остальное,
+# чтобы избежать преждевременного чтения конфигов.
+from database.models import Base
+target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """
@@ -41,29 +43,30 @@ def run_migrations_online() -> None:
     Запускается в 'онлайн' режиме.
     Этот режим используется командой `alembic upgrade` внутри Docker.
     """
-    # В этом режиме мы ИГНОРИРУЕМ alembic.ini и берем конфигурацию из кода,
-    # чтобы использовать правильный URL (`...postgres_db...`)
-    from config import DATABASE_URL
-    from sqlalchemy.ext.asyncio import create_async_engine
-    import asyncio
+    # В этом режиме мы ИГНОРИРУЕМ config.py и используем alembic.ini,
+    # но Docker Compose сам подставит нужные переменные окружения.
+    # Поэтому нам нужно, чтобы URL для Docker был в alembic.ini.
+    
+    # Чтобы это работало и локально, и в Docker, мы будем
+    # использовать переменную окружения прямо в alembic.ini.
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
-    # Для Alembic нужен синхронный URL
-    sync_db_url = DATABASE_URL.replace("+asyncpg", "")
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
 
-    connectable = create_async_engine(sync_db_url)
-
-    async def run_async_migrations():
-        async with connectable.connect() as connection:
-            await connection.run_sync(do_run_migrations, target_metadata)
-
-    asyncio.run(run_async_migrations())
+        with context.begin_transaction():
+            context.run_migrations()
 
 
-def do_run_migrations(connection, target_metadata):
-    context.configure(connection=connection, target_metadata=target_metadata)
-    with context.begin_transaction():
-        context.run_migrations()
-
+# --- ИЗМЕНЕНИЕ: Убираем импорт dotenv и сложную логику ---
+# Alembic сам будет читать alembic.ini, а Docker подставит нужные переменные.
+# Логика теперь находится в alembic.ini.
 
 if context.is_offline_mode():
     run_migrations_offline()
