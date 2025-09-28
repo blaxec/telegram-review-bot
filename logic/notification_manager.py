@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
 from database import db_manager
-from logic import admin_roles
+from logic import admin_roles 
 from keyboards import inline 
 from config import Durations, SUPER_ADMIN_ID
 
@@ -69,7 +69,6 @@ async def send_notification_to_admins(
                     else:
                         sent_msg = await bot.send_message(chat_id=intern.id, text=text, reply_markup=intern_keyboard)
 
-                    # TODO: Добавить логику таймаута для стажера (если нужно)
                     return [sent_msg] if return_sent_messages else None
                 except Exception as e:
                     logger.error(f"Failed to send task to intern {intern.id}, rerouting to admins. Error: {e}")
@@ -83,7 +82,6 @@ async def send_notification_to_admins(
 
     if not active_admins:
         logger.warning(f"No active admins found for task type '{task_type}'. Notification not sent.")
-        # Уведомляем суперадмина, если никто не получил задачу
         try:
             await bot.send_message(SUPER_ADMIN_ID, f"⚠️ Внимание! Не найдено активных администраторов для задачи типа '{task_type}'. Задача не была доставлена.")
         except: pass

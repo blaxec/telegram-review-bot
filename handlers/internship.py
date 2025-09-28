@@ -110,7 +110,6 @@ async def show_intern_cabinet(message: Message, state: FSMContext):
     )
     await message.answer(text, reply_markup=inline.get_intern_cabinet_keyboard(is_busy=user.is_busy_intern))
 
-# ... (остальные функции кабинета стажера без изменений) ...
 @router.callback_query(F.data == "intern_cabinet:resign")
 async def resign_request(callback: CallbackQuery):
     """Запрос подтверждения увольнения."""
@@ -162,19 +161,19 @@ async def show_mistakes_history(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("internship_app:start"))
 async def start_application(callback: CallbackQuery, state: FSMContext):
     """Начало FSM или редактирование конкретного поля."""
-    field_to_edit = callback.data.split(":")[-1] if ":" in callback.data else "age"
+    field_to_edit = callback.data.split(":")[-1] if callback.data != "internship_app:start" else "age"
     
     if field_to_edit == "age":
         await state.set_state(UserState.INTERNSHIP_APP_AGE)
-        prompt_msg = await callback.message.edit_text("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard())
+        prompt_msg = await callback.message.edit_text("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     elif field_to_edit == "hours":
         await state.set_state(UserState.INTERNSHIP_APP_HOURS)
-        prompt_msg = await callback.message.edit_text("Шаг 2/4: Сколько часов в день вы готовы уделять работе?", reply_markup=inline.get_cancel_inline_keyboard())
+        prompt_msg = await callback.message.edit_text("Шаг 2/4: Сколько часов в день вы готовы уделять работе?", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     elif field_to_edit == "response_time":
         await state.set_state(UserState.INTERNSHIP_APP_RESPONSE_TIME)
-        prompt_msg = await callback.message.edit_text("Шаг 3/4: Насколько быстро вы обычно отвечаете на сообщения в Telegram?", reply_markup=inline.get_cancel_inline_keyboard())
+        prompt_msg = await callback.message.edit_text("Шаг 3/4: Насколько быстро вы обычно отвечаете на сообщения в Telegram?", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
     elif field_to_edit == "platforms":
         await state.set_state(UserState.INTERNSHIP_APP_PLATFORMS)
@@ -190,22 +189,25 @@ async def process_age(message: Message, state: FSMContext):
     
     if not message.text or not message.text.isdigit():
         msg = await message.answer("Пожалуйста, введите возраст числом.")
-        await asyncio.sleep(5)
-        await msg.delete()
+        await asyncio.sleep(10)
+        try:
+            await msg.delete()
+        except TelegramBadRequest: pass
+        # Повторно задаем вопрос
+        prompt_msg = await message.answer("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
     age = int(message.text)
-    if age < 15:
-        msg = await message.answer("Вы слишком молоды для этой работы. Минимальный возраст - 15 лет.")
-        await state.clear()
-        await asyncio.sleep(10)
-        await msg.delete()
-        return
-        
     if not (15 <= age <= 60):
         msg = await message.answer("Пожалуйста, введите корректный возраст (от 15 до 60).")
-        await asyncio.sleep(5)
-        await msg.delete()
+        await asyncio.sleep(10)
+        try:
+            await msg.delete()
+        except TelegramBadRequest: pass
+        # Повторно задаем вопрос
+        prompt_msg = await message.answer("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
 
     await state.update_data(age=message.text)
@@ -233,13 +235,13 @@ async def process_response_time(message: Message, state: FSMContext):
     await state.update_data(response_time=message.text)
     await state.set_state(UserState.INTERNSHIP_APP_PLATFORMS)
     
-    # Инициализируем пустой set при первом переходе
-    await state.update_data(selected_platforms=set())
+    data = await state.get_data()
+    selected = data.get("selected_platforms", set())
     
     prompt_msg = await message.answer(
         "Шаг 4/4: Выберите платформы, с которыми вам было бы интересно работать. "
         "Можно выбрать несколько. Нажмите 'Далее', когда закончите.",
-        reply_markup=inline.get_internship_platform_selection_keyboard()
+        reply_markup=inline.get_internship_platform_selection_keyboard(selected)
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -247,20 +249,16 @@ async def process_response_time(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("internship_toggle:"), UserState.INTERNSHIP_APP_PLATFORMS)
 async def toggle_platform(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора платформ."""
-    _, platform = callback.data.split(":")
+    _, platform, platform_name = callback.data.split(":")
     data = await state.get_data()
     selected = data.get("selected_platforms", set())
 
-    if platform in selected:
-        selected.remove(platform)
+    if platform_name in selected:
+        selected.remove(platform_name)
     else:
-        selected.add(platform)
+        selected.add(platform_name)
 
-    # ИЗМЕНЕНИЕ: Сохраняем и set, и list
-    await state.update_data(
-        selected_platforms=selected,
-        selected_platforms_list=list(selected)
-    )
+    await state.update_data(selected_platforms=selected)
     
     await callback.message.edit_reply_markup(reply_markup=inline.get_internship_platform_selection_keyboard(selected))
     await callback.answer()

@@ -177,8 +177,6 @@ async def process_transfer_recipient(message: Message, state: FSMContext):
         return
 
     await state.update_data(recipient_id=recipient_id)
-    
-    # ИЗМЕНЕНИЕ: Переход к подтверждению вместо комментария
     await ask_for_transfer_confirmation(message, state)
 
 async def ask_for_transfer_confirmation(message: Message, state: FSMContext):
@@ -439,9 +437,3 @@ async def show_hold_info(callback: CallbackQuery, state: FSMContext, **kwargs):
             await callback.message.edit_text(text, reply_markup=inline.get_back_to_profile_keyboard())
         except TelegramBadRequest:
             pass
-
-@router.callback_query(F.data == 'cancel_to_profile')
-async def cancel_to_profile_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Возвращает в меню профиля из любого FSM."""
-    await state.clear()
-    await show_profile_menu(callback, state, bot)

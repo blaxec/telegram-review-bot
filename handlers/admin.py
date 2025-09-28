@@ -363,7 +363,8 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message, 
-        data=f"admin_refs:list:{platform}:all"
+        data=f"admin_refs:list:{platform}:all",
+        bot=bot
     )
     await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
@@ -418,7 +419,8 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message,
-        data=f"admin_refs:list:{platform}:all"
+        data=f"admin_refs:list:{platform}:all",
+        bot=bot
     )
     await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
@@ -878,7 +880,6 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     review_id = int(callback.data.split(':')[1])
     admin_username = callback.from_user.username or "Admin"
     
-    # ПРОВЕРКА НА СТАЖЕРА
     review = await db_manager.get_review_by_id(review_id)
     if review and review.user and review.user.is_busy_intern:
         success, message_text = await handle_mentor_verdict(
@@ -892,12 +893,10 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
         if success and callback.message:
             new_caption = (callback.message.caption or "") + f"\n\n{message_text}"
             try:
-                # Обновляем сообщение с медиа-группой
                 await bot.edit_message_caption(chat_id=callback.message.chat.id, message_id=callback.message.message_id, caption=new_caption, reply_markup=None)
             except TelegramBadRequest: pass
         return
 
-    # Стандартная логика
     responsible_admin = await admin_roles.get_other_hold_admin()
     if callback.from_user.id != responsible_admin:
         admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
@@ -927,7 +926,6 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
     review_id = int(callback.data.split(':')[1])
     review = await db_manager.get_review_by_id(review_id)
     
-    # ПРОВЕРКА НА СТАЖЕРА
     if review and review.user and review.user.is_busy_intern:
         await state.set_state(AdminState.MENTOR_REJECT_REASON)
         await state.update_data(review_id_for_intern_rejection=review_id)
@@ -939,7 +937,6 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
         await callback.answer("Ожидание причины для стажера...")
         return
 
-    # Стандартная логика
     responsible_admin = await admin_roles.get_other_hold_admin()
     if callback.from_user.id != responsible_admin:
         admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
@@ -997,7 +994,7 @@ async def reset_cooldown_start_from_panel(callback: CallbackQuery, state: FSMCon
         "Введите ID или @username пользователя для сброса кулдаунов.",
         reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel")
     )
-    await state.set_state(AdminState.FINE_USER_ID) # Можно использовать тот же стейт
+    await state.set_state(AdminState.FINE_USER_ID)
 
 @router.message(Command("reset_cooldown"), IsAdmin())
 async def reset_cooldown_handler(message: Message, state: FSMContext):
@@ -1023,7 +1020,7 @@ async def viewhold_start_from_panel(callback: CallbackQuery, state: FSMContext):
         "Введите ID или @username пользователя для просмотра его холда.",
         reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel")
     )
-     await state.set_state(AdminState.FINE_USER_ID) # Можно использовать тот же стейт
+     await state.set_state(AdminState.FINE_USER_ID)
 
 @router.message(Command("viewhold"), IsAdmin())
 async def viewhold_handler(message: Message, state: FSMContext):
@@ -1087,7 +1084,7 @@ async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
     msg = await message.answer(result_text)
     await state.clear()
     await asyncio.sleep(5)
-    await show_admin_panel(msg) # Возвращаем в панель
+    await show_admin_panel(msg)
 
 @router.callback_query(F.data == "panel:create_promo", IsSuperAdmin())
 async def create_promo_start_from_panel(callback: CallbackQuery, state: FSMContext):

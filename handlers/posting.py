@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from math import ceil
-from typing import Set
+from typing import Set, List
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import StateFilter, Command
@@ -27,7 +27,7 @@ async def get_preview_text(state: FSMContext) -> str:
     data = await state.get_data()
     post_text = data.get("post_text", "Текст еще не добавлен.")
     media_list = data.get("post_media", [])
-    audience_set = data.get("post_audience", set())
+    audience_list = data.get("post_audience", [])
 
     audience_map = {
         'all_users': 'Все пользователи',
@@ -35,7 +35,7 @@ async def get_preview_text(state: FSMContext) -> str:
         'super_admins': 'Главные админы',
         'testers': 'Тестировщики'
     }
-    audience_str = ", ".join([audience_map.get(a, a) for a in audience_set]) or "Не выбрана"
+    audience_str = ", ".join([audience_map.get(a, a) for a in audience_list]) or "Не выбрана"
 
     return (
         "<b>Конструктор постов</b>\n\n"
@@ -76,7 +76,7 @@ async def start_post_constructor(message: Message, state: FSMContext):
     await state.set_data({
         "post_text": "<b>Ваш пост.</b>\n\nВы можете использовать <b>HTML</b>-теги.",
         "post_media": [],
-        "post_audience": set()
+        "post_audience": []
     })
     
     preview_text = await get_preview_text(state)
@@ -115,13 +115,12 @@ async def ask_for_media(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "post_constructor:edit_audience", IsSuperAdmin())
 async def show_audience_menu(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    audience_set = data.get("post_audience", set())
+    audience_list = data.get("post_audience", [])
     await callback.message.edit_reply_markup(
-        reply_markup=inline.get_post_audience_keyboard(audience_set)
+        reply_markup=inline.get_post_audience_keyboard(audience_list)
     )
     await callback.answer()
     
-# ИЗМЕНЕНИЕ: Обработка сохранения шаблона
 @router.callback_query(F.data == "post_constructor:save_template", IsSuperAdmin())
 async def ask_template_name(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME)
@@ -143,8 +142,7 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нельзя отправить пустой пост!", show_alert=True)
         return
 
-    # ИЗМЕНЕНИЕ: Преобразуем set в list перед использованием
-    audience_list = list(data.get("post_audience", []))
+    audience_list = data.get("post_audience", [])
     user_ids = await db_manager.get_user_ids_for_broadcast(audience_list)
     if not user_ids:
         await callback.answer("❌ В выбранной аудитории нет пользователей для рассылки.", show_alert=True)
@@ -162,8 +160,7 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
     await callback.answer()
 
     data = await state.get_data()
-    # ИЗМЕНЕНИЕ: Преобразуем set в list перед использованием
-    audience_list = list(data.get("post_audience", []))
+    audience_list = data.get("post_audience", [])
     user_ids = await db_manager.get_user_ids_for_broadcast(audience_list)
     
     await state.clear()
@@ -233,7 +230,7 @@ async def process_post_text(message: Message, state: FSMContext, bot: Bot):
     # Обновляем превью
     if preview_msg_id:
         try:
-            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat)
+            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat, bot=bot)
             await update_preview_message(preview_message_obj, state)
         except Exception as e:
             logger.error(f"Could not update preview message after text input: {e}")
@@ -271,13 +268,12 @@ async def process_save_template(message: Message, state: FSMContext, bot: Bot):
     template_name = message.text.strip()
     data = await state.get_data()
     
-    # ИЗМЕНЕНИЕ: Преобразуем set в list перед JSON сериализацией
     media_list = data.get("post_media", [])
     
     success, result_msg = await db_manager.save_post_template(
         template_name=template_name,
         text=data.get("post_text"),
-        media_json=json.dumps(media_list), # Теперь здесь list
+        media_json=json.dumps(media_list),
         created_by=message.from_user.id
     )
     
@@ -296,7 +292,7 @@ async def process_save_template(message: Message, state: FSMContext, bot: Bot):
     preview_msg_id = data.get("preview_message_id")
     if preview_msg_id:
         try:
-            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat)
+            preview_message_obj = Message(message_id=preview_msg_id, chat=message.chat, bot=bot)
             await update_preview_message(preview_message_obj, state)
         except Exception as e:
             logger.error(f"Could not update preview message after saving template: {e}")
@@ -314,16 +310,16 @@ async def close_post_handler(callback: CallbackQuery):
 async def toggle_audience(callback: CallbackQuery, state: FSMContext):
     audience = callback.data.split(":")[-1]
     data = await state.get_data()
-    audience_set: Set[str] = data.get("post_audience", set())
+    audience_list: List[str] = data.get("post_audience", [])
 
-    if audience in audience_set:
-        audience_set.remove(audience)
+    if audience in audience_list:
+        audience_list.remove(audience)
     else:
-        audience_set.add(audience)
+        audience_list.append(audience)
 
-    await state.update_data(post_audience=audience_set)
+    await state.update_data(post_audience=audience_list)
     await callback.message.edit_reply_markup(
-        reply_markup=inline.get_post_audience_keyboard(audience_set)
+        reply_markup=inline.get_post_audience_keyboard(audience_list)
     )
     await callback.answer()
 
@@ -335,7 +331,7 @@ async def back_to_constructor(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "post_constructor:cancel_input", StateFilter("*"), IsSuperAdmin())
 async def cancel_text_input(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await state.set_state(None)
-    await callback.message.delete()
+    
     data = await state.get_data()
     
     prompt_id = data.get('text_prompt_id') or data.get('media_prompt_id')
@@ -348,11 +344,16 @@ async def cancel_text_input(callback: CallbackQuery, state: FSMContext, bot: Bot
     preview_id = data.get('preview_message_id')
     if preview_id:
         try:
-            preview_message_obj = Message(message_id=preview_id, chat=callback.message.chat)
+            preview_message_obj = Message(message_id=preview_id, chat=callback.message.chat, bot=bot)
             await update_preview_message(preview_message_obj, state)
         except Exception:
-            new_preview_msg = await bot.send_message(callback.from_user.id, "Обновляю превью...")
-            await update_preview_message(new_preview_msg, state)
-            await state.update_data(preview_message_id=new_preview_msg.message_id)
+            try:
+                if callback.message:
+                    await callback.message.delete()
+                new_preview_msg = await bot.send_message(callback.from_user.id, "Обновляю превью...")
+                await update_preview_message(new_preview_msg, state)
+                await state.update_data(preview_message_id=new_preview_msg.message_id)
+            except Exception as e:
+                 logger.error(f"Failed to resend preview message: {e}")
 
     await callback.answer("Ввод отменен.")

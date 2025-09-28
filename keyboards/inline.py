@@ -7,7 +7,7 @@ from config import Rewards, GOOGLE_API_KEYS
 from aiogram import Bot
 from logic import admin_roles
 from database.models import UnbanRequest, InternshipApplication, User, PostTemplate, Administrator
-from typing import Set
+from typing import Set, List, Optional
 
 # --- /start и навигация ---
 
@@ -44,6 +44,14 @@ def get_operation_history_keyboard() -> InlineKeyboardMarkup:
 def get_cancel_to_profile_keyboard() -> InlineKeyboardMarkup:
     """Создает кнопку "Отмена", возвращающую в профиль."""
     buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_transfer_confirmation_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для подтверждения перевода звезд."""
+    buttons = [
+        [InlineKeyboardButton(text='✅ Подтвердить', callback_data='transfer_confirm')],
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # --- Раздел "Статистика" ---
@@ -401,27 +409,32 @@ def get_reward_settings_menu_keyboard(current_timer_hours: int) -> InlineKeyboar
     builder.adjust(1)
     return builder.as_markup()
 
-def get_pagination_keyboard(prefix: str, current_page: int, total_pages: int, show_close: bool = True) -> InlineKeyboardMarkup:
-    """Создает клавиатуру для пагинации списков."""
+def get_pagination_keyboard(
+    prefix: str,
+    current_page: int,
+    total_pages: int,
+    show_close: bool = True,
+    back_callback: Optional[str] = None
+) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для пагинации списков с опциональной кнопкой 'Назад'."""
     builder = InlineKeyboardBuilder()
     
-    back_button = InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:page:{current_page-1}")
-    page_button = InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop")
-    forward_button = InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:page:{current_page+1}")
-
-    row = []
+    pagination_row = []
     if current_page > 1:
-        row.append(back_button)
+        pagination_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:{current_page-1}"))
     if total_pages > 1:
-        row.append(page_button)
+        pagination_row.append(InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="noop"))
     if current_page < total_pages:
-        row.append(forward_button)
+        pagination_row.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{current_page+1}"))
     
-    if row:
-        builder.row(*row)
+    if pagination_row:
+        builder.row(*pagination_row)
     
-    if show_close:
+    if back_callback:
+        builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback))
+    elif show_close:
         builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="go_main_menu"))
+        
     return builder.as_markup()
 
 
@@ -429,7 +442,7 @@ def get_promo_list_keyboard(current_page: int, total_pages: int) -> InlineKeyboa
     """Создает клавиатуру для списка промокодов с пагинацией и кнопкой удаления."""
     builder = InlineKeyboardBuilder()
     
-    pagination_markup = get_pagination_keyboard("promolist", current_page, total_pages, show_close=False)
+    pagination_markup = get_pagination_keyboard("promolist:page", current_page, total_pages, show_close=False)
     for row in pagination_markup.inline_keyboard:
         builder.row(*row)
 
@@ -457,7 +470,7 @@ def get_amnesty_keyboard(requests: list[UnbanRequest], current_page: int, total_
             InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"amnesty:action:reject:{req.id}")
         )
     
-    pagination_markup = get_pagination_keyboard("amnesty", current_page, total_pages, show_close=True)
+    pagination_markup = get_pagination_keyboard("amnesty:page", current_page, total_pages, show_close=True)
     for row in pagination_markup.inline_keyboard:
         builder.row(*row)
         
@@ -582,15 +595,37 @@ def get_internship_application_start_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-def get_internship_platform_selection_keyboard() -> InlineKeyboardMarkup:
+def get_internship_platform_selection_keyboard(selected: set = None) -> InlineKeyboardMarkup:
     """Клавиатура для выбора платформ в анкете."""
+    if selected is None:
+        selected = set()
+        
     builder = InlineKeyboardBuilder()
-    builder.button(text="Google Карты", callback_data="internship_toggle:google:Google Карты")
-    builder.button(text="Яндекс (с текстом)", callback_data="internship_toggle:yandex_text:Яндекс (с текстом)")
-    builder.button(text="Яндекс (без текста)", callback_data="internship_toggle:yandex_no_text:Яндекс (без текста)")
+    
+    platforms = {
+        "google": "Google Карты",
+        "yandex_text": "Яндекс (с текстом)",
+        "yandex_no_text": "Яндекс (без текста)",
+    }
+    
+    for key, name in platforms.items():
+        prefix = "✅ " if name in selected else ""
+        builder.button(text=f"{prefix}{name}", callback_data=f"internship_toggle:{key}:{name}")
+        
     builder.button(text="✅ Далее", callback_data="internship_app:platforms_done")
     builder.button(text="❌ Отмена", callback_data="cancel_action")
     builder.adjust(1)
+    return builder.as_markup()
+
+def get_internship_confirmation_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Все верно, отправить", callback_data="internship_app:confirm")
+    builder.button(text="Возраст", callback_data="internship_app:start:age")
+    builder.button(text="Часы", callback_data="internship_app:start:hours")
+    builder.button(text="Скорость ответа", callback_data="internship_app:start:response_time")
+    builder.button(text="Платформы", callback_data="internship_app:start:platforms")
+    builder.button(text="❌ Начать заново", callback_data="go_main_menu")
+    builder.adjust(1, 4, 1)
     return builder.as_markup()
 
 def get_intern_cabinet_keyboard(is_busy: bool) -> InlineKeyboardMarkup:
@@ -756,7 +791,7 @@ def get_post_media_keyboard(has_media: bool = False) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-def get_post_audience_keyboard(selected_audiences: Set[str]) -> InlineKeyboardMarkup:
+def get_post_audience_keyboard(selected_audiences: List[str]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     audiences = {
         'all_users': 'Все пользователи',

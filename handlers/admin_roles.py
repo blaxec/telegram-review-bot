@@ -1,24 +1,32 @@
-# file: telegram-review-bot-main/handlers/admin_roles.py
+# file: handlers/admin_roles.py
 
 import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
+from math import ceil
 
-from config import ADMIN_ID_1, ADMIN_ID_2, ADMIN_IDS
+from config import ADMIN_ID_1, ADMIN_ID_2
 from keyboards import inline
 from database import db_manager
 from logic import admin_roles
+from utils.access_filters import IsSuperAdmin
+from states.user_states import AdminState
+
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 
 # --- Команда /roles ---
-@router.message(Command("roles"), F.from_user.id == ADMIN_ID_1)
+@router.message(Command("roles"), IsSuperAdmin())
 async def cmd_roles(message: Message):
     """Точка входа в управление ролями."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     await message.answer(
         "🛠️ <b>Управление ролями администраторов</b>\n\n"
         "Выберите категорию для настройки ответственных.",
@@ -103,7 +111,6 @@ async def roles_switch_admin(callback: CallbackQuery, bot: Bot):
     
     await callback.answer("Ответственный изменен!")
 
-    # --- ИСПРАВЛЕННАЯ ЛОГИКА ОБНОВЛЕНИЯ КЛАВИАТУРЫ ---
     category = "unknown"
     subcategory = None
     
@@ -123,7 +130,6 @@ async def roles_switch_admin(callback: CallbackQuery, bot: Bot):
     await callback.message.edit_reply_markup(
         reply_markup=await inline.get_task_switching_keyboard(bot, category, subcategory)
     )
-    # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
     
     # Отправляем уведомления
     task_description = admin_roles.ROLE_DESCRIPTIONS.get(role_key, "Неизвестная задача")
@@ -135,9 +141,12 @@ async def roles_switch_admin(callback: CallbackQuery, bot: Bot):
         f"Задача «<b>{task_description}</b>» была передана от {old_admin_name} к {new_admin_name}."
     )
     
-    for admin_id in ADMIN_IDS:
+    all_db_admins = await db_manager.get_all_administrators_by_role()
+    admin_ids_from_db = [admin.user_id for admin in all_db_admins]
+
+    for admin_id in admin_ids_from_db:
         try:
-            await bot.send_message(admin_id, notification_text)
+            await bot.send_message(admin_id, notification_text, reply_markup=inline.get_close_post_keyboard())
         except Exception as e:
             logger.warning(f"Не удалось уведомить админа {admin_id} о смене роли: {e}")
 
@@ -159,3 +168,41 @@ async def roles_delete_settings_msg(callback: CallbackQuery):
         await callback.answer("Сообщение удалено.")
     except TelegramBadRequest:
         await callback.answer("Не удалось удалить сообщение.", show_alert=True)
+
+# --- Блок для /roles_manage ---
+
+@router.message(Command("roles_manage"), IsSuperAdmin())
+async def cmd_roles_manage(message: Message):
+    """Точка входа в управление списком администраторов."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    await message.answer(
+        "👥 <b>Управление администраторами</b>\n\n"
+        "Здесь вы можете добавлять, удалять и просматривать администраторов и тестеров.",
+        reply_markup=inline.get_roles_manage_menu()
+    )
+
+@router.callback_query(F.data == "roles_manage:back_to_menu")
+async def roles_manage_back_to_menu(callback: CallbackQuery):
+    await callback.message.edit_text(
+         "👥 <b>Управление администраторами</b>\n\n"
+        "Здесь вы можете добавлять, удалять и просматривать администраторов и тестеров.",
+        reply_markup=inline.get_roles_manage_menu()
+    )
+
+@router.callback_query(F.data.startswith("roles_manage:list:"))
+async def list_admins(callback: CallbackQuery, bot: Bot):
+    page = int(callback.data.split(":")[-1])
+    admins_per_page = 5
+    
+    all_admins = await db_manager.get_all_administrators_by_role()
+    total_pages = ceil(len(all_admins) / admins_per_page)
+    
+    start_index = (page - 1) * admins_per_page
+    end_index = start_index + admins_per_page
+    admins_on_page = all_admins[start_index:end_index]
+    
+    keyboard = await inline.get_roles_list_keyboard(admins_on_page, page, total_pages, bot)
+    await callback.message.edit_text("<b>Список администраторов:</b>", reply_markup=keyboard)

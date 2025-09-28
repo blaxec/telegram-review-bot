@@ -164,7 +164,8 @@ async def send_device_model_to_admin(message: Message, state: FSMContext, bot: B
             original_user_id=user_id
         )
     except Exception as e:
-        await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
+        msg = await message.answer("Не удалось отправить запрос администратору. Попробуйте позже.")
+        await schedule_message_deletion(msg, 10)
         await state.clear()
         logger.error(f"Ошибка отправки модели устройства админу: {e}")
 
