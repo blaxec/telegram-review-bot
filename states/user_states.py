@@ -8,11 +8,13 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
-    # ИЗМЕНЕНИЕ: Новое состояние для подтверждения
-    TRANSFER_CONFIRMATION = State()
-    TRANSFER_AWAITING_MEDIA_CHOICE = State()
-    TRANSFER_AWAITING_MEDIA = State()
+    TRANSFER_OPTIONS = State() # Выбор: коммент, медиа, анонимность
     TRANSFER_COMMENT_INPUT = State()
+    TRANSFER_AWAITING_MEDIA = State()
+    TRANSFER_CONFIRMATION = State()
+    
+    # Состояние для жалобы
+    COMPLAINT_REASON = State()
     
     # Состояния для вывода звезд
     WITHDRAW_AMOUNT = State()
@@ -74,7 +76,6 @@ class UserState(StatesGroup):
     INTERNSHIP_APP_START = State()
     INTERNSHIP_APP_AGE = State()
     INTERNSHIP_APP_HOURS = State()
-    # ИЗМЕНЕНИЕ: Новое состояние
     INTERNSHIP_APP_RESPONSE_TIME = State()
     INTERNSHIP_APP_PLATFORMS = State()
     INTERNSHIP_APP_CONFIRM = State()
@@ -97,12 +98,13 @@ class AdminState(StatesGroup):
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
 
-    # Состояния для штрафа (теперь запускаются из /panel)
+    # Состояния для штрафа и жалоб
     FINE_USER_ID = State()
     FINE_AMOUNT = State()
     FINE_REASON = State()
-    
-    # Состояния для создания промокода (теперь запускаются из /panel)
+    COMPLAINTS_LIST_VIEW = State()
+
+    # Состояния для создания промокода
     PROMO_CODE_NAME = State()
     PROMO_CONDITION = State()
     PROMO_REWARD = State()
@@ -119,7 +121,7 @@ class AdminState(StatesGroup):
     RETURN_LINK_ID = State()
     LINK_LIST_VIEW = State()
 
-    # Состояния для процесса бана (теперь запускаются из /panel)
+    # Состояния для процесса бана
     BAN_USER_IDENTIFIER = State()
     BAN_REASON = State()
 
@@ -140,12 +142,13 @@ class AdminState(StatesGroup):
     INTERNSHIP_FIRE_REASON = State()
     MENTOR_REJECT_REASON = State()
 
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ДИНАМИЧЕСКИХ РОЛЕЙ ---
+    # Состояния для динамических ролей
     ROLES_ADD_ADMIN_ID = State()
     ROLES_ADD_ADMIN_ROLE = State()
     ROLES_DELETE_CONFIRM = State()
     
-    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ КОНСТРУКТОРА ПОСТОВ ---
-    POST_CONSTRUCTOR_AWAIT_TEXT = State()
-    POST_CONSTRUCTOR_AWAIT_MEDIA = State()
-    POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME = State()
+    # Состояния для конструктора постов
+    POST_CONSTRUCTOR = State()
+    POST_AWAITING_INPUT = State()
+    POST_TEMPLATE_LIST_VIEW = State()
+    POST_TEMPLATE_DELETE_CONFIRM = State()

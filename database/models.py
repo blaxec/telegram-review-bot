@@ -179,8 +179,15 @@ class OperationHistory(Base):
     amount = Column(Float, nullable=False)
     description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    
+    # Новые поля для переводов
+    comment = Column(Text, nullable=True)
+    media_json = Column(Text, nullable=True)
+    is_anonymous = Column(Boolean, default=False)
+    sender_id = Column(BigInteger, nullable=True)
 
     user = relationship("User", back_populates="operations")
+    complaints = relationship("TransferComplaint", back_populates="transfer")
 
 class UnbanRequest(Base):
     __tablename__ = 'unban_requests'
@@ -241,7 +248,7 @@ class InternshipMistake(Base):
     task = relationship("InternshipTask", back_populates="mistakes")
     intern = relationship("User", back_populates="internship_mistakes")
 
-# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ МОДУЛЕЙ 2 и 3 ---
+# --- НОВЫЕ ТАБЛИЦЫ ---
 
 class Administrator(Base):
     __tablename__ = 'administrators'
@@ -249,7 +256,7 @@ class Administrator(Base):
     user_id = Column(BigInteger, primary_key=True)
     role = Column(Enum('admin', 'super_admin', name='admin_role_enum'), nullable=False, default='admin')
     is_tester = Column(Boolean, nullable=False, default=False)
-    is_removable = Column(Boolean, nullable=False, default=True) # Защита от удаления базовых админов
+    is_removable = Column(Boolean, nullable=False, default=True) 
     added_by = Column(BigInteger, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -259,5 +266,17 @@ class PostTemplate(Base):
     id = Column(Integer, primary_key=True)
     template_name = Column(String, unique=True, nullable=False)
     text = Column(Text, nullable=True)
-    media_json = Column(Text, nullable=True) # Храним JSON как строку
+    media_json = Column(Text, nullable=True)
     created_by = Column(BigInteger, nullable=False)
+
+class TransferComplaint(Base):
+    __tablename__ = 'transfer_complaints'
+
+    id = Column(Integer, primary_key=True)
+    transfer_id = Column(Integer, ForeignKey('operation_history.id'), nullable=False)
+    complainant_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    reason = Column(Text, nullable=False)
+    status = Column(Enum('pending', 'reviewed', name='complaint_status_enum'), default='pending', nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    transfer = relationship("OperationHistory", back_populates="complaints")

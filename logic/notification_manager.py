@@ -75,6 +75,7 @@ async def send_notification_to_admins(
                     await db_manager.set_intern_busy_status(intern.id, is_busy=False)
 
     # 2. Если стажер не найден или задача не для него, отправляем админам
+    # ИСПРАВЛЕНИЕ: Убран await, так как функция теперь не является корутиной
     admin_ids = await admin_roles.get_admins_for_task(task_type)
     active_admins = await db_manager.get_active_admins(admin_ids)
     

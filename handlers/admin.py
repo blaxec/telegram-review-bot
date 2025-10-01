@@ -41,7 +41,8 @@ from logic.admin_logic import (
     get_paginated_links_text,
     get_unban_requests_page,
     process_unban_request_logic,
-    handle_mentor_verdict
+    handle_mentor_verdict,
+    format_complaints_page
 )
 from logic.internship_logic import (
     format_applications_page, 
@@ -130,7 +131,7 @@ async def show_pending_tasks(message: Message, state: FSMContext):
     asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY))
     await state.clear()
     
-# --- ИЗМЕНЕНИЕ: Добавлена панель управления ---
+# --- ПАНЕЛЬ УПРАВЛЕНИЯ /panel ---
 @router.message(Command("panel"), IsSuperAdmin())
 async def show_admin_panel(message: Message):
     """Отображает главную панель управления для SuperAdmin."""
@@ -152,6 +153,84 @@ async def back_to_admin_panel(callback: CallbackQuery):
         "Выберите действие:",
         reply_markup=inline.get_admin_panel_keyboard()
     )
+
+# --- ПОДМЕНЮ В ПАНЕЛИ УПРАВЛЕНИЯ ---
+@router.callback_query(F.data.startswith("panel:"))
+async def panel_actions(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    
+    # Меню управления блокировками
+    if action == "manage_bans":
+        await callback.message.edit_text("<b>Меню управления блокировками</b>\n\nВыберите действие:", reply_markup=inline.get_ban_management_keyboard())
+    elif action == "ban_user":
+        await state.set_state(AdminState.BAN_USER_IDENTIFIER)
+        prompt = await callback.message.edit_text("Введите ID или @username пользователя для бана.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
+        await state.update_data(prompt_message_id=prompt.message_id)
+    elif action == "unban_user":
+        # Логика разбана (может быть перенесена в отдельную FSM)
+        pass 
+    elif action == "ban_list":
+        await state.set_state(AdminState.BAN_LIST_VIEW)
+        await show_banned_users_page(callback, state, 1)
+    
+    # Меню амнистии (внутри меню банов)
+    elif action == "manage_amnesty":
+        await state.set_state(AdminState.AMNESTY_LIST_VIEW)
+        await show_amnesty_page(callback, state, 1)
+
+    # Меню управления промокодами
+    elif action == "manage_promos":
+        await callback.message.edit_text("<b>Меню управления промокодами</b>\n\nВыберите действие:", reply_markup=inline.get_promo_management_keyboard())
+    elif action == "create_promo":
+        await state.set_state(AdminState.PROMO_CODE_NAME)
+        prompt = await callback.message.edit_text("Введите уникальное название для нового промокода (например, NEWYEAR2025).", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
+        await state.update_data(prompt_message_id=prompt.message_id)
+    elif action == "promo_list":
+        await state.set_state(AdminState.PROMO_LIST_VIEW)
+        await show_promo_codes_page(callback, state, 1)
+
+    # Меню жалоб (внутри штрафов)
+    elif action == "view_complaints":
+        await state.set_state(AdminState.COMPLAINTS_LIST_VIEW)
+        await show_complaints_page(callback, state, 1)
+
+    # Другие утилиты из главного меню
+    elif action == "issue_fine":
+        await state.set_state(AdminState.FINE_USER_ID)
+        prompt = await callback.message.edit_text("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
+        await state.update_data(prompt_message_id=prompt.message_id)
+    elif action == "reset_cooldown":
+         # Логика сброса кулдаунов...
+         pass
+    elif action == "view_hold":
+        # Логика просмотра холда...
+        pass
+    
+    await callback.answer()
+
+async def show_banned_users_page(callback: CallbackQuery, state: FSMContext, page: int):
+    users, total = await db_manager.get_banned_users(page=page), await db_manager.get_banned_users_count()
+    total_pages = ceil(total / 6) if total > 0 else 1
+    text = await format_banned_user_page(users, page, total_pages)
+    await callback.message.edit_text(text, reply_markup=inline.get_pagination_keyboard("banlist:page", page, total_pages, back_callback="panel:manage_bans"))
+
+async def show_promo_codes_page(callback: CallbackQuery, state: FSMContext, page: int):
+    promos, total = await db_manager.get_all_promo_codes(page=page), await db_manager.get_promo_codes_count()
+    total_pages = ceil(total / 6) if total > 0 else 1
+    text = await format_promo_code_page(promos, page, total_pages)
+    await callback.message.edit_text(text, reply_markup=inline.get_promo_list_keyboard(page, total_pages))
+
+async def show_amnesty_page(callback: CallbackQuery, state: FSMContext, page: int):
+    requests, total = await db_manager.get_pending_unban_requests(page=page), await db_manager.get_pending_unban_requests_count()
+    total_pages = ceil(total / 5) if total > 0 else 1
+    text = await get_unban_requests_page(requests, page, total_pages)
+    await callback.message.edit_text(text, reply_markup=inline.get_amnesty_keyboard(requests, page, total_pages))
+
+async def show_complaints_page(callback: CallbackQuery, state: FSMContext, page: int):
+    complaints, total = await db_manager.get_transfer_complaints(page=page)
+    total_pages = ceil(total / 5) if total > 0 else 1
+    text = await format_complaints_page(complaints, page, total_pages)
+    await callback.message.edit_text(text, reply_markup=inline.get_complaints_keyboard(complaints, page, total_pages))
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
@@ -1227,54 +1306,11 @@ async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
 
 # --- НОВЫЙ БЛОК: СПИСКИ ЗАБАНЕННЫХ И ПРОМОКОДОВ (только для Главного Админа) ---
 
-@router.message(Command("banlist"), IsSuperAdmin())
-async def show_ban_list(message: Message, state: FSMContext):
-    await message.delete()
-    await state.set_state(AdminState.BAN_LIST_VIEW)
-    await show_banned_users_page(message, state, 1)
-
-async def show_banned_users_page(message_or_callback: Message | CallbackQuery, state: FSMContext, page: int):
-    users = await db_manager.get_banned_users(page=page)
-    total_users_count = await db_manager.get_banned_users_count()
-    users_per_page = 6
-    total_pages = ceil(total_users_count / users_per_page) if total_users_count > 0 else 1
-
-    text = await format_banned_user_page(users, page, total_pages)
-    
-    keyboard = inline.get_pagination_keyboard("banlist", page, total_pages)
-    
-    if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(text, reply_markup=keyboard)
-    else:
-        await message_or_callback.message.edit_text(text, reply_markup=keyboard)
-
 @router.callback_query(F.data.startswith("banlist:page:"), AdminState.BAN_LIST_VIEW, IsSuperAdmin())
 async def banlist_pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     page = int(callback.data.split(":")[2])
     await show_banned_users_page(callback, state, page)
-
-
-@router.message(Command("promolist"), IsSuperAdmin())
-async def show_promo_list(message: Message, state: FSMContext):
-    await message.delete()
-    await state.set_state(AdminState.PROMO_LIST_VIEW)
-    await show_promo_codes_page(message, state, 1)
-
-async def show_promo_codes_page(message_or_callback: Message | CallbackQuery, state: FSMContext, page: int):
-    promos = await db_manager.get_all_promo_codes(page=page)
-    total_promos_count = await db_manager.get_promo_codes_count()
-    promos_per_page = 6
-    total_pages = ceil(total_promos_count / promos_per_page) if total_promos_count > 0 else 1
-
-    text = await format_promo_code_page(promos, page, total_pages)
-    
-    keyboard = inline.get_promo_list_keyboard(page, total_pages)
-    
-    if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(text, reply_markup=keyboard)
-    else:
-        await message_or_callback.message.edit_text(text, reply_markup=keyboard)
 
 @router.callback_query(F.data.startswith("promolist:page:"), AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
 async def promolist_pagination_handler(callback: CallbackQuery, state: FSMContext):
@@ -1322,27 +1358,6 @@ async def process_delete_promo_id(message: Message, state: FSMContext):
     await show_promo_codes_page(message, state, 1)
 
 # --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ АМНИСТИЯМИ ---
-
-@router.message(Command("amnesty"), IsSuperAdmin())
-async def show_amnesty_list(message: Message, state: FSMContext):
-    await message.delete()
-    await state.set_state(AdminState.AMNESTY_LIST_VIEW)
-    await show_amnesty_page(message, state, 1)
-
-async def show_amnesty_page(message_or_callback: Message | CallbackQuery, state: FSMContext, page: int):
-    requests = await db_manager.get_pending_unban_requests(page=page)
-    total_requests_count = await db_manager.get_pending_unban_requests_count()
-    requests_per_page = 5
-    total_pages = ceil(total_requests_count / requests_per_page) if total_requests_count > 0 else 1
-
-    text = await get_unban_requests_page(requests, page, total_pages)
-    
-    keyboard = inline.get_amnesty_keyboard(requests, page, total_pages)
-    
-    if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(text, reply_markup=keyboard)
-    else:
-        await message_or_callback.message.edit_text(text, reply_markup=keyboard)
 
 @router.callback_query(F.data.startswith("amnesty:page:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
 async def amnesty_pagination_handler(callback: CallbackQuery, state: FSMContext):

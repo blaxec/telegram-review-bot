@@ -2,7 +2,8 @@
 
 import datetime
 import logging
-from typing import Union, List, Tuple, Dict, Optional
+import json
+from typing import Union, List, Tuple, Dict, Optional, Set
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete, func, desc, case, insert
 from sqlalchemy.orm import selectinload
@@ -12,7 +13,7 @@ from database.models import (Base, User, Review, Link, WithdrawalRequest,
                              PromoCode, PromoActivation, SupportTicket,
                              RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
                              InternshipApplication, InternshipTask, InternshipMistake,
-                             Administrator, PostTemplate)
+                             Administrator, PostTemplate, TransferComplaint)
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -27,23 +28,23 @@ async def init_db():
     engine = create_async_engine(DATABASE_URL)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    # Следующие две строки больше не нужны, так как Alembic теперь
-    # полностью управляет созданием и обновлением таблиц. Эта команда
-    # конфликтовала с Alembic, вызывая ошибку "type already exists".
-    # async with engine.begin() as conn:
-    #     await conn.run_sync(Base.metadata.create_all)
 
 # --- Операции с историей ---
-async def log_operation(session, user_id: int, op_type: str, amount: float, description: str):
-    """Записывает операцию в историю. Использует переданную сессию."""
+async def log_operation(session, user_id: int, op_type: str, amount: float, description: str, **kwargs):
+    """Записывает операцию в историю. Использует переданную сессию и доп. поля."""
     new_op = OperationHistory(
         user_id=user_id,
         operation_type=op_type,
         amount=amount,
-        description=description
+        description=description,
+        comment=kwargs.get('comment'),
+        media_json=kwargs.get('media_json'),
+        is_anonymous=kwargs.get('is_anonymous', False),
+        sender_id=kwargs.get('sender_id')
     )
     session.add(new_op)
+    await session.flush()
+    return new_op.id
 
 async def get_operation_history(user_id: int, limit: int = 6) -> List[OperationHistory]:
     """Получает последние N операций пользователя за 24 часа."""
@@ -160,9 +161,9 @@ async def find_user_by_identifier(identifier: str) -> Union[int, None]:
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
-# --- ИСПРАВЛЕНА ЛОГИКА КОМИССИИ ---
-async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bool:
-    """Переводит звезды с учетом комиссии."""
+# --- ИСПРАВЛЕНА ЛОГИКА КОМИССИИ И ДОБАВЛЕНЫ НОВЫЕ ПОЛЯ ---
+async def transfer_stars(sender_id: int, recipient_id: int, amount: float, comment: Optional[str], is_anonymous: bool, media_list: List[Dict]) -> Tuple[bool, int]:
+    """Переводит звезды с учетом комиссии и доп. данных, возвращает (успех, ID операции)."""
     async with async_session() as session:
         async with session.begin():
             sender = await session.get(User, sender_id)
@@ -172,20 +173,28 @@ async def transfer_stars(sender_id: int, recipient_id: int, amount: float) -> bo
             total_to_deduct = amount + commission
 
             if not sender or not recipient or sender.balance < total_to_deduct:
-                return False
+                return False, 0
 
             sender.balance -= total_to_deduct
             recipient.balance += amount
             
-            # ИЗМЕНЕНИЕ: Логируем одной операцией для отправителя
-            sender_description = f"Получатель: {recipient.username or recipient_id}. Комиссия: {commission:.2f} ⭐"
-            await log_operation(session, sender_id, "TRANSFER_SENT", -total_to_deduct, sender_description)
+            # Логирование для отправителя
+            recipient_info = f"@{recipient.username}" if recipient.username else f"ID {recipient.id}"
+            sender_description = f"Получатель: {recipient_info}. Комиссия: {commission:.2f} ⭐"
+            await log_operation(
+                session, sender_id, "TRANSFER_SENT", -total_to_deduct, sender_description,
+                comment=comment, media_json=json.dumps(media_list), is_anonymous=is_anonymous
+            )
+            
+            # Логирование для получателя
+            sender_info = "Анонимный отправитель" if is_anonymous else (f"@{sender.username}" if sender.username else f"ID {sender.id}")
+            recipient_description = f"Отправитель: {sender_info}"
+            transfer_id = await log_operation(
+                session, recipient_id, "TRANSFER_RECEIVED", amount, recipient_description,
+                comment=comment, media_json=json.dumps(media_list), is_anonymous=is_anonymous, sender_id=sender_id
+            )
 
-            # Логируем получение средств получателем
-            recipient_description = f"Отправитель: {sender.username or sender_id}"
-            await log_operation(session, recipient_id, "TRANSFER_RECEIVED", amount, recipient_description)
-
-        return True
+        return True, transfer_id
 
 async def get_referrals(user_id: int) -> list:
     async with async_session() as session:
@@ -1255,3 +1264,85 @@ async def get_all_administrators_by_role() -> List[Administrator]:
         query = select(Administrator)
         result = await session.execute(query)
         return result.scalars().all()
+
+# --- Новые функции для системы постов ---
+async def get_user_ids_for_broadcast(audience: List[str]) -> Set[int]:
+    """Получает уникальные ID пользователей для рассылки на основе аудитории."""
+    user_ids = set()
+    async with async_session() as session:
+        if "all_users" in audience:
+            result = await session.execute(select(User.id))
+            user_ids.update(result.scalars().all())
+        
+        admin_roles_to_fetch = []
+        if "admins" in audience:
+            admin_roles_to_fetch.append('admin')
+        if "super_admins" in audience:
+            admin_roles_to_fetch.append('super_admin')
+        
+        if admin_roles_to_fetch:
+            result = await session.execute(select(Administrator.user_id).where(Administrator.role.in_(admin_roles_to_fetch)))
+            user_ids.update(result.scalars().all())
+
+        if "testers" in audience:
+            result = await session.execute(select(Administrator.user_id).where(Administrator.is_tester == True))
+            user_ids.update(result.scalars().all())
+            
+    return user_ids
+
+async def save_post_template(template_name: str, text: str, media_json: str, created_by: int) -> Tuple[bool, str]:
+    """Сохраняет шаблон поста в базу данных."""
+    async with async_session() as session:
+        async with session.begin():
+            existing = await session.execute(select(PostTemplate).where(PostTemplate.template_name == template_name))
+            if existing.scalar_one_or_none():
+                return False, f"❌ Шаблон с именем '{template_name}' уже существует."
+            
+            new_template = PostTemplate(
+                template_name=template_name,
+                text=text,
+                media_json=media_json,
+                created_by=created_by
+            )
+            session.add(new_template)
+            return True, f"✅ Шаблон '{template_name}' успешно сохранен."
+
+async def get_all_post_templates() -> List[PostTemplate]:
+    """Получает все сохраненные шаблоны постов."""
+    async with async_session() as session:
+        result = await session.execute(select(PostTemplate).order_by(PostTemplate.template_name))
+        return result.scalars().all()
+
+async def delete_post_template(template_id: int) -> bool:
+    """Удаляет шаблон поста по ID."""
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(delete(PostTemplate).where(PostTemplate.id == template_id))
+            return result.rowcount > 0
+
+# --- Новые функции для жалоб ---
+async def create_transfer_complaint(transfer_id: int, complainant_id: int, reason: str) -> bool:
+    """Создает жалобу на перевод."""
+    async with async_session() as session:
+        async with session.begin():
+            new_complaint = TransferComplaint(
+                transfer_id=transfer_id,
+                complainant_id=complainant_id,
+                reason=reason
+            )
+            session.add(new_complaint)
+        return True
+
+async def get_transfer_complaints(page: int = 1, limit: int = 5) -> Tuple[List[TransferComplaint], int]:
+    """Получает список жалоб на переводы с пагинацией."""
+    async with async_session() as session:
+        query = select(TransferComplaint).where(TransferComplaint.status == 'pending').options(selectinload(TransferComplaint.transfer)).order_by(desc(TransferComplaint.created_at))
+        count_query = select(func.count(TransferComplaint.id)).where(TransferComplaint.status == 'pending')
+
+        total_count = await session.scalar(count_query)
+
+        paginated_query = query.offset((page - 1) * limit).limit(limit)
+        result = await session.execute(paginated_query)
+        complaints = result.scalars().all()
+
+        return complaints, total_count

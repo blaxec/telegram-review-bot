@@ -135,29 +135,30 @@ async def get_all_roles_readable(bot: Bot) -> str:
         
     return full_text
 
+# ИСПРАВЛЕНА ОШИБКА: Теперь функция корректно await-ит и возвращает список ID.
 async def get_admins_for_task(task_type: str) -> List[int]:
     """
     Возвращает список ID администраторов, ответственных за данный тип задачи.
     """
     task_map = {
         # Google
-        "google_profile": await get_google_profile_admin,
-        "google_last_reviews": await get_google_reviews_admin,
-        "google_issue_text": await get_google_issue_admin,
-        "google_final_verdict": await get_google_final_admin,
+        "google_profile": get_google_profile_admin,
+        "google_last_reviews": get_google_reviews_admin,
+        "google_issue_text": get_google_issue_admin,
+        "google_final_verdict": get_google_final_admin,
         # Yandex with text
-        "yandex_with_text_profile_screenshot": await get_yandex_text_profile_admin,
-        "yandex_with_text_issue_text": await get_yandex_text_issue_admin,
-        "yandex_with_text_final_verdict": await get_yandex_text_final_admin,
+        "yandex_with_text_profile_screenshot": get_yandex_text_profile_admin,
+        "yandex_with_text_issue_text": get_yandex_text_issue_admin,
+        "yandex_with_text_final_verdict": get_yandex_text_final_admin,
         # Yandex without text
-        "yandex_without_text_profile_screenshot": await get_yandex_no_text_profile_admin,
-        "yandex_without_text_final_verdict": await get_yandex_no_text_final_admin,
+        "yandex_without_text_profile_screenshot": get_yandex_no_text_profile_admin,
+        "yandex_without_text_final_verdict": get_yandex_no_text_final_admin,
         # Gmail
-        "gmail_device_model": await get_gmail_device_admin,
-        "gmail_issue_data": await get_gmail_data_admin,
-        "gmail_final_check": await get_gmail_final_admin,
+        "gmail_device_model": get_gmail_device_admin,
+        "gmail_issue_data": get_gmail_data_admin,
+        "gmail_final_check": get_gmail_final_admin,
         # Other
-        "other_hold_check": await get_other_hold_admin,
+        "other_hold_check": get_other_hold_admin,
     }
 
     get_admin_func = task_map.get(task_type)

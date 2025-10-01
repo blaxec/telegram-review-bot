@@ -517,6 +517,27 @@ async def format_promo_code_page(promos: list, current_page: int, total_pages: i
     text += f"Страница {current_page}/{total_pages}"
     return text
 
+async def format_complaints_page(complaints: list, page: int, total_pages: int) -> str:
+    if not complaints:
+        return "<b>🚨 Жалобы на переводы:</b>\n\nНовых жалоб нет."
+    
+    text = "<b>🚨 Жалобы на переводы:</b>\n\n"
+    for complaint in complaints:
+        transfer = complaint.transfer
+        sender_info = "Аноним" if transfer.is_anonymous else (f"@{transfer.sender.username}" if (transfer.sender and transfer.sender.username) else f"ID {transfer.sender_id}")
+        complainant_info = f"@{complaint.complainant.username}" if complaint.complainant and complaint.complainant.username else f"ID {complaint.complainant_id}"
+        
+        text += (
+            f"<b>Жалоба #{complaint.id}</b> на перевод #{transfer.id}\n"
+            f" • <b>Отправитель:</b> {sender_info}\n"
+            f" • <b>Получатель (подал жалобу):</b> {complainant_info}\n"
+            f" • <b>Сумма:</b> {transfer.amount:.2f} ⭐\n"
+            f" • <b>Причина:</b> <i>{complaint.reason}</i>\n\n"
+        )
+    text += f"Страница {page}/{total_pages}"
+    return text
+
+
 # --- ЛОГИКА ДЛЯ СИСТЕМЫ АМНИСТИИ ---
 
 async def get_unban_requests_page(requests: list, current_page: int, total_pages: int) -> str:
