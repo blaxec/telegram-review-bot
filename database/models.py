@@ -52,7 +52,7 @@ class User(Base):
     reviews = relationship("Review", back_populates="user")
     promo_activations = relationship("PromoActivation", back_populates="user")
     support_tickets = relationship("SupportTicket", back_populates="user")
-    operations = relationship("OperationHistory", back_populates="user")
+    operations = relationship("OperationHistory", back_populates="user", foreign_keys='OperationHistory.user_id')
     unban_requests = relationship("UnbanRequest", back_populates="user")
     
     internship_application = relationship("InternshipApplication", back_populates="user", uselist=False, cascade="all, delete-orphan")
@@ -184,9 +184,10 @@ class OperationHistory(Base):
     comment = Column(Text, nullable=True)
     media_json = Column(Text, nullable=True)
     is_anonymous = Column(Boolean, default=False)
-    sender_id = Column(BigInteger, nullable=True)
+    # --- ИЗМЕНЕНИЕ: Добавлен ForeignKey для связи с таблицей users ---
+    sender_id = Column(BigInteger, ForeignKey('users.id'), nullable=True)
 
-    user = relationship("User", back_populates="operations")
+    user = relationship("User", back_populates="operations", foreign_keys=[user_id])
     sender = relationship("User", foreign_keys=[sender_id])
     complaints = relationship("TransferComplaint", back_populates="transfer")
 
