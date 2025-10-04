@@ -187,6 +187,7 @@ class OperationHistory(Base):
     sender_id = Column(BigInteger, nullable=True)
 
     user = relationship("User", back_populates="operations")
+    sender = relationship("User", foreign_keys=[sender_id])
     complaints = relationship("TransferComplaint", back_populates="transfer")
 
 class UnbanRequest(Base):
@@ -280,3 +281,4 @@ class TransferComplaint(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     transfer = relationship("OperationHistory", back_populates="complaints")
+    complainant = relationship("User", foreign_keys=[complainant_id])

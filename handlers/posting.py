@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from math import ceil
-from typing import Set, List, Dict, Any
+from typing import Set, List, Dict, Any, Union
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import StateFilter, Command
@@ -90,12 +90,13 @@ async def start_post_constructor(message: Message, state: FSMContext):
 
     await state.clear()
     await state.set_state(AdminState.POST_CONSTRUCTOR)
-    await state.update_data({ "post_text": "", "post_media": [], "post_audience": [] })
+    initial_data = { "post_text": "", "post_media": [], "post_audience": [] }
+    await state.set_data(initial_data)
     
     preview_text = await get_preview_text(state)
     preview_msg = await message.answer(
         preview_text,
-        reply_markup=inline.get_post_constructor_keyboard(await state.get_data()),
+        reply_markup=inline.get_post_constructor_keyboard(initial_data),
         disable_web_page_preview=True
     )
     await state.update_data(preview_message_id=preview_msg.message_id)
@@ -120,7 +121,7 @@ async def constructor_actions(callback: CallbackQuery, state: FSMContext, bot: B
     elif action == "edit_media":
         await state.update_data(awaiting_input='media')
         media_count = len(data.get("post_media", []))
-        prompt_msg = await callback.message.answer(f"Отправьте фото, видео или GIF. Лимит: 3 медиа (GIF = 3). Добавлено: {media_count}.\nКогда закончите, нажмите 'Готово'.", reply_markup=inline.get_post_media_keyboard())
+        prompt_msg = await callback.message.answer(f"Отправьте фото, видео или GIF. Лимит: 3 медиа (GIF = 3). Добавлено: {media_count}.\nКогда закончите, нажмите 'Готово'.", reply_markup=inline.get_post_media_keyboard(has_media=bool(data.get('post_media'))))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         await callback.answer()
     elif action == "view_media":
@@ -228,7 +229,7 @@ async def process_media_input(message: Message, state: FSMContext, bot: Bot):
                 await bot.edit_message_text(
                     chat_id=message.chat.id, message_id=prompt_id,
                     text=f"Отправьте фото, видео или GIF. Лимит: 3 медиа (GIF = 3). Добавлено: {len(media_list)}.\nКогда закончите, нажмите 'Готово'.",
-                    reply_markup=inline.get_post_media_keyboard()
+                    reply_markup=inline.get_post_media_keyboard(has_media=True)
                 )
             except TelegramBadRequest: pass
 
@@ -253,8 +254,6 @@ async def load_template(callback: CallbackQuery, state: FSMContext, bot: Bot):
     )
     await update_preview_message(bot, callback.from_user.id, state)
     await callback.answer("Шаблон загружен.")
-
-# ... (остальные обработчики: удаление, отправка, и т.д. остаются похожими, но используют новые функции)
 
 @router.callback_query(F.data == "post_constructor:confirm_send", AdminState.POST_CONSTRUCTOR)
 async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bot):

@@ -1,7 +1,8 @@
 # file: logic/admin_roles.py
 
 import logging
-from typing import List
+from typing import List, Tuple
+
 from aiogram import Bot
 from database import db_manager
 from config import ADMIN_ID_1, ADMIN_ID_2
@@ -38,6 +39,20 @@ ROLE_DESCRIPTIONS = {
     GMAIL_FINAL_CHECK_ADMIN: "Финальная проверка Gmail",
     OTHER_HOLD_REVIEW_ADMIN: "Проверка отзывов после холда"
 }
+
+def get_category_from_role_key(role_key: str) -> Tuple[str, str | None]:
+    """Определяет категорию и подкатегорию по ключу роли."""
+    if "yandex" in role_key:
+        subcategory = "no_text" if "no_text" in role_key else "text"
+        return "yandex", subcategory
+    elif "google" in role_key:
+        return "google", None
+    elif "gmail" in role_key:
+        return "gmail", None
+    elif "other" in role_key:
+        return "other", None
+    return "unknown", None
+
 
 # --- Функции-геттеры для получения ответственного администратора ---
 
@@ -135,7 +150,6 @@ async def get_all_roles_readable(bot: Bot) -> str:
         
     return full_text
 
-# ИСПРАВЛЕНА ОШИБКА: Теперь функция корректно await-ит и возвращает список ID.
 async def get_admins_for_task(task_type: str) -> List[int]:
     """
     Возвращает список ID администраторов, ответственных за данный тип задачи.

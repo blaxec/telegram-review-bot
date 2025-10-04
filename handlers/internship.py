@@ -49,7 +49,7 @@ async def internship_entry_point(message: Message, state: FSMContext):
         pass
 
     current_state = await state.get_state()
-    internship_states = [s.state for s in UserState if s.state.startswith("UserState:INTERNSHIP_")]
+    internship_states = [s.state for s in UserState if s.state and s.state.startswith("UserState:INTERNSHIP_")]
     if current_state not in internship_states:
         await state.clear()
         
@@ -161,6 +161,7 @@ async def show_mistakes_history(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("internship_app:start"))
 async def start_application(callback: CallbackQuery, state: FSMContext):
     """Начало FSM или редактирование конкретного поля."""
+    await callback.answer()
     field_to_edit = callback.data.split(":")[-1] if callback.data != "internship_app:start" else "age"
     
     if field_to_edit == "age":

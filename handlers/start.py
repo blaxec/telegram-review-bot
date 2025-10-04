@@ -19,7 +19,8 @@ from utils.tester_filter import IsTester
 from logic.user_notifications import (
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
-    send_confirmation_button
+    send_confirmation_button,
+    handle_task_timeout
 )
 
 
@@ -36,6 +37,8 @@ ACTIVE_TASK_STATES = [
     UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT,
     UserState.YANDEX_REVIEW_TASK_ACTIVE,
     UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT,
+    UserState.AWAITING_CONFIRMATION_SCREENSHOT,
+    UserState.GMAIL_AWAITING_VERIFICATION,
 ]
 
 async def schedule_message_deletion(message: Message, delay: int):
@@ -55,14 +58,17 @@ async def get_current_state(message: Message, state: FSMContext):
     [ТЕСТОВАЯ КОМАНДА] Отправляет в чат текущее состояние FSM и статус тестера.
     """
     user_id = message.from_user.id
-    is_tester = user_id in TESTER_IDS
+    is_tester = False
+    admin_rec = await db_manager.get_administrator(user_id)
+    if admin_rec:
+        is_tester = admin_rec.is_tester
+
     current_state = await state.get_state()
     
     diagnostics_text = (
         "<b>--- Диагностика Бота ---</b>\n\n"
         f"<b>Ваш ID:</b> <code>{user_id}</code>\n"
         f"<b>Считаетесь ли вы тестером:</b> {'✅ Да' if is_tester else '❌ Нет'}\n"
-        f"<b>Текущий список TESTER_IDS в боте:</b> <code>{TESTER_IDS}</code>\n"
         f"<b>Текущее состояние FSM:</b> <code>{current_state}</code>"
     )
     await message.answer(diagnostics_text)
@@ -134,6 +140,34 @@ async def skip_timer_command_failed(message: Message):
     )
     asyncio.create_task(schedule_message_deletion(response_msg, 5))
 
+@router.message(Command("expire"), IsTester(), StateFilter(*ACTIVE_TASK_STATES))
+async def expire_task_command(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    """
+    [ТЕСТОВАЯ КОМАНДА] Мгновенно "проваливает" текущее задание по таймауту.
+    """
+    user_id = message.from_user.id
+    current_state = await state.get_state()
+    user_data = await state.get_data()
+    
+    timeout_job_id = user_data.get("timeout_job_id") or user_data.get("confirmation_timeout_job_id") or user_data.get("gmail_timeout_job_id")
+    if timeout_job_id:
+        try: scheduler.remove_job(timeout_job_id)
+        except Exception: pass
+    
+    platform = user_data.get("platform_for_task", "unknown_platform")
+    
+    await message.answer("⚙️ Имитирую истечение таймера...")
+    
+    await handle_task_timeout(
+        bot=bot,
+        storage=state.storage,
+        user_id=user_id,
+        platform=platform,
+        message_to_admins=f"тестовый провал задачи (state: {current_state})",
+        scheduler=scheduler
+    )
+    await message.delete()
+    logger.info(f"Tester {user_id} manually expired task for state {current_state}.")
 
 @router.message(CommandStart(), StateFilter(*ACTIVE_TASK_STATES))
 async def start_while_busy_handler(message: Message):

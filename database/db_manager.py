@@ -58,6 +58,9 @@ async def get_operation_history(user_id: int, limit: int = 6) -> List[OperationH
                     OperationHistory.created_at >= time_threshold
                 )
             )
+            .options(
+                selectinload(OperationHistory.sender), # Загружаем отправителя
+            )
             .order_by(desc(OperationHistory.created_at))
             .limit(limit)
         )
@@ -87,7 +90,7 @@ async def ensure_user_exists(user_id: int, username: str, referrer_id: int = Non
 
 async def get_user(user_id: int) -> Union[User, None]:
     async with async_session() as session:
-        return await session.get(User, user_id, options=[selectinload(User.reviews), selectinload(User.internship_tasks)])
+        return await session.get(User, user_id, options=[selectinload(User.reviews), selectinload(User.internship_tasks), selectinload(User.internship_application)])
 
 
 async def get_user_balance(user_id: int) -> tuple[float, float]:
@@ -157,11 +160,10 @@ async def find_user_by_identifier(identifier: str) -> Union[int, None]:
             query = select(User.id).where(User.id == user_id)
         except (ValueError, TypeError):
             username = identifier.lstrip('@')
-            query = select(User.id).where(User.username == username)
+            query = select(User.id).where(func.lower(User.username) == func.lower(username))
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
-# --- ИСПРАВЛЕНА ЛОГИКА КОМИССИИ И ДОБАВЛЕНЫ НОВЫЕ ПОЛЯ ---
 async def transfer_stars(sender_id: int, recipient_id: int, amount: float, comment: Optional[str], is_anonymous: bool, media_list: List[Dict]) -> Tuple[bool, int]:
     """Переводит звезды с учетом комиссии и доп. данных, возвращает (успех, ID операции)."""
     async with async_session() as session:
@@ -401,8 +403,8 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
             base_query = base_query.where(Link.requires_photo == True)
             count_query = count_query.where(Link.requires_photo == True)
         elif filter_type == 'regular':
-            base_query = base_query.where(Link.is_fast_track == False, Link.requires_photo == False)
-            count_query = count_query.where(Link.is_fast_track == False, Link.requires_photo == False)
+            base_query = base_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
+            count_query = count_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
 
         total_count = await session.scalar(count_query)
 
@@ -1205,13 +1207,20 @@ async def process_intern_decision(review_id: int, is_approved: bool, reason: Opt
         async with session.begin():
             # Находим, какой стажер работал над этим отзывом
             review = await session.get(Review, review_id, options=[selectinload(Review.user)])
-            if not review or not review.user.is_busy_intern:
+            if not review or not review.user or not review.user.is_busy_intern:
                 return # Это не была задача стажера
 
             intern = review.user
             intern.is_busy_intern = False
 
-            task = await get_active_intern_task(intern.id)
+            # Используем существующую сессию для получения задачи
+            task_result = await session.execute(
+                select(InternshipTask).where(
+                    InternshipTask.intern_id == intern.id,
+                    InternshipTask.status == 'active'
+                )
+            )
+            task = task_result.scalar_one_or_none()
             if not task: return
 
             mentor_decision_is_correct = is_approved
@@ -1261,9 +1270,34 @@ async def add_administrator(user_id: int, role: str, is_tester: bool, added_by: 
 async def get_all_administrators_by_role() -> List[Administrator]:
     """Получает список всех администраторов из базы данных."""
     async with async_session() as session:
-        query = select(Administrator)
+        query = select(Administrator).order_by(case((Administrator.role == 'super_admin', 0), else_=1), Administrator.user_id)
         result = await session.execute(query)
         return result.scalars().all()
+
+async def delete_administrator(user_id: int) -> bool:
+    """Удаляет администратора по ID."""
+    async with async_session() as session:
+        async with session.begin():
+            admin = await session.get(Administrator, user_id)
+            if not admin or not admin.is_removable:
+                return False
+            await session.delete(admin)
+            return True
+
+async def update_administrator(user_id: int, **kwargs) -> Optional[Administrator]:
+    """Обновляет данные администратора."""
+    async with async_session() as session:
+        async with session.begin():
+            admin = await session.get(Administrator, user_id)
+            if not admin:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(admin, key):
+                    setattr(admin, key, value)
+            await session.flush()
+            await session.refresh(admin)
+            return admin
+
 
 # --- Новые функции для системы постов ---
 async def get_user_ids_for_broadcast(audience: List[str]) -> Set[int]:
@@ -1307,6 +1341,11 @@ async def save_post_template(template_name: str, text: str, media_json: str, cre
             session.add(new_template)
             return True, f"✅ Шаблон '{template_name}' успешно сохранен."
 
+async def get_post_template_by_id(template_id: int) -> Optional[PostTemplate]:
+    """Получает шаблон поста по ID."""
+    async with async_session() as session:
+        return await session.get(PostTemplate, template_id)
+
 async def get_all_post_templates() -> List[PostTemplate]:
     """Получает все сохраненные шаблоны постов."""
     async with async_session() as session:
@@ -1325,6 +1364,11 @@ async def create_transfer_complaint(transfer_id: int, complainant_id: int, reaso
     """Создает жалобу на перевод."""
     async with async_session() as session:
         async with session.begin():
+            # Проверяем, существует ли уже жалоба на этот перевод
+            existing = await session.execute(select(TransferComplaint).where(TransferComplaint.transfer_id == transfer_id))
+            if existing.scalar_one_or_none():
+                return False # Жалоба уже существует
+
             new_complaint = TransferComplaint(
                 transfer_id=transfer_id,
                 complainant_id=complainant_id,
@@ -1336,7 +1380,15 @@ async def create_transfer_complaint(transfer_id: int, complainant_id: int, reaso
 async def get_transfer_complaints(page: int = 1, limit: int = 5) -> Tuple[List[TransferComplaint], int]:
     """Получает список жалоб на переводы с пагинацией."""
     async with async_session() as session:
-        query = select(TransferComplaint).where(TransferComplaint.status == 'pending').options(selectinload(TransferComplaint.transfer)).order_by(desc(TransferComplaint.created_at))
+        query = (
+            select(TransferComplaint)
+            .where(TransferComplaint.status == 'pending')
+            .options(
+                selectinload(TransferComplaint.transfer).selectinload(OperationHistory.sender),
+                selectinload(TransferComplaint.complainant)
+            )
+            .order_by(desc(TransferComplaint.created_at))
+        )
         count_query = select(func.count(TransferComplaint.id)).where(TransferComplaint.status == 'pending')
 
         total_count = await session.scalar(count_query)

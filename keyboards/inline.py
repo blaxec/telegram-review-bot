@@ -7,7 +7,7 @@ from config import Rewards, GOOGLE_API_KEYS
 from aiogram import Bot
 from logic import admin_roles
 from database.models import UnbanRequest, InternshipApplication, User, PostTemplate, Administrator
-from typing import Set, List, Optional
+from typing import Set, List, Optional, Tuple
 
 # --- /start и навигация ---
 
@@ -46,13 +46,35 @@ def get_cancel_to_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_transfer_options_keyboard(data: dict) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    comment_text = "✍️ Изменить комментарий" if data.get('transfer_comment') else "✍️ Добавить комментарий"
+    media_text = f"🖼️ Управлять медиа ({len(data.get('transfer_media', []))}/3)"
+    anon_text = "✅ Анонимно" if data.get('is_anonymous') else "🙈 Анонимно"
+    
+    builder.button(text=comment_text, callback_data="transfer_option:comment")
+    builder.button(text=media_text, callback_data="transfer_option:media")
+    builder.button(text=anon_text, callback_data="transfer_option:anonymous")
+    builder.button(text="➡️ Продолжить", callback_data="transfer_option:confirm")
+    builder.button(text="❌ Отмена", callback_data="go_profile")
+    builder.adjust(2,1,1,1)
+    return builder.as_markup()
+
 def get_transfer_confirmation_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для подтверждения перевода звезд."""
     buttons = [
         [InlineKeyboardButton(text='✅ Подтвердить', callback_data='transfer_confirm')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_transfer_recipient_keyboard(transfer_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для получателя перевода с кнопкой 'Пожаловаться'."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚨 Пожаловаться", callback_data=f"transfer_complain:{transfer_id}")
+    builder.button(text="🗑️ Закрыть", callback_data="close_post")
+    builder.adjust(1)
+    return builder.as_markup()
 
 # --- Раздел "Статистика" ---
 
@@ -87,7 +109,7 @@ def get_withdraw_amount_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='100 ⭐', callback_data='withdraw_amount_100'),
         ],
         [InlineKeyboardButton(text='🔢 Другая сумма', callback_data='withdraw_amount_other')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -95,7 +117,7 @@ def get_withdraw_recipient_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text='👤 Себе', callback_data='withdraw_recipient_self')],
         [InlineKeyboardButton(text='👥 Указать пользователя', callback_data='withdraw_recipient_other')],
-        [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_to_profile')]
+        [InlineKeyboardButton(text='❌ Отмена', callback_data='go_profile')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -281,10 +303,11 @@ def get_intern_verification_keyboard(user_id: int, context: str) -> InlineKeyboa
     builder.adjust(2, 1)
     return builder.as_markup()
 
-def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int) -> InlineKeyboardMarkup:
+def get_admin_provide_text_keyboard(platform: str, user_id: int, link_id: int, requires_photo: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text='✍️ Написать текст вручную', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}')
-    builder.button(text='🤖 Сгенерировать с ИИ', callback_data=f'admin_ai_generate_start:{platform}:{user_id}:{link_id}')
+    photo_required_str = 'true' if requires_photo else 'false'
+    builder.button(text='✍️ Написать текст вручную', callback_data=f'admin_provide_text:{platform}:{user_id}:{link_id}:{photo_required_str}')
+    builder.button(text='🤖 Сгенерировать с ИИ', callback_data=f'admin_ai_generate_start:{platform}:{user_id}:{link_id}:{photo_required_str}')
     builder.adjust(1)
     return builder.as_markup()
 
@@ -317,7 +340,7 @@ def get_admin_refs_keyboard() -> InlineKeyboardMarkup:
 def get_admin_platform_refs_keyboard(platform: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📊 Статистика", callback_data=f"admin_refs:stats:{platform}")
-    builder.button(text="📄 Показать список", callback_data=f"admin_refs:list:{platform}")
+    builder.button(text="📄 Показать список", callback_data=f"admin_refs:list:{platform}:all")
     builder.button(text="➕ Добавить обычные", callback_data=f"admin_refs:add:regular:no_photo:{platform}")
     builder.button(text="➕ Добавить с фото 📸", callback_data=f"admin_refs:add:regular:photo:{platform}")
     builder.button(text="➕ Добавить быстрые 🚀", callback_data=f"admin_refs:add:fast:no_photo:{platform}")
@@ -437,19 +460,6 @@ def get_pagination_keyboard(
         
     return builder.as_markup()
 
-
-def get_promo_list_keyboard(current_page: int, total_pages: int) -> InlineKeyboardMarkup:
-    """Создает клавиатуру для списка промокодов с пагинацией и кнопкой удаления."""
-    builder = InlineKeyboardBuilder()
-    
-    pagination_markup = get_pagination_keyboard("promolist:page", current_page, total_pages, show_close=False)
-    for row in pagination_markup.inline_keyboard:
-        builder.row(*row)
-
-    builder.row(InlineKeyboardButton(text="🗑️ Удалить промокод", callback_data="promolist:delete_start"))
-    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="go_main_menu"))
-    return builder.as_markup()
-
 # --- Клавиатуры для поддержки и амнистии ---
 def get_support_admin_keyboard(ticket_id: int, user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -470,7 +480,7 @@ def get_amnesty_keyboard(requests: list[UnbanRequest], current_page: int, total_
             InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"amnesty:action:reject:{req.id}")
         )
     
-    pagination_markup = get_pagination_keyboard("amnesty:page", current_page, total_pages, show_close=True)
+    pagination_markup = get_pagination_keyboard("amnesty:page", current_page, total_pages, back_callback="panel:manage_bans")
     for row in pagination_markup.inline_keyboard:
         builder.row(*row)
         
@@ -485,7 +495,7 @@ def get_promo_condition_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🌍 Отзыв Google", callback_data="promo_cond:google_review")
     builder.button(text="🗺️ Отзыв Yandex", callback_data="promo_cond:yandex_review")
     builder.button(text="📧 Создание Gmail", callback_data="promo_cond:gmail_account")
-    builder.button(text="❌ Отмена", callback_data="cancel_action")
+    builder.button(text="❌ Отмена", callback_data="panel:manage_promos")
     builder.adjust(1, 2, 1, 1)
     return builder.as_markup()
 
@@ -536,46 +546,38 @@ async def get_task_switching_keyboard(bot: Bot, category: str, subcategory: str 
     """Создает клавиатуру с кнопками для переключения задач в категории."""
     builder = InlineKeyboardBuilder()
     
-    tasks_to_show = []
-    if category == "yandex" and subcategory == "text":
-        tasks_to_show = [
-            (admin_roles.YANDEX_TEXT_PROFILE_CHECK_ADMIN, await admin_roles.get_yandex_text_profile_admin()),
-            (admin_roles.YANDEX_TEXT_ISSUE_TEXT_ADMIN, await admin_roles.get_yandex_text_issue_admin()),
-            (admin_roles.YANDEX_TEXT_FINAL_CHECK_ADMIN, await admin_roles.get_yandex_text_final_admin()),
-        ]
-    elif category == "yandex" and subcategory == "no_text":
-        tasks_to_show = [
-            (admin_roles.YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, await admin_roles.get_yandex_no_text_profile_admin()),
-            (admin_roles.YANDEX_NO_TEXT_FINAL_CHECK_ADMIN, await admin_roles.get_yandex_no_text_final_admin()),
-        ]
-    elif category == "google":
-         tasks_to_show = [
-            (admin_roles.GOOGLE_PROFILE_CHECK_ADMIN, await admin_roles.get_google_profile_admin()),
-            (admin_roles.GOOGLE_LAST_REVIEWS_CHECK_ADMIN, await admin_roles.get_google_reviews_admin()),
-            (admin_roles.GOOGLE_ISSUE_TEXT_ADMIN, await admin_roles.get_google_issue_admin()),
-            (admin_roles.GOOGLE_FINAL_CHECK_ADMIN, await admin_roles.get_google_final_admin()),
-        ]
-    elif category == "gmail":
-        tasks_to_show = [
-            (admin_roles.GMAIL_DEVICE_MODEL_CHECK_ADMIN, await admin_roles.get_gmail_device_admin()),
-            (admin_roles.GMAIL_ISSUE_DATA_ADMIN, await admin_roles.get_gmail_data_admin()),
-            (admin_roles.GMAIL_FINAL_CHECK_ADMIN, await admin_roles.get_gmail_final_admin()),
-        ]
-    elif category == "other":
-        tasks_to_show = [
-            (admin_roles.OTHER_HOLD_REVIEW_ADMIN, await admin_roles.get_other_hold_admin())
-        ]
+    tasks_to_show = admin_roles.get_tasks_for_category(category, subcategory)
     
-    for key, admin_id in tasks_to_show:
+    for key in tasks_to_show:
+        admin_id = await admin_roles.get_responsible_admin(key)
         description = admin_roles.ROLE_DESCRIPTIONS.get(key, "Неизвестная задача")
         admin_name = await admin_roles.get_admin_username(bot, admin_id)
         builder.button(text=f"{description}: {admin_name}", callback_data=f"roles_switch:{key}")
     
-    back_target = "main"
-    if category == "yandex":
-        back_target = "yandex" if subcategory else "main"
+    back_target = "yandex" if category == "yandex" else "main"
 
     builder.button(text="◀ Назад", callback_data=f"roles_back:{back_target}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+async def get_admin_selection_keyboard(admins: List[Administrator], role_key: str, current_admin_id: int, bot: Bot) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для выбора нового админа на роль."""
+    builder = InlineKeyboardBuilder()
+    
+    for admin in admins:
+        prefix = "✅ " if admin.user_id == current_admin_id else ""
+        username = await admin_roles.get_admin_username(bot, admin.user_id)
+        builder.button(text=f"{prefix}{username}", callback_data=f"roles_set_admin:{role_key}:{admin.user_id}")
+    
+    category, subcategory = admin_roles.get_category_from_role_key(role_key)
+    
+    back_callback = ""
+    if category == "yandex":
+        back_callback = f"roles_subcat:yandex_{subcategory}"
+    else:
+        back_callback = f"roles_cat:{category}"
+
+    builder.button(text="⬅️ Назад", callback_data=back_callback)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -585,126 +587,49 @@ def get_current_settings_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🗑 Удалить сообщение", callback_data="roles_delete_msg")
     return builder.as_markup()
 
-# --- НОВЫЙ РАЗДЕЛ: Клавиатуры для системы стажировок ---
-
-def get_internship_application_start_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для начала подачи анкеты."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📝 Заполнить анкету", callback_data="internship_app:start")
-    builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_internship_platform_selection_keyboard(selected: set = None) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора платформ в анкете."""
-    if selected is None:
-        selected = set()
-        
-    builder = InlineKeyboardBuilder()
-    
-    platforms = {
-        "google": "Google Карты",
-        "yandex_text": "Яндекс (с текстом)",
-        "yandex_no_text": "Яндекс (без текста)",
-    }
-    
-    for key, name in platforms.items():
-        prefix = "✅ " if name in selected else ""
-        builder.button(text=f"{prefix}{name}", callback_data=f"internship_toggle:{key}:{name}")
-        
-    builder.button(text="✅ Далее", callback_data="internship_app:platforms_done")
-    builder.button(text="❌ Отмена", callback_data="cancel_action")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_internship_confirmation_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Все верно, отправить", callback_data="internship_app:confirm")
-    builder.button(text="Возраст", callback_data="internship_app:start:age")
-    builder.button(text="Часы", callback_data="internship_app:start:hours")
-    builder.button(text="Скорость ответа", callback_data="internship_app:start:response_time")
-    builder.button(text="Платформы", callback_data="internship_app:start:platforms")
-    builder.button(text="❌ Начать заново", callback_data="go_main_menu")
-    builder.adjust(1, 4, 1)
-    return builder.as_markup()
-
-def get_intern_cabinet_keyboard(is_busy: bool) -> InlineKeyboardMarkup:
-    """Клавиатура рабочего кабинета стажера."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📜 История ошибок", callback_data="intern_cabinet:mistakes")
-    if not is_busy:
-        builder.button(text="❌ Уволиться", callback_data="intern_cabinet:resign")
-    builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_intern_resign_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения увольнения."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Да, я уверен", callback_data="intern_cabinet:resign_confirm")
-    builder.button(text="⬅️ Нет, вернуться", callback_data="internship_main")
-    builder.adjust(1)
-    return builder.as_markup()
-
-async def get_admin_internships_main_menu(stats: dict) -> InlineKeyboardMarkup:
-    """Главное меню управления стажировками для админа."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text=f"📝 Анкеты ({stats.get('applications', 0)})", callback_data="admin_internships:view:applications:1")
-    builder.button(text=f"🧑‍🎓 Кандидаты ({stats.get('candidates', 0)})", callback_data="admin_internships:view:candidates:1")
-    builder.button(text=f"👨‍💻 Стажёры ({stats.get('interns', 0)})", callback_data="admin_internships:view:interns:1")
-    builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_admin_application_review_keyboard(app: InternshipApplication) -> InlineKeyboardMarkup:
-    """Клавиатура для просмотра и решения по анкете."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Одобрить", callback_data=f"admin_internships:action:approve:{app.id}")
-    builder.button(text="❌ Отклонить", callback_data=f"admin_internships:action:reject:{app.id}")
-    builder.button(text="⬅️ Назад к списку", callback_data="admin_internships:view:applications:1")
-    builder.adjust(2, 1)
-    return builder.as_markup()
-
-def get_admin_intern_view_keyboard(intern: User) -> InlineKeyboardMarkup:
-    """Клавиатура для управления активным стажером."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🔥 Уволить", callback_data=f"admin_internships:fire_start:{intern.id}")
-    builder.button(text="📜 История ошибок", callback_data=f"admin_internships:view_mistakes:{intern.id}:1")
-    builder.button(text="⬅️ Назад к списку", callback_data="admin_internships:view:interns:1")
-    builder.adjust(2, 1)
-    return builder.as_markup()
-
-def get_admin_intern_task_setup_keyboard(candidate_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора типа задачи для кандидата."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Проверка профилей (Google/Yandex)", callback_data=f"admin_internships:set_task:{candidate_id}:profile_check")
-    builder.button(text="⬅️ Назад к кандидатам", callback_data="admin_internships:view:candidates:1")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_admin_intern_task_confirm_keyboard(candidate_id: int, platform: str, task_type: str, goal: int, salary: float) -> InlineKeyboardMarkup:
-    """Клавиатура для финального подтверждения назначения задачи."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Назначить задачу", callback_data=f"admin_internships:confirm_task:{candidate_id}:{platform}:{task_type}:{goal}:{salary}")
-    builder.button(text="❌ Отмена", callback_data=f"admin_internships:view:candidates:1")
-    builder.adjust(1)
-    return builder.as_markup()
-
 # --- НОВЫЙ РАЗДЕЛ: Клавиатуры для /panel ---
 
 def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
     """Генерирует клавиатуру для панели управления SuperAdmin."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🚫 Забанить пользователя", callback_data="panel:ban_user")
-    builder.button(text="✅ Разбанить пользователя", callback_data="panel:unban_user")
+    builder.button(text="🚫 Управление блокировками", callback_data="panel:manage_bans")
+    builder.button(text="✨ Управление промокодами", callback_data="panel:manage_promos")
     builder.button(text="💸 Выписать штраф", callback_data="panel:issue_fine")
     builder.button(text="❄️ Сбросить кулдауны", callback_data="panel:reset_cooldown")
     builder.button(text="⏳ Просмотр холда", callback_data="panel:view_hold")
-    builder.button(text="✨ Создать промокод", callback_data="panel:create_promo")
+    builder.button(text="🚨 Просмотр жалоб", callback_data="panel:view_complaints")
     builder.button(text="⬅️ Главное меню", callback_data="go_main_menu")
     builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
+
+def get_ban_management_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚫 Забанить пользователя", callback_data="panel:ban_user")
+    builder.button(text="📜 Список забаненных", callback_data="panel:ban_list")
+    builder.button(text="🙏 Запросы на амнистию", callback_data="panel:manage_amnesty")
+    builder.button(text="⬅️ Назад", callback_data="panel:back_to_panel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_promo_management_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✨ Создать промокод", callback_data="panel:create_promo")
+    builder.button(text="📝 Список промокодов", callback_data="panel:promo_list")
+    builder.button(text="⬅️ Назад", callback_data="panel:back_to_panel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_promo_list_keyboard(current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для списка промокодов с пагинацией и кнопкой удаления."""
+    builder = InlineKeyboardBuilder()
     
+    pagination_markup = get_pagination_keyboard("promolist:page", current_page, total_pages, show_close=False, back_callback="panel:manage_promos")
+    for row in pagination_markup.inline_keyboard:
+        builder.row(*row)
+
+    builder.row(InlineKeyboardButton(text="🗑️ Удалить промокод", callback_data="promolist:delete_start"))
+    return builder.as_markup()
+
 # --- НОВЫЙ РАЗДЕЛ: Клавиатуры для /roles_manage ---
 
 def get_roles_manage_menu() -> InlineKeyboardMarkup:
@@ -715,19 +640,25 @@ def get_roles_manage_menu() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-async def get_roles_list_keyboard(admins: list[Administrator], page: int, total_pages: int, bot: Bot) -> InlineKeyboardMarkup:
+async def get_roles_list_keyboard(admins: list[Administrator], page: int, total_pages: int, bot: Bot) -> Tuple[str, InlineKeyboardMarkup]:
     builder = InlineKeyboardBuilder()
     
-    for admin in admins:
-        role_icon = "👑" if admin.role == 'super_admin' else '🛡️'
-        tester_icon = "🧪" if admin.is_tester else ''
-        try:
-            chat = await bot.get_chat(admin.user_id)
-            username = f"@{chat.username}" if chat.username else f"ID {admin.user_id}"
-        except Exception:
-            username = f"ID {admin.user_id}"
-        
-        builder.button(text=f"{role_icon}{tester_icon} {username}", callback_data=f"roles_manage:view:{admin.user_id}")
+    text = "👥 <b>Список администраторов:</b>\n\n"
+    if not admins:
+        text += "Администраторы не найдены."
+    else:
+        text += "Нажмите на администратора для управления.\n\n"
+        for admin in admins:
+            role_icon = "👑" if admin.role == 'super_admin' else '🛡️'
+            tester_icon = "🧪" if admin.is_tester else ''
+            try:
+                chat = await bot.get_chat(admin.user_id)
+                username = f"@{chat.username}" if chat.username else f"ID {admin.user_id}"
+            except Exception:
+                username = f"ID {admin.user_id}"
+            
+            builder.button(text=f"{role_icon}{tester_icon} {username}", callback_data=f"roles_manage:view:{admin.user_id}")
+
     builder.adjust(1)
 
     pagination_row = []
@@ -741,7 +672,8 @@ async def get_roles_list_keyboard(admins: list[Administrator], page: int, total_
         builder.row(*pagination_row)
         
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="roles_manage:back_to_menu"))
-    return builder.as_markup()
+    return text, builder.as_markup()
+
 
 def get_single_admin_manage_keyboard(admin: Administrator) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -770,16 +702,29 @@ def get_delete_admin_confirm_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 # --- НОВЫЙ РАЗДЕЛ: Клавиатуры для конструктора постов (/posts) ---
 
-def get_post_constructor_keyboard() -> InlineKeyboardMarkup:
+def get_post_constructor_keyboard(data: dict) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✍️ Текст", callback_data="post_constructor:edit_text")
-    builder.button(text="🖼️ Медиа", callback_data="post_constructor:edit_media")
+    text_exists = bool(data.get("post_text"))
+    media_exists = bool(data.get("post_media"))
+
+    if not text_exists:
+        builder.button(text="✍️ Добавить текст", callback_data="post_constructor:edit_text")
+    else:
+        builder.button(text="✍️ Редактировать текст", callback_data="post_constructor:edit_text")
+        builder.button(text="🗑️ Удалить текст", callback_data="post_constructor:delete_text")
+
+    if not media_exists:
+        builder.button(text="🖼️ Добавить медиа", callback_data="post_constructor:edit_media")
+    else:
+        builder.button(text="🖼️ Управлять медиа", callback_data="post_constructor:view_media")
+
     builder.button(text="🎯 Аудитория", callback_data="post_constructor:edit_audience")
     builder.button(text="💾 Сохранить шаблон", callback_data="post_constructor:save_template")
     builder.button(text="📂 Загрузить шаблон", callback_data="post_constructor:load_template")
     builder.button(text="🚀 Отправить", callback_data="post_constructor:send")
+    builder.button(text="❓ Помощь по формату", callback_data="post_constructor:show_format_help")
     builder.button(text="🏠 Главное меню", callback_data="go_main_menu")
-    builder.adjust(2, 2, 2, 1)
+    builder.adjust(2, 1 if media_exists else 2, 2, 2, 1, 1)
     return builder.as_markup()
 
 def get_post_media_keyboard(has_media: bool = False) -> InlineKeyboardMarkup:
@@ -787,7 +732,7 @@ def get_post_media_keyboard(has_media: bool = False) -> InlineKeyboardMarkup:
     if has_media:
         builder.button(text="🗑️ Удалить последнее", callback_data="post_media:delete_last")
     builder.button(text="✅ Готово", callback_data="post_media:done")
-    builder.button(text="❌ Отмена", callback_data="post_constructor:cancel_input")
+    builder.button(text="❌ Отмена", callback_data="post:cancel_input")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -802,7 +747,7 @@ def get_post_audience_keyboard(selected_audiences: List[str]) -> InlineKeyboardM
     for key, text in audiences.items():
         prefix = "✅ " if key in selected_audiences else ""
         builder.button(text=prefix + text, callback_data=f"post_audience:toggle:{key}")
-    builder.button(text="⬅️ Назад к конструктору", callback_data="post_audience:back")
+    builder.button(text="⬅️ Назад к конструктору", callback_data="post:back_to_constructor")
     builder.adjust(2, 2, 1)
     return builder.as_markup()
 
@@ -814,14 +759,14 @@ def get_post_template_list_keyboard(templates: list[PostTemplate]) -> InlineKeyb
         for t in templates:
             builder.button(text=t.template_name, callback_data=f"post_template:load:{t.id}")
     builder.button(text="🗑️ Удалить шаблон", callback_data="post_template:delete_start")
-    builder.button(text="⬅️ Назад", callback_data="post_audience:back")
+    builder.button(text="⬅️ Назад", callback_data="post:back_to_constructor")
     builder.adjust(1)
     return builder.as_markup()
     
 def get_post_confirm_send_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Да, отправить", callback_data="post_constructor:confirm_send")
-    builder.button(text="⬅️ Нет, назад", callback_data="post_audience:back")
+    builder.button(text="⬅️ Нет, назад", callback_data="post:back_to_constructor")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -829,4 +774,18 @@ def get_close_post_keyboard() -> InlineKeyboardMarkup:
     """Кнопка для удаления полученного поста."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🗑️ Закрыть", callback_data="close_post")
+    return builder.as_markup()
+
+def get_notification_close_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка для удаления уведомлений (аналог get_close_post_keyboard)."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Понятно", callback_data="close_post")
+    return builder.as_markup()
+
+def get_complaints_keyboard(complaints: list, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    # Здесь можно добавить кнопки для действий с жалобами, если нужно
+    pagination_markup = get_pagination_keyboard("complaints:page", page, total_pages, back_callback="panel:back_to_panel")
+    for row in pagination_markup.inline_keyboard:
+        builder.row(*row)
     return builder.as_markup()

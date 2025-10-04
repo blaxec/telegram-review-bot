@@ -38,6 +38,7 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     
     user = await db_manager.get_user(user_id)
     if not user:
+        # В случае сбоя отправляем новое сообщение, а не пытаемся редактировать
         await bot.send_message(user_id, "Произошла критическая ошибка, не удалось найти или создать ваш профиль. Попробуйте /start")
         return
 
@@ -64,12 +65,11 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
         try:
             await target_message.edit_text(profile_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                await message_or_callback.answer()
-            else:
+            if "message is not modified" not in str(e):
                 logger.warning(f"Could not edit profile message, sending new. Error: {e}")
                 await target_message.delete()
                 await bot.send_message(chat_id=target_message.chat.id, text=profile_text, reply_markup=keyboard)
+            await message_or_callback.answer()
 
 
 @router.message(Command("stars"))
@@ -88,6 +88,7 @@ async def go_profile_handler(callback: CallbackQuery, state: FSMContext, bot: Bo
 @router.callback_query(F.data == 'profile_history')
 async def show_operation_history(callback: CallbackQuery):
     """Показывает последние операции пользователя за 24 часа."""
+    await callback.answer()
     user_id = callback.from_user.id
     operations = await db_manager.get_operation_history(user_id)
 
@@ -107,7 +108,6 @@ async def show_operation_history(callback: CallbackQuery):
             }
             op_description = op_map.get(op.operation_type, "Неизвестная операция")
             
-            # Расширенное описание для переводов
             description_suffix = ""
             if op.operation_type == "TRANSFER_SENT":
                 description_suffix = f" ({op.description})"
@@ -123,8 +123,6 @@ async def show_operation_history(callback: CallbackQuery):
     
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_operation_history_keyboard(), parse_mode="HTML")
-    await callback.answer()
-
 
 # --- Новая логика переводов ---
 

@@ -89,35 +89,43 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="roles", description="🛠️ Распределение ролей"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
-        BotCommand(command="amnesty", description="🙏 Запросы на разбан"),
-        BotCommand(command="banlist", description="📜 Список забаненных"),
-        BotCommand(command="promolist", description="📝 Список промокодов"),
     ]
 
-    tester_commands = user_commands + [
-        BotCommand(command="skip", description="⚡️ [ТЕСТ] Пропустить таймер")
+    tester_commands = [
+        BotCommand(command="start", description="🚀 Перезапустить бота"),
+        BotCommand(command="skip", description="⚡️ [ТЕСТ] Пропустить таймер"),
+        BotCommand(command="expire", description="💥 [ТЕСТ] Провалить таймер"),
+        BotCommand(command="getstate", description="ℹ️ [ТЕСТ] Узнать свой FSM state")
     ]
 
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     logger.info("Default user commands have been set for all users.")
 
     all_admins = await db_manager.get_all_administrators_by_role()
+    all_testers_id = {admin.user_id for admin in all_admins if admin.is_tester}
+
     for admin in all_admins:
         try:
             if admin.role == 'super_admin':
                 commands_to_set = super_admin_commands.copy()
                 if admin.is_tester:
-                    tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
-                    commands_to_set.extend(tester_only_commands)
+                    # Добавляем только уникальные команды тестера
+                    current_cmds = {cmd.command for cmd in commands_to_set}
+                    for t_cmd in tester_commands:
+                        if t_cmd.command not in current_cmds:
+                            commands_to_set.append(t_cmd)
                 await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin.user_id))
                 logger.info(f"Super Admin commands set for admin ID: {admin.user_id}")
             else: # role == 'admin'
                 commands_to_set = admin_commands.copy()
                 if admin.is_tester:
-                     tester_only_commands = [cmd for cmd in tester_commands if cmd.command not in [ac.command for ac in commands_to_set]]
-                     commands_to_set.extend(tester_only_commands)
+                    current_cmds = {cmd.command for cmd in commands_to_set}
+                    for t_cmd in tester_commands:
+                        if t_cmd.command not in current_cmds:
+                            commands_to_set.append(t_cmd)
                 await bot.set_my_commands(commands_to_set, scope=BotCommandScopeChat(chat_id=admin.user_id))
                 logger.info(f"Regular Admin commands set for admin ID: {admin.user_id}")
+
         except Exception as e:
             logger.error(f"Failed to set commands for admin {admin.user_id}: {e}")
     
@@ -128,6 +136,11 @@ async def handle_telegram_bad_request(event: ErrorEvent):
         return True
     if isinstance(event.exception, TelegramBadRequest) and "message is not modified" in event.exception.message:
         logger.warning("Caught 'message is not modified' error. Ignoring.")
+        return True
+    if isinstance(event.exception, TelegramBadRequest) and "BUTTON_DATA_INVALID" in event.exception.message:
+        logger.error(f"Caught BUTTON_DATA_INVALID error. This might be due to long callback_data. Update: {event.update}")
+        if event.update.callback_query:
+            await event.update.callback_query.answer("❌ Ошибка: данные этой кнопки устарели или повреждены. Пожалуйста, вернитесь в главное меню.", show_alert=True)
         return True
 
     logger.error(f"Unhandled exception in error handler: {event.exception.__class__.__name__}: {event.exception}")

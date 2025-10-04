@@ -4,8 +4,9 @@ import logging
 import datetime
 import asyncio
 from math import ceil
+from typing import Union
 
-from aiogram.types import Message, LabeledPrice
+from aiogram.types import Message, LabeledPrice, CallbackQuery
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -110,7 +111,7 @@ async def process_warning_reason_logic(bot: Bot, user_id: int, platform: str, re
 
 # --- ЛОГИКА ДЛЯ ОТПРАВКИ ТЕКСТА ОТЗЫВА ---
 
-async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: AsyncIOScheduler, user_id: int, link_id: int, platform: str, review_text: str):
+async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: AsyncIOScheduler, user_id: int, link_id: int, platform: str, review_text: str, attached_photo_id: str = None):
     """Логика отправки текста отзыва пользователю и планирования задач."""
     user_state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
             
@@ -124,7 +125,7 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
 
     task_state, task_message, run_date_confirm, run_date_timeout = None, None, None, None
 
-    photo_instruction = "\n3. <b>Прикрепите к отзыву фотографию</b> (любую подходящую, например, из интерьера или связанную с тематикой места)." if link.requires_photo else ""
+    photo_instruction = "\n3. <b>Прикрепите к отзыву фотографию</b>, которую прислал администратор." if link.requires_photo else ""
 
     base_task_text = (
         "📝 <b>ВАШЕ ЗАДАНИЕ ГОТОВО!</b>\n\n"
@@ -159,7 +160,11 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         return False, f"Неизвестная платформа: {platform}"
 
     try:
+        if attached_photo_id:
+            await bot.send_photo(user_id, photo=attached_photo_id)
+
         sent_message = await bot.send_message(user_id, task_message, parse_mode='HTML', disable_web_page_preview=True)
+        
         user_data_prev = await user_state.get_data()
         prev_confirm_job_id = user_data_prev.get('confirm_job_id')
         prev_timeout_job_id = user_data_prev.get('timeout_job_id')
@@ -181,7 +186,8 @@ async def send_review_text_to_user_logic(bot: Bot, dp: Dispatcher, scheduler: As
         username=user_info.username, 
         review_text=review_text, 
         platform_for_task=platform,
-        current_task_message_id=sent_message.message_id
+        current_task_message_id=sent_message.message_id,
+        attached_photo_file_id=attached_photo_id
     )
 
     confirm_job = scheduler.add_job(send_confirmation_button, 'date', run_date=run_date_confirm, args=[bot, user_id, platform])
@@ -228,7 +234,13 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         return False, "Ошибка: отзыв не найден или уже обработан."
 
     user = await db_manager.get_user(review.user_id)
-    is_tester = user and user.id in TESTER_IDS
+    
+    is_tester = False
+    if user:
+        admin_rec = await db_manager.get_administrator(user.id)
+        if admin_rec:
+            is_tester = admin_rec.is_tester
+
 
     amount_map = {
         'google': Rewards.GOOGLE_REVIEW,
@@ -258,8 +270,9 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         'yandex_with_text': Durations.COOLDOWN_YANDEX_WITH_TEXT_HOURS,
         'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
     }
-    cooldown_hours = cooldown_hours_map.get(review.platform)
-    platform_for_cooldown = review.platform
+    cooldown_hours = cooldown_hours_map.get(review.platform, 24) # 24 часа по умолчанию
+    platform_for_cooldown = review.platform.replace('_maps', '')
+
     
     cooldown_end_time = await db_manager.set_platform_cooldown(review.user_id, platform_for_cooldown, cooldown_hours)
     if cooldown_end_time:
@@ -297,7 +310,7 @@ async def reject_initial_review_logic(review_id: int, bot: Bot, scheduler: Async
         'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
     }
     cooldown_hours = cooldown_hours_map.get(rejected_review.platform, 24)
-    platform_for_cooldown = rejected_review.platform
+    platform_for_cooldown = rejected_review.platform.replace('_maps', '')
 
     cooldown_end_time = await db_manager.set_platform_cooldown(rejected_review.user_id, platform_for_cooldown, cooldown_hours)
     if cooldown_end_time:
@@ -337,7 +350,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
         if referrer and referrer.referral_path:
             referral_reward = 0
             
-            if referrer.referral_path == 'google' and approved_review.platform == 'google':
+            if referrer.referral_path == 'google' and approved_review.platform == 'google_maps':
                 referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
             
             elif referrer.referral_path == 'yandex':
@@ -357,7 +370,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
                 except Exception as e:
                     logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
 
-    if approved_review.platform == 'google':
+    if approved_review.platform == 'google_maps':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
     elif 'yandex' in approved_review.platform:
         await check_and_apply_promo_reward(user_id, "yandex_review", bot)
@@ -577,7 +590,7 @@ async def process_unban_request_logic(bot: Bot, request_id: int, action: str, ad
             await db_manager.unban_user(user.id, is_first_unban=True)
             await db_manager.update_unban_request_status(request.id, 'approved', admin_id)
             try:
-                await bot.send_message(user.id, "🎉 Ваш запрос на амнистию был одобрен! Вы разбанены.")
+                await bot.send_message(user.id, "🎉 Ваш запрос на амнистию был одобрен! Вы разбанены.", reply_markup=inline.get_close_post_keyboard())
             except Exception: pass
             return True, f"✅ Пользователь {user.id} разбанен бесплатно."
         else:  # Последующие разбаны - платные
