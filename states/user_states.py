@@ -8,13 +8,10 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
-    TRANSFER_OPTIONS = State() # Выбор: коммент, медиа, анонимность
-    TRANSFER_COMMENT_INPUT = State()
-    TRANSFER_AWAITING_MEDIA = State()
     TRANSFER_CONFIRMATION = State()
-    
-    # Состояние для жалобы
-    COMPLAINT_REASON = State()
+    TRANSFER_AWAITING_MEDIA_CHOICE = State()
+    TRANSFER_AWAITING_MEDIA = State()
+    TRANSFER_COMMENT_INPUT = State()
     
     # Состояния для вывода звезд
     WITHDRAW_AMOUNT = State()
@@ -98,13 +95,15 @@ class AdminState(StatesGroup):
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
 
-    # Состояния для штрафа и жалоб
+    # --- ИЗМЕНЕНИЕ: Добавлено новое состояние ---
+    RESET_COOLDOWN_USER_ID = State()
+
+    # Состояния для штрафа (теперь запускаются из /panel)
     FINE_USER_ID = State()
     FINE_AMOUNT = State()
     FINE_REASON = State()
-    COMPLAINTS_LIST_VIEW = State()
-
-    # Состояния для создания промокода
+    
+    # Состояния для создания промокода (теперь запускаются из /panel)
     PROMO_CODE_NAME = State()
     PROMO_CONDITION = State()
     PROMO_REWARD = State()
@@ -121,7 +120,7 @@ class AdminState(StatesGroup):
     RETURN_LINK_ID = State()
     LINK_LIST_VIEW = State()
 
-    # Состояния для процесса бана
+    # Состояния для процесса бана (теперь запускаются из /panel)
     BAN_USER_IDENTIFIER = State()
     BAN_REASON = State()
 
@@ -142,13 +141,12 @@ class AdminState(StatesGroup):
     INTERNSHIP_FIRE_REASON = State()
     MENTOR_REJECT_REASON = State()
 
-    # Состояния для динамических ролей
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ДИНАМИЧЕСКИХ РОЛЕЙ ---
     ROLES_ADD_ADMIN_ID = State()
     ROLES_ADD_ADMIN_ROLE = State()
     ROLES_DELETE_CONFIRM = State()
     
-    # Состояния для конструктора постов
-    POST_CONSTRUCTOR = State()
-    POST_AWAITING_INPUT = State()
-    POST_TEMPLATE_LIST_VIEW = State()
-    POST_TEMPLATE_DELETE_CONFIRM = State()
+    # --- НОВЫЕ СОСТОЯНИЯ ДЛЯ КОНСТРУКТОРА ПОСТОВ ---
+    POST_CONSTRUCTOR_AWAIT_TEXT = State()
+    POST_CONSTRUCTOR_AWAIT_MEDIA = State()
+    POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME = State()

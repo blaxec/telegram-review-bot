@@ -134,12 +134,13 @@ async def show_pending_tasks(message: Message, state: FSMContext):
     
 # --- ПАНЕЛЬ УПРАВЛЛЕНИЯ /panel ---
 @router.message(Command("panel"), IsSuperAdmin())
-async def show_admin_panel(message: Message):
+async def show_admin_panel(message: Message, state: FSMContext):
     """Отображает главную панель управления для SuperAdmin."""
     try:
         await message.delete()
     except TelegramBadRequest:
         pass
+    await state.clear()
     await message.answer(
         "🛠️ <b>Панель управления утилитами</b>\n\n"
         "Выберите действие:",
@@ -147,8 +148,9 @@ async def show_admin_panel(message: Message):
     )
 
 @router.callback_query(F.data == "panel:back_to_panel")
-async def back_to_admin_panel(callback: CallbackQuery):
+async def back_to_admin_panel(callback: CallbackQuery, state: FSMContext):
     """Возвращает к главной панели управления."""
+    await state.clear()
     await callback.message.edit_text(
         "🛠️ <b>Панель управления утилитами</b>\n\n"
         "Выберите действие:",
@@ -778,7 +780,6 @@ async def back_to_text_choice(callback: CallbackQuery, state: FSMContext, bot: B
 async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     
-    # Обработка фото, если требуется
     attached_photo_id = None
     if data.get('photo_required'):
         if not message.reply_to_message or not message.reply_to_message.photo:
