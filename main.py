@@ -24,7 +24,8 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, BotComman
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from handlers import (start, profile, support, earning, admin, gmail,
+# --- ИЗМЕНЕНИЕ: Обновляем импорты ---
+from handlers import (start, profile, support, earning, admin_panel, admin_moderation, gmail,
                       stats, promo, other, ban_system, referral, admin_roles, internship, posting)
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
@@ -164,9 +165,11 @@ async def main():
 
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
-
+    
+    # --- ИЗМЕНЕНИЕ: Подключаем новые роутеры ---
     dp.include_router(start.router)
-    dp.include_router(admin.router)
+    dp.include_router(admin_panel.router)
+    dp.include_router(admin_moderation.router)
     dp.include_router(admin_roles.router)
     dp.include_router(posting.router)
     dp.include_router(internship.router)

@@ -17,6 +17,10 @@ from states.user_states import AdminState
 router = Router()
 logger = logging.getLogger(__name__)
 
+# --- ИЗМЕНЕНИЕ: Импортируем функцию для обновления команд ---
+from main import set_bot_commands
+
+
 async def delete_and_clear_prompt(message: Message, state: FSMContext):
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
@@ -266,6 +270,9 @@ async def toggle_tester_status(callback: CallbackQuery, bot: Bot):
     await db_manager.update_administrator(user_id, is_tester=new_status)
     await callback.answer(f"Статус тестера изменен на: {new_status}")
     
+    # --- ИЗМЕНЕНИЕ: Обновляем команды для пользователя ---
+    await set_bot_commands(bot)
+    
     # Обновляем сообщение
     await view_single_admin(callback, bot)
     
@@ -288,8 +295,9 @@ async def execute_delete_admin(callback: CallbackQuery, bot: Bot):
     success = await db_manager.delete_administrator(user_id)
     if success:
         await callback.answer("Администратор удален.", show_alert=True)
-        # Возвращаемся к списку
-        callback.data = "roles_manage:list:1"
+        # --- ИЗМЕНЕНИЕ: Обновляем команды для всех ---
+        await set_bot_commands(bot)
+        # --- ИСПРАВЛЕНИЕ: Вместо изменения callback.data, просто вызываем нужную функцию ---
         await list_admins(callback, bot)
     else:
         await callback.answer("Не удалось удалить этого администратора.", show_alert=True)
@@ -337,11 +345,13 @@ async def process_add_admin_role(callback: CallbackQuery, state: FSMContext, bot
     
     if success:
         await callback.answer("Администратор успешно добавлен!", show_alert=True)
+        # --- ИЗМЕНЕНИЕ: Обновляем команды ---
+        await set_bot_commands(bot)
     else:
         await callback.answer("Ошибка при добавлении администратора.", show_alert=True)
         
     await state.clear()
     await callback.message.delete()
-    # Возвращаемся к списку
-    callback.data = "roles_manage:list:1"
+    
+    # --- ИСПРАВЛЕНИЕ: Вызываем list_admins с правильными аргументами ---
     await list_admins(callback, bot)

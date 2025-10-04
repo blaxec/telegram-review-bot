@@ -8,7 +8,7 @@ class UserState(StatesGroup):
     # Состояния для передачи звезд
     TRANSFER_AMOUNT_OTHER = State()
     TRANSFER_RECIPIENT = State()
-    TRANSFER_OPTIONS = State()  # ДОБАВЛЕНО НЕДОСТАЮЩЕЕ СОСТОЯНИЕ
+    TRANSFER_OPTIONS = State()
     TRANSFER_CONFIRMATION = State()
     TRANSFER_AWAITING_MEDIA_CHOICE = State()
     TRANSFER_AWAITING_MEDIA = State()
@@ -148,8 +148,8 @@ class AdminState(StatesGroup):
     ROLES_ADD_ADMIN_ROLE = State()
     ROLES_DELETE_CONFIRM = State()
     
-    # Состояния для конструктора постов
+    # --- ИЗМЕНЕНИЕ: Добавлены состояния для конструктора постов ---
     POST_CONSTRUCTOR = State()
-    POST_CONSTRUCTOR_AWAIT_TEXT = State()
-    POST_CONSTRUCTOR_AWAIT_MEDIA = State()
-    POST_CONSTRUCTOR_SAVE_TEMPLATE_NAME = State()
+    POST_AWAITING_BUTTON_TEXT = State()
+    POST_AWAITING_BUTTON_URL = State()
+    POST_AWAITING_SAVE_NAME = State()

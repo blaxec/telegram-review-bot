@@ -40,6 +40,22 @@ ROLE_DESCRIPTIONS = {
     OTHER_HOLD_REVIEW_ADMIN: "Проверка отзывов после холда"
 }
 
+# --- ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ ---
+def get_tasks_for_category(category: str, subcategory: str = None) -> List[str]:
+    """Возвращает список ключей ролей для указанной категории."""
+    if category == "yandex":
+        if subcategory == "text":
+            return [YANDEX_TEXT_PROFILE_CHECK_ADMIN, YANDEX_TEXT_ISSUE_TEXT_ADMIN, YANDEX_TEXT_FINAL_CHECK_ADMIN]
+        elif subcategory == "no_text":
+            return [YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, YANDEX_NO_TEXT_FINAL_CHECK_ADMIN]
+    elif category == "google":
+        return [GOOGLE_PROFILE_CHECK_ADMIN, GOOGLE_LAST_REVIEWS_CHECK_ADMIN, GOOGLE_ISSUE_TEXT_ADMIN, GOOGLE_FINAL_CHECK_ADMIN]
+    elif category == "gmail":
+        return [GMAIL_DEVICE_MODEL_CHECK_ADMIN, GMAIL_ISSUE_DATA_ADMIN, GMAIL_FINAL_CHECK_ADMIN]
+    elif category == "other":
+        return [OTHER_HOLD_REVIEW_ADMIN]
+    return []
+
 def get_category_from_role_key(role_key: str) -> Tuple[str, str | None]:
     """Определяет категорию и подкатегорию по ключу роли."""
     if "yandex" in role_key:

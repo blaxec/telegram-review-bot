@@ -22,6 +22,8 @@ from logic.user_notifications import (
     send_confirmation_button,
     handle_task_timeout
 )
+# --- ИЗМЕНЕНИЕ: Добавляем импорт для таймаута Gmail ---
+from handlers.gmail import cancel_gmail_verification_timeout
 
 
 router = Router()
@@ -104,16 +106,17 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
         except Exception: pass
 
     response_msg = None
+    # --- ИЗМЕНЕНИЕ: Передаем state в функции отправки кнопок ---
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
-        await send_liking_confirmation_button(bot, user_id)
+        await send_liking_confirmation_button(bot, user_id, state)
         response_msg = await message.answer("✅ Таймер лайков пропущен.")
     elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
-        await send_yandex_liking_confirmation_button(bot, user_id)
+        await send_yandex_liking_confirmation_button(bot, user_id, state)
         response_msg = await message.answer("✅ Таймер прогрева пропущен.")
     elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
         platform = user_data.get("platform_for_task")
         if platform:
-            await send_confirmation_button(bot, user_id, platform)
+            await send_confirmation_button(bot, user_id, platform, state)
             response_msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
     
     asyncio.create_task(schedule_message_deletion(message, 5))
@@ -140,34 +143,47 @@ async def skip_timer_command_failed(message: Message):
     )
     asyncio.create_task(schedule_message_deletion(response_msg, 5))
 
+# --- ИЗМЕНЕНИЕ: Полностью переработанная команда /expire ---
 @router.message(Command("expire"), IsTester(), StateFilter(*ACTIVE_TASK_STATES))
 async def expire_task_command(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     """
     [ТЕСТОВАЯ КОМАНДА] Мгновенно "проваливает" текущее задание по таймауту.
+    Работает для всех активных состояний.
     """
     user_id = message.from_user.id
-    current_state = await state.get_state()
+    current_state_str = await state.get_state()
     user_data = await state.get_data()
-    
-    timeout_job_id = user_data.get("timeout_job_id") or user_data.get("confirmation_timeout_job_id") or user_data.get("gmail_timeout_job_id")
-    if timeout_job_id:
-        try: scheduler.remove_job(timeout_job_id)
-        except Exception: pass
-    
-    platform = user_data.get("platform_for_task", "unknown_platform")
-    
-    await message.answer("⚙️ Имитирую истечение таймера...")
-    
-    await handle_task_timeout(
-        bot=bot,
-        storage=state.storage,
-        user_id=user_id,
-        platform=platform,
-        message_to_admins=f"тестовый провал задачи (state: {current_state})",
-        scheduler=scheduler
-    )
+
+    # Находим и отменяем любой активный таймер
+    job_ids = ["timeout_job_id", "confirm_job_id", "confirmation_timeout_job_id", "gmail_timeout_job_id"]
+    for job_id_key in job_ids:
+        if job_id := user_data.get(job_id_key):
+            try:
+                scheduler.remove_job(job_id)
+                logger.info(f"Tester {user_id} is expiring task. Removed job '{job_id_key}'.")
+            except Exception:
+                pass
+
+    await message.answer(f"⚙️ Имитирую истечение таймера для состояния: {current_state_str}...")
     await message.delete()
-    logger.info(f"Tester {user_id} manually expired task for state {current_state}.")
+
+    # Вызываем соответствующую функцию таймаута в зависимости от состояния
+    if current_state_str == UserState.GMAIL_AWAITING_VERIFICATION:
+        await cancel_gmail_verification_timeout(bot, user_id, state)
+        logger.info(f"Tester {user_id} manually expired GMAIL task.")
+    else:
+        # Для всех остальных задач используем универсальный обработчик
+        platform = user_data.get("platform_for_task", "unknown_platform")
+        await handle_task_timeout(
+            bot=bot,
+            storage=state.storage,
+            user_id=user_id,
+            platform=platform,
+            message_to_admins=f"тестовый провал задачи (state: {current_state_str})",
+            scheduler=scheduler
+        )
+        logger.info(f"Tester {user_id} manually expired standard task for state {current_state_str}.")
+
 
 @router.message(CommandStart(), StateFilter(*ACTIVE_TASK_STATES))
 async def start_while_busy_handler(message: Message):

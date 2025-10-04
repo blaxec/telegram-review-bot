@@ -1,66 +1,32 @@
-# file: telegram-review-bot-main/handlers/admin.py
+# file: handlers/admin_moderation.py
 
-import datetime
-import logging
 import asyncio
+import logging
 from math import ceil
 from typing import Union
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    import sys
-    import os
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aiogram import Router, F, Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message, InputMediaPhoto
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.types import CallbackQuery, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from states.user_states import UserState, AdminState
-from keyboards import inline, reply
-from config import SUPER_ADMIN_ID, ADMIN_IDS, Durations, Limits, Rewards
+from config import Durations, Limits, SUPER_ADMIN_ID
 from database import db_manager
-from references import reference_manager
-from logic.admin_logic import (
-    process_add_links_logic,
-    process_rejection_reason_logic,
-    process_warning_reason_logic,
-    send_review_text_to_user_logic,
-    approve_review_to_hold_logic,
-    reject_initial_review_logic,
-    get_user_hold_info_logic,
-    approve_withdrawal_logic,
-    reject_withdrawal_logic,
-    apply_fine_to_user,
-    approve_final_review_logic,
-    reject_final_review_logic,
-    format_banned_user_page,
-    format_promo_code_page,
-    get_paginated_links_text,
-    get_unban_requests_page,
-    process_unban_request_logic,
-    handle_mentor_verdict,
-    format_complaints_page
-)
-from logic.internship_logic import (
-    format_applications_page, 
-    format_single_application,
-    format_candidates_page,
-    format_interns_page,
-    format_single_intern
-)
+from keyboards import inline, reply
+from logic import (admin_logic, admin_roles, internship_logic)
 from logic.ai_helper import generate_review_text
-from logic.ocr_helper import analyze_screenshot
-from logic.cleanup_logic import check_and_expire_links
-from logic import admin_roles
 from logic.notification_manager import send_notification_to_admins
+from logic.ocr_helper import analyze_screenshot
+from references import reference_manager
+from states.user_states import AdminState, UserState
 from utils.access_filters import IsAdmin, IsSuperAdmin
 
 router = Router()
 logger = logging.getLogger(__name__)
+
 
 async def schedule_message_deletion(message: Message, delay: int):
     """Вспомогательная функция для планирования удаления сообщения."""
@@ -84,166 +50,6 @@ async def delete_previous_messages(message: Message, state: FSMContext):
     except TelegramBadRequest:
         pass
 
-# --- ГЛОБАЛЬНЫЕ АДМИН КОМАНДЫ ---
-
-@router.message(Command("addstars"), IsSuperAdmin())
-async def admin_add_stars(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    await state.clear()
-    await db_manager.update_balance(message.from_user.id, 999.0, op_type="TOP_REWARD", description="Начисление через команду /addstars")
-    msg = await message.answer(f"✅ На ваш баланс зачислено 999.0 ⭐.")
-    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
-
-# --- НОВЫЕ КОМАНДЫ ДЛЯ DND и PENDING_TASKS ---
-
-@router.message(Command("dnd"), IsAdmin())
-async def toggle_dnd_mode(message: Message, state: FSMContext):
-    try: await message.delete()
-    except TelegramBadRequest: pass
-    
-    new_dnd_status = await db_manager.toggle_dnd_status(message.from_user.id)
-    
-    if new_dnd_status:
-        response_text = "🌙 Ночной режим включен. Вы больше не будете получать рабочие уведомления."
-    else:
-        response_text = "☀️ Ночной режим выключен. Вы снова получаете все рабочие уведомления."
-    
-    msg = await message.answer(response_text)
-    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_ADMIN_REPLY_DELAY))
-    await state.clear()
-
-@router.message(Command("pending_tasks"), IsAdmin())
-async def show_pending_tasks(message: Message, state: FSMContext):
-    try: await message.delete()
-    except TelegramBadRequest: pass
-    
-    tasks_count = await db_manager.get_pending_tasks_count()
-    
-    text = (
-        "📥 <b>Задачи, ожидающие внимания:</b>\n\n"
-        f"➡️ <b>Отзывы на проверку:</b> {tasks_count['reviews']} шт.\n"
-        f"➡️ <b>Открытые тикеты поддержки:</b> {tasks_count['tickets']} шт.\n\n"
-        "<i>Используйте соответствующие разделы для обработки.</i>"
-    )
-    
-    msg = await message.answer(text)
-    asyncio.create_task(schedule_message_deletion(msg, Durations.DELETE_INFO_MESSAGE_DELAY))
-    await state.clear()
-    
-# --- ПАНЕЛЬ УПРАВЛЛЕНИЯ /panel ---
-@router.message(Command("panel"), IsSuperAdmin())
-async def show_admin_panel(message: Message, state: FSMContext):
-    """Отображает главную панель управления для SuperAdmin."""
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
-    await state.clear()
-    await message.answer(
-        "🛠️ <b>Панель управления утилитами</b>\n\n"
-        "Выберите действие:",
-        reply_markup=inline.get_admin_panel_keyboard()
-    )
-
-@router.callback_query(F.data == "panel:back_to_panel")
-async def back_to_admin_panel(callback: CallbackQuery, state: FSMContext):
-    """Возвращает к главной панели управления."""
-    await state.clear()
-    await callback.message.edit_text(
-        "🛠️ <b>Панель управления утилитами</b>\n\n"
-        "Выберите действие:",
-        reply_markup=inline.get_admin_panel_keyboard()
-    )
-
-# --- ПОДМЕНЮ В ПАНЕЛИ УПРАВЛЕНИЯ ---
-@router.callback_query(F.data.startswith("panel:"))
-async def panel_actions(callback: CallbackQuery, state: FSMContext):
-    action = callback.data.split(":")[1]
-    
-    # Меню управления блокировками
-    if action == "manage_bans":
-        await callback.message.edit_text("<b>Меню управления блокировками</b>\n\nВыберите действие:", reply_markup=inline.get_ban_management_keyboard())
-    elif action == "ban_user":
-        await state.set_state(AdminState.BAN_USER_IDENTIFIER)
-        prompt = await callback.message.edit_text("Введите ID или @username пользователя для бана.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_bans"))
-        await state.update_data(prompt_message_id=prompt.message_id)
-    elif action == "ban_list":
-        await state.set_state(AdminState.BAN_LIST_VIEW)
-        await show_banned_users_page(callback, state, 1)
-    
-    # Меню амнистии (внутри меню банов)
-    elif action == "manage_amnesty":
-        await state.set_state(AdminState.AMNESTY_LIST_VIEW)
-        await show_amnesty_page(callback, state, 1)
-
-    # Меню управления промокодами
-    elif action == "manage_promos":
-        await callback.message.edit_text("<b>Меню управления промокодами</b>\n\nВыберите действие:", reply_markup=inline.get_promo_management_keyboard())
-    elif action == "create_promo":
-        await state.set_state(AdminState.PROMO_CODE_NAME)
-        prompt = await callback.message.edit_text("Введите уникальное название для нового промокода (например, NEWYEAR2025).", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-        await state.update_data(prompt_message_id=prompt.message_id)
-    elif action == "promo_list":
-        await state.set_state(AdminState.PROMO_LIST_VIEW)
-        await show_promo_codes_page(callback, state, 1)
-
-    # Меню жалоб (внутри штрафов)
-    elif action == "view_complaints":
-        await state.set_state(AdminState.COMPLAINTS_LIST_VIEW)
-        await show_complaints_page(callback, state, 1)
-
-    # Другие утилиты из главного меню
-    elif action == "issue_fine":
-        await state.set_state(AdminState.FINE_USER_ID)
-        prompt = await callback.message.edit_text("Введите ID или @username пользователя для штрафа.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-        await state.update_data(prompt_message_id=prompt.message_id)
-    elif action == "reset_cooldown":
-        await state.set_state(AdminState.RESET_COOLDOWN_USER_ID)
-        prompt = await callback.message.edit_text("Введите ID или @username пользователя для сброса кулдаунов.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-        await state.update_data(prompt_message_id=prompt.message_id)
-    elif action == "view_hold":
-        await state.set_state(AdminState.VIEWHOLD_USER_ID)
-        prompt = await callback.message.edit_text("Введите ID или @username пользователя для просмотра его холда.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-        await state.update_data(prompt_message_id=prompt.message_id)
-    
-    await callback.answer()
-
-async def show_banned_users_page(callback_or_message: Union[CallbackQuery, Message], state: FSMContext, page: int):
-    users, total = await db_manager.get_banned_users(page=page), await db_manager.get_banned_users_count()
-    total_pages = ceil(total / 6) if total > 0 else 1
-    text = await format_banned_user_page(users, page, total_pages)
-    markup = inline.get_pagination_keyboard("banlist:page", page, total_pages, back_callback="panel:manage_bans")
-
-    if isinstance(callback_or_message, CallbackQuery):
-        await callback_or_message.message.edit_text(text, reply_markup=markup)
-    else:
-        await callback_or_message.answer(text, reply_markup=markup)
-
-
-async def show_promo_codes_page(callback_or_message: Union[CallbackQuery, Message], state: FSMContext, page: int):
-    promos, total = await db_manager.get_all_promo_codes(page=page), await db_manager.get_promo_codes_count()
-    total_pages = ceil(total / 6) if total > 0 else 1
-    text = await format_promo_code_page(promos, page, total_pages)
-    markup = inline.get_promo_list_keyboard(page, total_pages)
-    
-    if isinstance(callback_or_message, CallbackQuery):
-        await callback_or_message.message.edit_text(text, reply_markup=markup)
-    else:
-        await callback_or_message.answer(text, reply_markup=markup)
-
-async def show_amnesty_page(callback: CallbackQuery, state: FSMContext, page: int):
-    requests, total = await db_manager.get_pending_unban_requests(page=page), await db_manager.get_pending_unban_requests_count()
-    total_pages = ceil(total / 5) if total > 0 else 1
-    text = await get_unban_requests_page(requests, page, total_pages)
-    await callback.message.edit_text(text, reply_markup=inline.get_amnesty_keyboard(requests, page, total_pages))
-
-async def show_complaints_page(callback: CallbackQuery, state: FSMContext, page: int):
-    complaints, total = await db_manager.get_transfer_complaints(page=page)
-    total_pages = ceil(total / 5) if total > 0 else 1
-    text = await format_complaints_page(complaints, page, total_pages)
-    await callback.message.edit_text(text, reply_markup=inline.get_complaints_keyboard(complaints, page, total_pages))
 
 # --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
 
@@ -328,7 +134,7 @@ async def admin_add_links_handler(message: Message, state: FSMContext):
     requires_photo = data.get("requires_photo_for_links")
     
     try:
-        result_text = await process_add_links_logic(message.text, platform, is_fast_track=is_fast, requires_photo=requires_photo)
+        result_text = await admin_logic.process_add_links_logic(message.text, platform, is_fast_track=is_fast, requires_photo=requires_photo)
         await message.answer(result_text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
     except Exception as e:
         logger.exception(f"Критическая ошибка (FSM) при добавлении ссылок: {e}")
@@ -374,7 +180,7 @@ async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: 
     total_links, links_on_page = await db_manager.db_get_paginated_references(platform, page, Limits.LINKS_PER_PAGE, filter_type)
     total_pages = ceil(total_links / Limits.LINKS_PER_PAGE) if total_links > 0 else 1
     
-    page_text = get_paginated_links_text(links_on_page, page, total_pages, platform, filter_type)
+    page_text = admin_logic.get_paginated_links_text(links_on_page, page, total_pages, platform, filter_type)
     keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type)
     
     if callback.message:
@@ -452,6 +258,7 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     temp_message = await message.answer(summary_text)
     await state.clear()
     
+    # Имитируем callback, чтобы вернуться к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message, 
@@ -508,6 +315,7 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await state.clear()
     
     temp_message = await message.answer(result_text)
+    # Имитируем callback, чтобы вернуться к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message,
@@ -845,7 +653,7 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
         review_text = data.get('ai_generated_text')
         
         dp_dummy = Dispatcher(storage=state.storage)
-        success, response_text = await send_review_text_to_user_logic(
+        success, response_text = await admin_logic.send_review_text_to_user_logic(
             bot=bot, dp=dp_dummy, scheduler=scheduler,
             user_id=data['target_user_id'], link_id=data['target_link_id'],
             platform=data['platform'], review_text=review_text,
@@ -922,7 +730,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
         await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
         return
 
-    success, message_text = await approve_review_to_hold_logic(review_id, bot, scheduler)
+    success, message_text = await admin_logic.approve_review_to_hold_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В <b>ХОЛДЕ</b> (@{callback.from_user.username})", reply_markup=None)
@@ -969,7 +777,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
     review_id = data.get('review_id_to_reject')
     reason = message.text
 
-    success, message_text = await reject_initial_review_logic(review_id, bot, scheduler, reason=reason)
+    success, message_text = await admin_logic.reject_initial_review_logic(review_id, bot, scheduler, reason=reason)
     
     admin_info_msg = await message.answer(message_text)
     asyncio.create_task(schedule_message_deletion(admin_info_msg, Durations.DELETE_ADMIN_REPLY_DELAY))
@@ -1002,7 +810,7 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     
     review = await db_manager.get_review_by_id(review_id)
     if review and review.user and review.user.is_busy_intern:
-        success, message_text = await handle_mentor_verdict(
+        success, message_text = await admin_logic.handle_mentor_verdict(
             review_id=review_id, 
             is_approved_by_mentor=True, 
             reason="Проверка совпала с решением ментора",
@@ -1023,7 +831,7 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
         await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
         return
 
-    success, message_text = await approve_final_review_logic(review_id, bot)
+    success, message_text = await admin_logic.approve_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n✅ <b>ОДОБРЕН И ВЫПЛАЧЕН</b> (@{callback.from_user.username})"
@@ -1063,7 +871,7 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
         await callback.answer(f"Эту проверку выполняет {admin_name}", show_alert=True)
         return
 
-    success, message_text = await reject_final_review_logic(review_id, bot)
+    success, message_text = await admin_logic.reject_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
         new_caption = (callback.message.caption or "") + f"\n\n❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
@@ -1080,336 +888,10 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
         except TelegramBadRequest:
             pass
             
-# --- БЛОК ВЫВОДА СРЕДСТВ ---
 
-@router.callback_query(F.data.startswith("admin_withdraw_approve:"), IsAdmin())
-async def admin_approve_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    success, message_text, _ = await approve_withdrawal_logic(request_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ✅ <b>ВЫПЛАЧЕНО</b> Администратором @{callback.from_user.username} ]</i>"
-            await callback.message.edit_text(new_text, reply_markup=None)
-        except TelegramBadRequest as e:
-            logger.warning(f"Could not edit withdrawal message in channel: {e}")
+# --- БЛОК УПРАВЛЕНИЯ НАГРАДАМИ СТАТИСТИКИ ---
 
-@router.callback_query(F.data.startswith("admin_withdraw_reject:"), IsAdmin())
-async def admin_reject_withdrawal(callback: CallbackQuery, bot: Bot):
-    request_id = int(callback.data.split(":")[1])
-    success, message_text, _ = await reject_withdrawal_logic(request_id, bot)
-    await callback.answer(message_text, show_alert=True)
-    if success and callback.message:
-        try:
-            new_text = (callback.message.text or "") + f"\n\n<i>[ ❌ <b>ОТКЛОНЕНО</b> Администратором @{callback.from_user.username} ]</i>"
-            await callback.message.edit_text(new_text, reply_markup=None)
-        except TelegramBadRequest as e:
-            logger.warning(f"Could not edit withdrawal message in channel: {e}")
-
-# --- ПРОЧИЕ АДМИН-КОМАНДЫ (из панели) ---
-
-@router.message(Command("reset_cooldown"), IsAdmin())
-@router.message(AdminState.RESET_COOLDOWN_USER_ID, IsAdmin())
-async def reset_cooldown_handler(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    
-    current_state = await state.get_state()
-    if current_state == AdminState.RESET_COOLDOWN_USER_ID:
-        await delete_previous_messages(message, state)
-
-    identifier = None
-    if message.text.startswith('/reset_cooldown'):
-        args = message.text.split()
-        if len(args) < 2:
-            await message.answer("Используйте: <code>/reset_cooldown ID_или_@username</code>"); return
-        identifier = args[1]
-    else:
-        identifier = message.text
-
-    user_id = await db_manager.find_user_by_identifier(identifier)
-    if not user_id:
-        await message.answer(f"❌ Пользователь <code>{identifier}</code> не найден."); return
-
-    if await db_manager.reset_user_cooldowns(user_id):
-        user = await db_manager.get_user(user_id)
-        username = f"@{user.username}" if user.username else f"ID: {user_id}"
-        msg = await message.answer(f"✅ Кулдауны для <i>{username}</i> сброшены.")
-    else: 
-        msg = await message.answer(f"❌ Ошибка при сбросе кулдаунов для <code>{identifier}</code>.")
-
-    await state.clear()
-    await schedule_message_deletion(msg, 7)
-    await show_admin_panel(message)
-
-
-@router.message(Command("viewhold"), IsAdmin())
-@router.message(AdminState.VIEWHOLD_USER_ID, IsAdmin())
-async def viewhold_handler(message: Message, state: FSMContext):
-    try:
-        await message.delete()
-    except TelegramBadRequest: pass
-    
-    current_state = await state.get_state()
-    if current_state == AdminState.VIEWHOLD_USER_ID:
-        await delete_previous_messages(message, state)
-    
-    identifier = None
-    if message.text.startswith('/viewhold'):
-        args = message.text.split()
-        if len(args) < 2:
-            await message.answer("Использование: /viewhold ID_пользователя_или_@username")
-            return
-        identifier = args[1]
-    else:
-        identifier = message.text
-
-    response_text = await get_user_hold_info_logic(identifier)
-    msg = await message.answer(response_text)
-    await state.clear()
-    await schedule_message_deletion(msg, 15)
-    await show_admin_panel(message)
-
-@router.message(AdminState.FINE_USER_ID, IsAdmin())
-async def fine_user_get_id(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    user_id = await db_manager.find_user_by_identifier(message.text)
-    if not user_id:
-        prompt_msg = await message.answer(f"❌ Пользователь <code>{message.text}</code> не найден.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(target_user_id=user_id)
-    prompt_msg = await message.answer(f"Введите сумму штрафа (например, 10).", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-    await state.set_state(AdminState.FINE_AMOUNT)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.FINE_AMOUNT, IsAdmin())
-async def fine_user_get_amount(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    try:
-        amount = float(message.text)
-        if amount <= 0: raise ValueError
-    except (ValueError, TypeError):
-        prompt_msg = await message.answer("❌ Введите положительное число.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(fine_amount=amount)
-    prompt_msg = await message.answer("Введите причину штрафа.", reply_markup=inline.get_cancel_inline_keyboard("panel:back_to_panel"))
-    await state.set_state(AdminState.FINE_REASON)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.FINE_REASON, IsAdmin())
-async def fine_user_get_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    data = await state.get_data()
-    result_text = await apply_fine_to_user(data.get("target_user_id"), message.from_user.id, data.get("fine_amount"), message.text, bot)
-    msg = await message.answer(result_text)
-    await state.clear()
-    await asyncio.sleep(5)
-    await show_admin_panel(msg)
-
-@router.message(AdminState.PROMO_CODE_NAME, IsSuperAdmin())
-async def promo_name_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    promo_name = message.text.strip().upper()
-    existing_promo = await db_manager.get_promo_by_code(promo_name)
-    if existing_promo:
-        prompt_msg = await message.answer("❌ Промокод с таким названием уже существует. Пожалуйста, придумайте другое название.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_name=promo_name)
-    prompt_msg = await message.answer("Отлично. Теперь введите количество активаций.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-    await state.set_state(AdminState.PROMO_USES)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.PROMO_USES, IsSuperAdmin())
-async def promo_uses_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    if not message.text.isdigit():
-        prompt_msg = await message.answer("❌ Пожалуйста, введите целое число.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    uses = int(message.text)
-    if uses <= 0:
-        prompt_msg = await message.answer("❌ Количество активаций должно быть больше нуля.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_uses=uses)
-    prompt_msg = await message.answer(f"Принято. Количество активаций: {uses}.\n\nТеперь введите сумму вознаграждения в звездах (например, <code>25</code>).", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-    await state.set_state(AdminState.PROMO_REWARD)
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-@router.message(AdminState.PROMO_REWARD, IsSuperAdmin())
-async def promo_reward_entered(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    try:
-        reward = float(message.text.replace(',', '.'))
-        if reward <= 0: raise ValueError
-    except (ValueError, TypeError):
-        prompt_msg = await message.answer("❌ Пожалуйста, введите положительное число (можно дробное, например <code>10.5</code>).", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-    await state.update_data(promo_reward=reward)
-    await message.answer(f"Принято. Награда: {reward} ⭐.\n\nТеперь выберите обязательное условие для получения награды.", reply_markup=inline.get_promo_condition_keyboard())
-    await state.set_state(AdminState.PROMO_CONDITION)
-
-@router.callback_query(F.data.startswith("promo_cond:"), AdminState.PROMO_CONDITION, IsSuperAdmin())
-async def promo_condition_selected(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    condition = callback.data.split(":")[1]
-    data = await state.get_data()
-    new_promo = await db_manager.create_promo_code(
-        code=data['promo_name'], total_uses=data['promo_uses'],
-        reward=data['promo_reward'], condition=condition
-    )
-    if new_promo and callback.message:
-        await callback.message.edit_text(f"✅ Промокод <code>{new_promo.code}</code> успешно создан!", reply_markup=inline.get_back_to_panel_keyboard("panel:manage_promos"))
-    elif callback.message:
-        await callback.message.edit_text("❌ Произошла ошибка при создании промокода.", reply_markup=inline.get_back_to_panel_keyboard("panel:manage_promos"))
-    await state.clear()
-    
-@router.message(AdminState.BAN_USER_IDENTIFIER, IsSuperAdmin())
-async def ban_user_get_identifier(message: Message, state: FSMContext):
-    if not message.text: return
-    await delete_previous_messages(message, state)
-    
-    identifier = message.text.strip()
-    user_id_to_ban = await db_manager.find_user_by_identifier(identifier)
-
-    if not user_id_to_ban:
-        prompt_msg = await message.answer(f"❌ Пользователь <code>{identifier}</code> не найден.", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_bans"))
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-        return
-        
-    user_to_ban = await db_manager.get_user(user_id_to_ban)
-    if user_to_ban.is_banned:
-        msg = await message.answer(f"Пользователь @{user_to_ban.username} (<code>{user_id_to_ban}</code>) уже забанен.", reply_markup=inline.get_back_to_panel_keyboard("panel:manage_bans"))
-        await state.clear()
-        return
-
-    await state.set_state(AdminState.BAN_REASON)
-    await state.update_data(user_id_to_ban=user_id_to_ban)
-    
-    prompt_msg = await message.answer(f"Введите причину бана для пользователя @{user_to_ban.username} (<code>{user_id_to_ban}</code>).", reply_markup=inline.get_cancel_inline_keyboard("panel:manage_bans"))
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-
-@router.message(AdminState.BAN_REASON, IsSuperAdmin())
-async def ban_user_reason(message: Message, state: FSMContext, bot: Bot):
-    if not message.text:
-        await message.answer("Причина не может быть пустой. Введите причину текстом.")
-        return
-        
-    await delete_previous_messages(message, state)
-    data = await state.get_data()
-    user_id_to_ban = data.get("user_id_to_ban")
-    ban_reason = message.text
-
-    success = await db_manager.ban_user(user_id_to_ban, ban_reason)
-    if not success:
-        await message.answer("❌ Произошла ошибка при бане пользователя.")
-        await state.clear()
-        return
-
-    try:
-        user_notification = (
-            f"❗️ <b>Ваш аккаунт был заблокирован администратором.</b>\n\n"
-            f"<b>Причина:</b> {ban_reason}\n\n"
-            "Вам закрыт доступ ко всем функциям бота. "
-            "Если вы считаете, что это ошибка, вы можете подать запрос на амнистию командой /unban_request."
-        )
-        await bot.send_message(user_id_to_ban, user_notification)
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id_to_ban} о бане: {e}")
-
-    msg = await message.answer(f"✅ Пользователь <code>{user_id_to_ban}</code> успешно забанен.", reply_markup=inline.get_back_to_panel_keyboard("panel:manage_bans"))
-    await state.clear()
-
-
-# --- НОВЫЙ БЛОК: СПИСКИ ЗАБАНЕННЫХ И ПРОМОКОДОВ (только для Главного Админа) ---
-
-@router.callback_query(F.data.startswith("banlist:page:"), AdminState.BAN_LIST_VIEW, IsSuperAdmin())
-async def banlist_pagination_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    page = int(callback.data.split(":")[2])
-    await show_banned_users_page(callback, state, page)
-
-@router.callback_query(F.data.startswith("promolist:page:"), AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
-async def promolist_pagination_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    page = int(callback.data.split(":")[2])
-    await show_promo_codes_page(callback, state, page)
-
-@router.callback_query(F.data == "promolist:delete_start", AdminState.PROMO_LIST_VIEW, IsSuperAdmin())
-async def promo_delete_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.set_state(AdminState.PROMO_DELETE_CONFIRM)
-    prompt_msg = await callback.message.answer(
-        "Введите ID или название промокода, который хотите удалить.",
-        reply_markup=inline.get_cancel_inline_keyboard("panel:manage_promos")
-    )
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-
-
-@router.message(AdminState.PROMO_DELETE_CONFIRM, IsSuperAdmin())
-async def process_delete_promo_id(message: Message, state: FSMContext):
-    await delete_previous_messages(message, state)
-    
-    identifier = message.text.strip()
-    promo_to_delete = None
-    
-    if identifier.isdigit():
-        promo_id = int(identifier)
-        promo_to_delete = await db_manager.get_promo_by_id(promo_id) 
-    else:
-        promo_to_delete = await db_manager.get_promo_by_code(identifier)
-
-    if not promo_to_delete:
-        await message.answer(f"❌ Промокод '{identifier}' не найден.")
-        await state.set_state(AdminState.PROMO_LIST_VIEW)
-        await show_promo_codes_page(message, state, 1)
-        return
-
-    success = await db_manager.delete_promo_code(promo_to_delete.id)
-    if success:
-        await message.answer(f"✅ Промокод `{promo_to_delete.code}` и все его активации были успешно удалены.")
-    else:
-        await message.answer(f"❌ Произошла ошибка при удалении промокода `{promo_to_delete.code}`.")
-        
-    await state.set_state(AdminState.PROMO_LIST_VIEW)
-    await show_promo_codes_page(message, state, 1)
-
-# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ АМНИСТИЯМИ ---
-
-@router.callback_query(F.data.startswith("amnesty:page:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
-async def amnesty_pagination_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    page = int(callback.data.split(":")[2])
-    await show_amnesty_page(callback, state, page)
-
-@router.callback_query(F.data.startswith("amnesty:action:"), AdminState.AMNESTY_LIST_VIEW, IsSuperAdmin())
-async def amnesty_action_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    _, action, request_id_str = callback.data.split(":")
-    request_id = int(request_id_str)
-    admin_id = callback.from_user.id
-
-    success, message_text = await process_unban_request_logic(bot, request_id, action, admin_id)
-    
-    await callback.answer(message_text, show_alert=True)
-    
-    await show_amnesty_page(callback, state, 1)
-
-
-# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ НАГРАДАМИ СТАТИСТИКИ ---
-
-async def show_reward_settings_menu(message_or_callback: Message | CallbackQuery, state: FSMContext):
+async def show_reward_settings_menu(message_or_callback: Union[Message, CallbackQuery], state: FSMContext):
     """Отображает меню настроек наград."""
     await state.set_state(AdminState.REWARD_SETTINGS_MENU)
     
@@ -1543,7 +1025,7 @@ async def process_timer_duration(message: Message, state: FSMContext):
     await message.answer(f"✅ Интервал выдачи наград установлен на {hours} часов. Изменения вступят в силу после следующего цикла.")
     await show_reward_settings_menu(message, state)
 
-# --- НОВЫЙ БЛОК: УПРАВЛЕНИЕ СИСТЕМОЙ СТАЖИРОВОК ---
+# --- БЛОК: УПРАВЛЕНИЕ СИСТЕМОЙ СТАЖИРОВОК ---
 
 @router.message(Command("internships"), IsSuperAdmin())
 async def internships_main_menu(message: Message, state: FSMContext):
@@ -1578,21 +1060,21 @@ async def view_internship_list(callback: CallbackQuery, state: FSMContext):
     if list_type == "applications":
         apps, total = await db_manager.get_paginated_applications("pending", page)
         total_pages = ceil(total / 5) if total > 0 else 1
-        text = format_applications_page(apps, page, total_pages)
+        text = internship_logic.format_applications_page(apps, page, total_pages)
         keyboard = inline.get_pagination_keyboard("admin_internships:view:applications", page, total_pages, back_callback="admin_internships:back_to_main")
         await callback.message.edit_text(text, reply_markup=keyboard)
 
     elif list_type == "candidates":
         apps, total = await db_manager.get_paginated_applications("approved", page)
         total_pages = ceil(total / 5) if total > 0 else 1
-        text = format_candidates_page(apps, page, total_pages)
+        text = internship_logic.format_candidates_page(apps, page, total_pages)
         keyboard = inline.get_pagination_keyboard("admin_internships:view:candidates", page, total_pages, back_callback="admin_internships:back_to_main")
         await callback.message.edit_text(text, reply_markup=keyboard)
 
     elif list_type == "interns":
         interns, total = await db_manager.get_paginated_interns(page)
         total_pages = ceil(total / 5) if total > 0 else 1
-        text = format_interns_page(interns, page, total_pages)
+        text = internship_logic.format_interns_page(interns, page, total_pages)
         keyboard = inline.get_pagination_keyboard("admin_internships:view:interns", page, total_pages, back_callback="admin_internships:back_to_main")
         await callback.message.edit_text(text, reply_markup=keyboard)
 
@@ -1609,7 +1091,7 @@ async def view_single_application(message: Message, state: FSMContext):
         await message.answer("Анкета не найдена.")
         return
         
-    text = format_single_application(app)
+    text = internship_logic.format_single_application(app)
     await message.answer(text, reply_markup=inline.get_admin_application_review_keyboard(app))
 
 @router.message(F.text.startswith("/view_intern_"), IsSuperAdmin())
@@ -1625,7 +1107,7 @@ async def view_single_intern(message: Message, state: FSMContext):
         await message.answer("Стажер не найден.")
         return
         
-    text = format_single_intern(intern)
+    text = internship_logic.format_single_intern(intern)
     await message.answer(text, reply_markup=inline.get_admin_intern_view_keyboard(intern))
 
 @router.message(F.text.startswith("/assign_task_"), IsSuperAdmin())
@@ -1695,7 +1177,7 @@ async def process_warning_reason(message: Message, state: FSMContext, bot: Bot):
     if not all([user_id, platform, context]):
         await message.answer("Ошибка: не найдены данные. Состояние сброшено."); await state.clear(); return
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
+    response = await admin_logic.process_warning_reason_logic(bot, user_id, platform, message.text, user_state, context)
     await message.answer(response)
     
     original_message_id = admin_data.get("original_verification_message_id")
@@ -1716,7 +1198,7 @@ async def process_rejection_reason(message: Message, state: FSMContext, bot: Bot
     if not user_id:
         await message.answer("Ошибка: не найден ID. Состояние сброшено."); await state.clear(); return
     user_state = FSMContext(storage=state.storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
-    response = await process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
+    response = await admin_logic.process_rejection_reason_logic(bot, user_id, message.text, context, user_state)
     await message.answer(response)
 
     original_message_id = admin_data.get("original_verification_message_id")
@@ -1754,7 +1236,7 @@ async def admin_process_review_text(message: Message, state: FSMContext, bot: Bo
             pass
             
     dp_dummy = Dispatcher(storage=state.storage)
-    success, response_text = await send_review_text_to_user_logic(
+    success, response_text = await admin_logic.send_review_text_to_user_logic(
         bot=bot, dp=dp_dummy, scheduler=scheduler,
         user_id=data['target_user_id'], link_id=data['target_link_id'],
         platform=data['platform'], review_text=review_text,
@@ -1781,7 +1263,7 @@ async def process_mentor_rejection_reason(message: Message, state: FSMContext, b
         await state.clear()
         return
 
-    success, message_text = await handle_mentor_verdict(
+    success, message_text = await admin_logic.handle_mentor_verdict(
         review_id=review_id,
         is_approved_by_mentor=False, # Это отклонение
         reason=reason,

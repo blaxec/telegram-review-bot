@@ -70,6 +70,7 @@ async def internship_entry_point(message: Message, state: FSMContext):
         }
         await message.answer(status_messages.get(application.status, "Статус вашей анкеты неизвестен."))
     else:
+        # --- ИСПРАВЛЕНИЕ: Вызываем правильную функцию клавиатуры ---
         await message.answer(
             "Открыта вакансия на позицию стажера!\n\n"
             "Мы ищем внимательных и ответственных людей для помощи в проверке заданий. "
