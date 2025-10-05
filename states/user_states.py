@@ -148,7 +148,7 @@ class AdminState(StatesGroup):
     ROLES_ADD_ADMIN_ROLE = State()
     ROLES_DELETE_CONFIRM = State()
     
-    # --- ИЗМЕНЕНИЕ: Добавлены состояния для конструктора постов ---
+    # Состояния для конструктора постов
     POST_CONSTRUCTOR = State()
     POST_AWAITING_BUTTON_TEXT = State()
     POST_AWAITING_BUTTON_URL = State()

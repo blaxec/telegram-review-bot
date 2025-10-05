@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from math import ceil
 
-from config import ADMIN_ID_1, ADMIN_ID_2
+from config import ADMIN_ID_1, ADMIN_ID_2, SUPER_ADMIN_ID
 from keyboards import inline
 from database import db_manager
 from logic import admin_roles
@@ -220,7 +220,6 @@ async def roles_manage_back_to_menu(callback: CallbackQuery):
         reply_markup=inline.get_roles_manage_menu()
     )
 
-# --- ИСПРАВЛЕНИЕ: Добавлена обработка исключения для пагинации ---
 @router.callback_query(F.data.startswith("roles_manage:list:"))
 async def list_admins(callback: CallbackQuery, bot: Bot):
     try:
@@ -276,15 +275,17 @@ async def toggle_tester_status(callback: CallbackQuery, bot: Bot):
     await db_manager.update_administrator(user_id, is_tester=new_status)
     await callback.answer(f"Статус тестера изменен на: {new_status}")
     
-    # --- ИЗМЕНЕНИЕ: Обновляем команды для пользователя ---
     await set_bot_commands(bot)
     
-    # Обновляем сообщение
     await view_single_admin(callback, bot)
     
 @router.callback_query(F.data.startswith("roles_manage:delete_confirm:"))
 async def confirm_delete_admin(callback: CallbackQuery, bot: Bot):
     user_id = int(callback.data.split(":")[-1])
+    if user_id == callback.from_user.id:
+        await callback.answer("Вы не можете удалить самого себя.", show_alert=True)
+        return
+        
     try:
         chat = await bot.get_chat(user_id)
         username = f"@{chat.username}" if chat.username else f"ID {user_id}"
@@ -295,19 +296,28 @@ async def confirm_delete_admin(callback: CallbackQuery, bot: Bot):
         reply_markup=inline.get_delete_admin_confirm_keyboard(user_id)
     )
 
-# --- ИСПРАВЛЕНИЕ: Исправлена ошибка ValidationError ---
 @router.callback_query(F.data.startswith("roles_manage:delete_execute:"))
 async def execute_delete_admin(callback: CallbackQuery, bot: Bot):
     user_id = int(callback.data.split(":")[-1])
-    success = await db_manager.delete_administrator(user_id)
+    
+    # Добавлена повторная проверка на самоудаление
+    if user_id == callback.from_user.id:
+        await callback.answer("Вы не можете удалить самого себя.", show_alert=True)
+        return
+
+    success = await db_manager.delete_administrator(user_id, self_delete_check=callback.from_user.id)
     if success:
-        await callback.answer("Администратор удален.", show_alert=True)
+        # Переназначаем роли удаленного админа на главного
+        await db_manager.reassign_tasks_from_deleted_admin(user_id, SUPER_ADMIN_ID)
+        
+        await callback.answer("Администратор удален. Его роли переданы главному администратору.", show_alert=True)
         # Обновляем команды для всех
         await set_bot_commands(bot)
         # Возвращаемся к списку, вызывая ту же логику, что и для `list_admins`
+        callback.data = "roles_manage:list:1"
         await list_admins(callback, bot)
     else:
-        await callback.answer("Не удалось удалить этого администратора.", show_alert=True)
+        await callback.answer("Не удалось удалить этого администратора (возможно, он несъемный или вы пытаетесь удалить себя).", show_alert=True)
 
 
 @router.callback_query(F.data == "roles_manage:add")
@@ -353,7 +363,6 @@ async def process_add_admin_role(callback: CallbackQuery, state: FSMContext, bot
     
     if success:
         await callback.answer("Администратор успешно добавлен!", show_alert=True)
-        # --- ИЗМЕНЕНИЕ: Обновляем команды ---
         await set_bot_commands(bot)
     else:
         await callback.answer("Ошибка при добавлении администратора.", show_alert=True)
@@ -362,4 +371,5 @@ async def process_add_admin_role(callback: CallbackQuery, state: FSMContext, bot
     await callback.message.delete()
     
     # Возвращаемся к списку администраторов
+    callback.data = "roles_manage:list:1"
     await list_admins(callback, bot)

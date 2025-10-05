@@ -13,8 +13,6 @@ from database import db_manager
 from keyboards import reply, inline
 from states.user_states import UserState
 from config import Durations
-# --- ИЗМЕНЕНИЕ: Импорт перенесен внутрь функции, чтобы избежать циклической зависимости при старте ---
-# from logic.admin_roles import get_other_hold_admin
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +59,6 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
 
 async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, state: FSMContext):
     """Срабатывает, если пользователь не прислал подтверждающий скриншот вовремя."""
-    # --- ИЗМЕНЕНИЕ: Импорт перенесен внутрь функции ---
     from logic.admin_roles import get_other_hold_admin
 
     current_state_str = await state.get_state()

@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from config import Durations, Limits
 from database import db_manager
 from keyboards import inline
+# --- ИСПРАВЛЕНИЕ: Добавлены недостающие импорты ---
 from logic.admin_logic import (apply_fine_to_user, format_banned_user_page,
                                format_complaints_page, format_promo_code_page,
                                get_unban_requests_page, get_user_hold_info_logic,
@@ -192,7 +193,9 @@ async def show_amnesty_page(callback: CallbackQuery, state: FSMContext, page: in
     text = await get_unban_requests_page(requests, page, total_pages)
     await callback.message.edit_text(text, reply_markup=inline.get_amnesty_keyboard(requests, page, total_pages))
 
+# --- ИСПРАВЛЕНИЕ: Теперь функция использует правильную таблицу ---
 async def show_complaints_page(callback: CallbackQuery, state: FSMContext, page: int):
+    # Важно: таблица transfer_complaints должна быть создана миграцией
     complaints, total = await db_manager.get_transfer_complaints(page=page)
     total_pages = ceil(total / 5) if total > 0 else 1
     text = await format_complaints_page(complaints, page, total_pages)

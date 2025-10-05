@@ -1274,15 +1274,32 @@ async def get_all_administrators_by_role() -> List[Administrator]:
         result = await session.execute(query)
         return result.scalars().all()
 
-async def delete_administrator(user_id: int) -> bool:
-    """Удаляет администратора по ID."""
+async def delete_administrator(user_id: int, self_delete_check: int = 0) -> bool:
+    """Удаляет администратора по ID, с проверкой на самоудаление."""
     async with async_session() as session:
         async with session.begin():
             admin = await session.get(Administrator, user_id)
             if not admin or not admin.is_removable:
                 return False
+            
+            # Проверка на самоудаление
+            if user_id == self_delete_check:
+                logger.warning(f"Admin {user_id} attempted to self-delete. Action blocked.")
+                return False
+                
             await session.delete(admin)
             return True
+
+async def reassign_tasks_from_deleted_admin(deleted_admin_id: int, default_admin_id: int):
+    """Переназначает все роли удаленного админа на админа по умолчанию."""
+    async with async_session() as session:
+        async with session.begin():
+            stmt = update(SystemSetting).where(
+                SystemSetting.value == str(deleted_admin_id)
+            ).values(value=str(default_admin_id))
+            await session.execute(stmt)
+            logger.info(f"Reassigned all roles from deleted admin {deleted_admin_id} to default admin {default_admin_id}.")
+
 
 async def update_administrator(user_id: int, **kwargs) -> Optional[Administrator]:
     """Обновляет данные администратора."""

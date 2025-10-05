@@ -24,7 +24,6 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent, BotComman
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- ИЗМЕНЕНИЕ: Обновляем импорты ---
 from handlers import (start, profile, support, earning, admin_panel, admin_moderation, gmail,
                       stats, promo, other, ban_system, referral, admin_roles, internship, posting)
 from database import db_manager
@@ -96,7 +95,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="start", description="🚀 Перезапустить бота"),
         BotCommand(command="skip", description="⚡️ [ТЕСТ] Пропустить таймер"),
         BotCommand(command="expire", description="💥 [ТЕСТ] Провалить таймер"),
-        BotCommand(command="getstate", description="ℹ️ [ТЕСТ] Узнать свой FSM state")
+        BotCommand(command="getstate", description="ℹ️ [ТЕСТ] Узнать свой FSM state"),
+        BotCommand(command="addstars", description="💰 [ТЕСТ] Начислить 999 звезд")
     ]
 
     try:
@@ -169,7 +169,6 @@ async def main():
     dp.update.outer_middleware(BanMiddleware())
     dp.update.outer_middleware(UsernameUpdaterMiddleware())
     
-    # --- ИЗМЕНЕНИЕ: Подключаем новые роутеры ---
     dp.include_router(start.router)
     dp.include_router(admin_panel.router)
     dp.include_router(admin_moderation.router)

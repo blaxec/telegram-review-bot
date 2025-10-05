@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from states.user_states import UserState
 from keyboards import reply, inline
 from database import db_manager
-from config import Durations, TESTER_IDS
+from config import Durations, Rewards
 from references import reference_manager
 from utils.tester_filter import IsTester
 from logic.user_notifications import (
@@ -22,7 +22,6 @@ from logic.user_notifications import (
     send_confirmation_button,
     handle_task_timeout
 )
-# --- ИЗМЕНЕНИЕ: Добавляем импорт для таймаута Gmail ---
 from handlers.gmail import cancel_gmail_verification_timeout
 
 
@@ -75,6 +74,13 @@ async def get_current_state(message: Message, state: FSMContext):
     )
     await message.answer(diagnostics_text)
 
+@router.message(Command("addstars"), IsTester())
+async def add_stars_command(message: Message):
+    """[ТЕСТОВАЯ КОМАНДА] Добавляет 999 звезд на баланс тестера."""
+    await db_manager.update_balance(message.from_user.id, Rewards.ADMIN_ADD_STARS, "TOP_REWARD", "Тестовое начисление")
+    await message.answer(f"✅ Вам начислено {Rewards.ADMIN_ADD_STARS} звезд.")
+
+
 SKIP_ALLOWED_STATES = {
     UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
     UserState.GOOGLE_REVIEW_TASK_ACTIVE,
@@ -106,7 +112,6 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
         except Exception: pass
 
     response_msg = None
-    # --- ИЗМЕНЕНИЕ: Передаем state в функции отправки кнопок ---
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
         await send_liking_confirmation_button(bot, user_id, state)
         response_msg = await message.answer("✅ Таймер лайков пропущен.")
@@ -143,7 +148,6 @@ async def skip_timer_command_failed(message: Message):
     )
     asyncio.create_task(schedule_message_deletion(response_msg, 5))
 
-# --- ИЗМЕНЕНИЕ: Полностью переработанная команда /expire ---
 @router.message(Command("expire"), IsTester(), StateFilter(*ACTIVE_TASK_STATES))
 async def expire_task_command(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     """
@@ -154,7 +158,6 @@ async def expire_task_command(message: Message, state: FSMContext, bot: Bot, sch
     current_state_str = await state.get_state()
     user_data = await state.get_data()
 
-    # Находим и отменяем любой активный таймер
     job_ids = ["timeout_job_id", "confirm_job_id", "confirmation_timeout_job_id", "gmail_timeout_job_id"]
     for job_id_key in job_ids:
         if job_id := user_data.get(job_id_key):
@@ -167,12 +170,10 @@ async def expire_task_command(message: Message, state: FSMContext, bot: Bot, sch
     await message.answer(f"⚙️ Имитирую истечение таймера для состояния: {current_state_str}...")
     await message.delete()
 
-    # Вызываем соответствующую функцию таймаута в зависимости от состояния
     if current_state_str == UserState.GMAIL_AWAITING_VERIFICATION.state:
         await cancel_gmail_verification_timeout(bot, user_id, state)
         logger.info(f"Tester {user_id} manually expired GMAIL task.")
     else:
-        # Для всех остальных задач используем универсальный обработчик
         platform = user_data.get("platform_for_task", "unknown_platform")
         await handle_task_timeout(
             bot=bot,
@@ -272,15 +273,12 @@ async def generic_cancel_logic(user_id: int, bot: Bot, state: FSMContext):
     if current_state is None:
         return "Нечего отменять. Вы уже в главном меню."
 
-    # Освобождаем ссылку, если она была взята
     await reference_manager.release_reference_from_user(user_id, 'available')
     
-    # Проверяем, был ли пользователь занятым стажером
     user = await db_manager.get_user(user_id)
     if user and user.is_busy_intern:
         await db_manager.set_intern_busy_status(user_id, is_busy=False)
         logger.info(f"User {user_id} cancelled a task, their intern busy status has been reset.")
-        # Здесь можно добавить уведомление ментору, если это необходимо
     
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)

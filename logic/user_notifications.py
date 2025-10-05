@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logic.notification_manager import send_notification_to_admins
 from states.user_states import UserState
+from config import Durations
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,6 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
     current_state_str = await state.get_state()
-    # --- ИСПРАВЛЕНИЕ: Убрана слишком строгая проверка состояний ---
     if not current_state_str:
         logger.info(f"Timeout handler for user {user_id} triggered, but state is None. Aborting.")
         return
@@ -142,7 +142,7 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
 
     await state.clear()
     
-    timeout_message = "Время, выделенное на выполнение работы, истекло. Следующая возможность написать отзыв будет через три дня (72:00:00)."
+    timeout_message = f"Время, выделенное на выполнение работы, истекло. Следующая возможность написать отзыв для этой платформы будет через {cooldown_hours} часа."
     
     admin_notification = f"❗️ Пользователь @{user_data.get('username', '???')} (ID: {user_id}) не успел выполнить задание ({message_to_admins}) вовремя. Ссылка была возвращена в пул доступных."
     
@@ -156,7 +156,6 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
             task_type = "yandex_with_text_issue_text"
 
         if task_type:
-            # Используем import здесь, чтобы избежать циклических зависимостей
             from logic.notification_manager import send_notification_to_admins
             await send_notification_to_admins(bot, text=admin_notification, task_type=task_type, scheduler=scheduler)
 
