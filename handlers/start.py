@@ -168,7 +168,7 @@ async def expire_task_command(message: Message, state: FSMContext, bot: Bot, sch
     await message.delete()
 
     # Вызываем соответствующую функцию таймаута в зависимости от состояния
-    if current_state_str == UserState.GMAIL_AWAITING_VERIFICATION:
+    if current_state_str == UserState.GMAIL_AWAITING_VERIFICATION.state:
         await cancel_gmail_verification_timeout(bot, user_id, state)
         logger.info(f"Tester {user_id} manually expired GMAIL task.")
     else:

@@ -14,11 +14,12 @@ from utils.access_filters import IsSuperAdmin
 from states.user_states import AdminState
 
 
-router = Router()
-logger = logging.getLogger(__name__)
-
 # --- ИЗМЕНЕНИЕ: Импортируем функцию для обновления команд ---
 from main import set_bot_commands
+
+
+router = Router()
+logger = logging.getLogger(__name__)
 
 
 async def delete_and_clear_prompt(message: Message, state: FSMContext):
@@ -219,9 +220,14 @@ async def roles_manage_back_to_menu(callback: CallbackQuery):
         reply_markup=inline.get_roles_manage_menu()
     )
 
+# --- ИСПРАВЛЕНИЕ: Добавлена обработка исключения для пагинации ---
 @router.callback_query(F.data.startswith("roles_manage:list:"))
 async def list_admins(callback: CallbackQuery, bot: Bot):
-    page = int(callback.data.split(":")[-1])
+    try:
+        page = int(callback.data.split(":")[-1])
+    except (ValueError, IndexError):
+        page = 1
+
     admins_per_page = 5
     
     all_admins = await db_manager.get_all_administrators_by_role()
@@ -289,18 +295,20 @@ async def confirm_delete_admin(callback: CallbackQuery, bot: Bot):
         reply_markup=inline.get_delete_admin_confirm_keyboard(user_id)
     )
 
+# --- ИСПРАВЛЕНИЕ: Исправлена ошибка ValidationError ---
 @router.callback_query(F.data.startswith("roles_manage:delete_execute:"))
 async def execute_delete_admin(callback: CallbackQuery, bot: Bot):
     user_id = int(callback.data.split(":")[-1])
     success = await db_manager.delete_administrator(user_id)
     if success:
         await callback.answer("Администратор удален.", show_alert=True)
-        # --- ИЗМЕНЕНИЕ: Обновляем команды для всех ---
+        # Обновляем команды для всех
         await set_bot_commands(bot)
-        # --- ИСПРАВЛЕНИЕ: Вместо изменения callback.data, просто вызываем нужную функцию ---
+        # Возвращаемся к списку, вызывая ту же логику, что и для `list_admins`
         await list_admins(callback, bot)
     else:
         await callback.answer("Не удалось удалить этого администратора.", show_alert=True)
+
 
 @router.callback_query(F.data == "roles_manage:add")
 async def add_admin_start(callback: CallbackQuery, state: FSMContext):
@@ -353,5 +361,5 @@ async def process_add_admin_role(callback: CallbackQuery, state: FSMContext, bot
     await state.clear()
     await callback.message.delete()
     
-    # --- ИСПРАВЛЕНИЕ: Вызываем list_admins с правильными аргументами ---
+    # Возвращаемся к списку администраторов
     await list_admins(callback, bot)

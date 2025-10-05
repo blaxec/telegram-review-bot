@@ -99,11 +99,14 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="getstate", description="ℹ️ [ТЕСТ] Узнать свой FSM state")
     ]
 
-    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
-    logger.info("Default user commands have been set for all users.")
+    try:
+        await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+        logger.info("Default user commands have been set for all users.")
+    except Exception as e:
+        logger.error(f"Failed to set default commands: {e}")
+
 
     all_admins = await db_manager.get_all_administrators_by_role()
-    all_testers_id = {admin.user_id for admin in all_admins if admin.is_tester}
 
     for admin in all_admins:
         try:

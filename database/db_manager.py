@@ -454,7 +454,7 @@ async def create_withdrawal_request(user_id: int, amount: float, recipient_info:
                 return None
 
             user.balance -= amount
-            await log_operation(session, user_id, "WITHDRAWAL", -amount, f"Запрос на вывод для {recipient_info}")
+            await log_operation(session, user_id, "WITHDRAWAL", -amount, f"Запрос на вывод для {recipient_info}", comment=comment)
 
             new_request = WithdrawalRequest(
                 user_id=user_id,
@@ -1324,7 +1324,7 @@ async def get_user_ids_for_broadcast(audience: List[str]) -> Set[int]:
             
     return user_ids
 
-async def save_post_template(template_name: str, text: str, media_json: str, created_by: int) -> Tuple[bool, str]:
+async def save_post_template(template_name: str, text: str, media_json: str, buttons_json: str, created_by: int) -> Tuple[bool, str]:
     """Сохраняет шаблон поста в базу данных."""
     async with async_session() as session:
         async with session.begin():
@@ -1336,6 +1336,7 @@ async def save_post_template(template_name: str, text: str, media_json: str, cre
                 template_name=template_name,
                 text=text,
                 media_json=media_json,
+                buttons_json=buttons_json,
                 created_by=created_by
             )
             session.add(new_template)

@@ -13,7 +13,7 @@ from database import db_manager
 from keyboards import reply, inline
 from states.user_states import UserState
 from config import Durations
-# --- ИЗМЕНЕНИЕ: Удалите эту строку ---
+# --- ИЗМЕНЕНИЕ: Импорт перенесен внутрь функции, чтобы избежать циклической зависимости при старте ---
 # from logic.admin_roles import get_other_hold_admin
 
 logger = logging.getLogger(__name__)
@@ -61,12 +61,12 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
 
 async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, state: FSMContext):
     """Срабатывает, если пользователь не прислал подтверждающий скриншот вовремя."""
-    # --- ИЗМЕНЕНИЕ: Перенесите импорт внутрь функции ---
+    # --- ИЗМЕНЕНИЕ: Импорт перенесен внутрь функции ---
     from logic.admin_roles import get_other_hold_admin
 
-    current_state = await state.get_state()
-    if current_state != UserState.AWAITING_CONFIRMATION_SCREENSHOT:
-        logger.info(f"Confirmation timeout for review {review_id} (user {user_id}) triggered, but user is in state {current_state}. Aborting.")
+    current_state_str = await state.get_state()
+    if current_state_str != UserState.AWAITING_CONFIRMATION_SCREENSHOT.state:
+        logger.info(f"Confirmation timeout for review {review_id} (user {user_id}) triggered, but user is in state {current_state_str}. Aborting.")
         return
         
     review = await db_manager.cancel_hold(review_id)
@@ -81,10 +81,11 @@ async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, st
                 f"⏳ К сожалению, время на подтверждение отзыва истекло. Холд для отзыва #{review_id} был отменен."
             )
             admin_id = await get_other_hold_admin()
-            await bot.send_message(
-                admin_id,
-                f"⚠️ Пользователь @{review.user.username} (ID: <code>{user_id}</code>) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
-            )
+            if review.user: # Убедимся, что пользователь загружен
+                await bot.send_message(
+                    admin_id,
+                    f"⚠️ Пользователь @{review.user.username} (ID: <code>{user_id}</code>) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
+                )
         except Exception as e:
             logger.error(f"Failed to notify about confirmation timeout for review {review_id}: {e}")
 

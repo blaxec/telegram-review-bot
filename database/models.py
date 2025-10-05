@@ -183,8 +183,9 @@ class OperationHistory(Base):
     # Новые поля для переводов
     comment = Column(Text, nullable=True)
     media_json = Column(Text, nullable=True)
-    is_anonymous = Column(Boolean, default=False)
-    # --- ИЗМЕНЕНИЕ: Добавлен ForeignKey для связи с таблицей users ---
+    is_anonymous = Column(Boolean, default=False, nullable=False)
+    # --- ИЗМЕНЕНИЕ: Убрано server_default=sa.text('false') ---
+    # Это не нужно, так как default=False уже есть
     sender_id = Column(BigInteger, ForeignKey('users.id'), nullable=True)
 
     user = relationship("User", back_populates="operations", foreign_keys=[user_id])
@@ -269,6 +270,8 @@ class PostTemplate(Base):
     template_name = Column(String, unique=True, nullable=False)
     text = Column(Text, nullable=True)
     media_json = Column(Text, nullable=True)
+    # --- ИЗМЕНЕНИЕ: Добавлено поле с кнопками ---
+    buttons_json = Column(Text, nullable=True)
     created_by = Column(BigInteger, nullable=False)
 
 class TransferComplaint(Base):

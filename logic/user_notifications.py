@@ -119,14 +119,9 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     state = FSMContext(storage=storage, key=StorageKey(bot_id=bot.id, user_id=user_id, chat_id=user_id))
     
     current_state_str = await state.get_state()
-    allowed_states_for_timeout = [
-        UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE,
-        UserState.GOOGLE_REVIEW_TASK_ACTIVE,
-        UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE,
-        UserState.YANDEX_REVIEW_TASK_ACTIVE,
-    ]
-    if not current_state_str or current_state_str not in [s.state for s in allowed_states_for_timeout]:
-        logger.info(f"Timeout handler for user {user_id} triggered, but state is '{current_state_str}'. Aborting.")
+    # --- ИСПРАВЛЕНИЕ: Убрана слишком строгая проверка состояний ---
+    if not current_state_str:
+        logger.info(f"Timeout handler for user {user_id} triggered, but state is None. Aborting.")
         return
 
     logger.info(f"Timeout for user {user_id} on platform {platform}. Current state: {current_state_str}. Releasing reference and setting cooldown.")
