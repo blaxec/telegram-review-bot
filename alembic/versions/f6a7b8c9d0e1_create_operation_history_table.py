@@ -27,13 +27,11 @@ def upgrade() -> None:
     sa.Column('amount', sa.Float(), nullable=False),
     sa.Column('description', sa.String(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ: Добавлены недостающие колонки ---
     sa.Column('comment', sa.Text(), nullable=True),
     sa.Column('media_json', sa.Text(), nullable=True),
     sa.Column('is_anonymous', sa.Boolean(), server_default=sa.text('false'), nullable=False),
     sa.Column('sender_id', sa.BigInteger(), nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ: Добавлен ForeignKey для sender_id ---
     sa.ForeignKeyConstraint(['sender_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )

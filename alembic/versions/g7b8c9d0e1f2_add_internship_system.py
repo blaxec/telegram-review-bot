@@ -3,7 +3,7 @@
 """add internship system
 
 Revision ID: g7b8c9d0e1f2
-Revises: a0b1c2d3e4f5
+Revises: f6a7b8c9d0e1
 Create Date: 2025-09-21 10:00:00.000000
 
 """
@@ -15,7 +15,6 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'g7b8c9d0e1f2'
-# --- ИЗМЕНЕНИЕ ЗДЕСЬ: Цепочка миграций исправлена ---
 down_revision: Union[str, None] = 'f6a7b8c9d0e1'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
