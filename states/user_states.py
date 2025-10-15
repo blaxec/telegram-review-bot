@@ -116,7 +116,14 @@ class AdminState(StatesGroup):
     SUPPORT_AWAITING_COOLDOWN_HOURS = State()
 
     # Состояния для управления ссылками
-    ADD_LINKS = State() 
+    ADD_LINKS_PLATFORM = State()
+    ADD_LINKS_TYPE = State()
+    waiting_for_reward_amount = State()
+    waiting_for_gender_requirement = State()
+    waiting_for_campaign_tag = State()
+    waiting_for_links = State()
+    waiting_for_reward_filter_amount = State()
+    
     DELETE_LINK_ID = State()
     RETURN_LINK_ID = State()
     LINK_LIST_VIEW = State()
@@ -153,3 +160,22 @@ class AdminState(StatesGroup):
     POST_AWAITING_BUTTON_TEXT = State()
     POST_AWAITING_BUTTON_URL = State()
     POST_AWAITING_SAVE_NAME = State()
+
+    # Состояния для банка сценариев
+    SCENARIO_CHOOSING_CATEGORY = State()
+    waiting_for_scenario_text = State()
+    waiting_for_scenario_id_to_delete = State()
+    waiting_for_edited_scenario_text = State()
+
+
+class CoinflipStates(StatesGroup):
+    waiting_for_bet = State()
+    waiting_for_custom_bet = State()
+    waiting_for_choice = State()
+
+class DepositStates(StatesGroup):
+    choosing_plan = State()
+    waiting_for_amount = State()
+
+class DonationStates(StatesGroup):
+    waiting_for_donation_amount = State()

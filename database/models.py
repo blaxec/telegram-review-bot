@@ -2,7 +2,7 @@
 
 import datetime
 from sqlalchemy import (Column, Integer, String, BigInteger, JSON,
-                        DateTime, ForeignKey, Float, Enum, Boolean, Text)
+                        DateTime, ForeignKey, Float, Enum, Boolean, Text, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -47,6 +47,11 @@ class User(Base):
     
     is_intern = Column(Boolean, default=False, nullable=False)
     is_busy_intern = Column(Boolean, default=False, nullable=False)
+    
+    # Новые поля
+    first_task_completed = Column(Boolean, default=False, nullable=False)
+    win_streak = Column(Integer, default=0, nullable=False)
+    last_help_request_at = Column(DateTime, nullable=True)
 
 
     reviews = relationship("Review", back_populates="user")
@@ -54,6 +59,9 @@ class User(Base):
     support_tickets = relationship("SupportTicket", back_populates="user")
     operations = relationship("OperationHistory", back_populates="user", foreign_keys='OperationHistory.user_id')
     unban_requests = relationship("UnbanRequest", back_populates="user")
+    task_subscriptions = relationship("TaskSubscription", back_populates="user", cascade="all, delete-orphan")
+    user_deposits = relationship("UserDeposit", back_populates="user", cascade="all, delete-orphan")
+    donations = relationship("Donation", back_populates="user", cascade="all, delete-orphan")
     
     internship_application = relationship("InternshipApplication", back_populates="user", uselist=False, cascade="all, delete-orphan")
     internship_tasks = relationship("InternshipTask", back_populates="intern")
@@ -79,6 +87,9 @@ class Review(Base):
     confirmation_screenshot_file_id = Column(String, nullable=True)
     attached_photo_file_id = Column(String, nullable=True)
     
+    # Новое поле
+    stake_amount = Column(Float, nullable=True)
+    
     link = relationship("Link")
     user = relationship("User", back_populates="reviews")
 
@@ -94,6 +105,11 @@ class Link(Base):
     assigned_at = Column(DateTime, nullable=True)
     is_fast_track = Column(Boolean, default=False, nullable=False)
     requires_photo = Column(Boolean, default=False, nullable=False)
+    
+    # Новые поля
+    reward_amount = Column(Float, nullable=False, default=0.0)
+    gender_requirement = Column(Enum('any', 'male', 'female', name='gender_enum'), nullable=False, default='any')
+    campaign_tag = Column(String(255), nullable=True)
 
 
 class WithdrawalRequest(Base):
@@ -174,6 +190,7 @@ class OperationHistory(Base):
     operation_type = Column(Enum(
         'REVIEW_APPROVED', 'PROMO_ACTIVATED', 'WITHDRAWAL', 'FINE', 
         'TRANSFER_SENT', 'TRANSFER_RECEIVED', 'TOP_REWARD',
+        'DEPOSIT_OPEN', 'DEPOSIT_CLOSE', 'DONATION', 'HELP_RECEIVED', # Новые типы
         name='operation_type_enum'
     ), nullable=False)
     amount = Column(Float, nullable=False)
@@ -282,3 +299,45 @@ class TransferComplaint(Base):
     
     transfer = relationship("OperationHistory", back_populates="complaints")
     complainant = relationship("User", foreign_keys=[complainant_id])
+
+# --- Новые модели ---
+
+class TaskSubscription(Base):
+    __tablename__ = 'task_subscriptions'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    platform = Column(String, nullable=False)
+    gender = Column(Enum('any', 'male', 'female', name='gender_enum'), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="task_subscriptions")
+
+    __table_args__ = (UniqueConstraint('user_id', 'platform', 'gender'),)
+
+class AIScenario(Base):
+    __tablename__ = 'ai_scenarios'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String, nullable=False)
+    text = Column(Text, nullable=False)
+
+class UserDeposit(Base):
+    __tablename__ = 'user_deposits'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    deposit_plan_id = Column(String, nullable=False)
+    initial_amount = Column(Float, nullable=False)
+    current_balance = Column(Float, nullable=False)
+    opens_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    closes_at = Column(DateTime, nullable=False)
+    last_accrual_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="user_deposits")
+
+class Donation(Base):
+    __tablename__ = 'donations'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    amount = Column(Float, nullable=False)
+    donated_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="donations")

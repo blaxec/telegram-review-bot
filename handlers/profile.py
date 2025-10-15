@@ -38,7 +38,6 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     
     user = await db_manager.get_user(user_id)
     if not user:
-        # В случае сбоя отправляем новое сообщение, а не пытаемся редактировать
         await bot.send_message(user_id, "Произошла критическая ошибка, не удалось найти или создать ваш профиль. Попробуйте /start")
         return
 
@@ -46,13 +45,13 @@ async def show_profile_menu(message_or_callback: Message | CallbackQuery, state:
     referrer_info = await db_manager.get_referrer_info(user_id)
     
     profile_text = (
-        f"✨ Ваш <b>Профиль</b> ✨\n\n"
+        f"✨ Ваш **Профиль** ✨\n\n"
         f"Вас пригласил: {referrer_info}\n"
         f"Баланс звезд: {balance:.2f} ⭐\n"
         f"В холде: {hold_balance:.2f} ⭐"
     )
     
-    keyboard = inline.get_profile_keyboard()
+    keyboard = inline.get_profile_keyboard(user.first_task_completed)
     
     is_message = isinstance(message_or_callback, Message)
     target_message = message_or_callback if is_message else message_or_callback.message
@@ -92,7 +91,7 @@ async def show_operation_history(callback: CallbackQuery):
     user_id = callback.from_user.id
     operations = await db_manager.get_operation_history(user_id)
 
-    text = "📜 <b>История операций за последние 24 часа:</b>\n\n"
+    text = "📜 **История операций за последние 24 часа:**\n\n"
     if not operations:
         text += "Операций не найдено."
     else:
@@ -104,7 +103,9 @@ async def show_operation_history(callback: CallbackQuery):
                 "REVIEW_APPROVED": "✅ Одобрен отзыв", "PROMO_ACTIVATED": "🎁 Активация промокода",
                 "WITHDRAWAL": "📤 Запрос на вывод", "FINE": "💸 Штраф",
                 "TRANSFER_SENT": "➡️ Перевод звезд", "TRANSFER_RECEIVED": "⬅️ Получение звезд",
-                "TOP_REWARD": "🏆 Награда"
+                "TOP_REWARD": "🏆 Награда", "DEPOSIT_OPEN": "🏦 Открыт депозит",
+                "DEPOSIT_CLOSE": "💰 Закрыт депозит", "DONATION": "💖 Пожертвование",
+                "HELP_RECEIVED": "🎁 Помощь новичку"
             }
             op_description = op_map.get(op.operation_type, "Неизвестная операция")
             
@@ -119,7 +120,7 @@ async def show_operation_history(callback: CallbackQuery):
             elif op.description:
                 description_suffix = f" ({op.description})"
 
-            text += f"<code>{time_str}</code>: {op_description} {amount_str}{description_suffix}\n"
+            text += f"`{time_str}`: {op_description} {amount_str}{description_suffix}\n"
     
     if callback.message:
         await callback.message.edit_text(text, reply_markup=inline.get_operation_history_keyboard(), parse_mode="HTML")
@@ -189,7 +190,7 @@ async def process_transfer_recipient(message: Message, state: FSMContext):
     recipient_user = await db_manager.get_user(recipient_id)
     recipient_info = f"@{recipient_user.username}" if recipient_user and recipient_user.username else f"ID: {recipient_id}"
     
-    text = (f"<b>Перевод для {recipient_info}</b>\n\n"
+    text = (f"**Перевод для {recipient_info}**\n\n"
             f"Вы можете добавить комментарий, медиа или отправить перевод анонимно. Когда будете готовы, нажмите 'Продолжить'.")
 
     prompt_msg = await message.answer(text, reply_markup=inline.get_transfer_options_keyboard(data))
@@ -223,17 +224,15 @@ async def process_transfer_comment(message: Message, state: FSMContext):
     await delete_prompt_message(message, state)
     await state.set_state(UserState.TRANSFER_OPTIONS)
     
-    # Возвращаемся к меню опций
     data = await state.get_data()
     recipient_user = await db_manager.get_user(data['recipient_id'])
     recipient_info = f"@{recipient_user.username}" if recipient_user and recipient_user.username else f"ID: {data['recipient_id']}"
-    text = f"<b>Перевод для {recipient_info}</b>\n\nВыберите дальнейшие действия или нажмите 'Продолжить'."
+    text = f"**Перевод для {recipient_info}**\n\nВыберите дальнейшие действия или нажмите 'Продолжить'."
     prompt_msg = await message.answer(text, reply_markup=inline.get_transfer_options_keyboard(data))
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(UserState.TRANSFER_AWAITING_MEDIA, F.photo | F.video | F.animation)
 async def process_transfer_media(message: Message, state: FSMContext, bot: Bot):
-    # Логика добавления медиа (аналогично posting.py)
     data = await state.get_data()
     media_list = data.get("transfer_media", [])
     current_weight = sum(m.get('weight', 1) for m in media_list)
@@ -274,7 +273,7 @@ async def transfer_media_done(callback: CallbackQuery, state: FSMContext, bot: B
     data = await state.get_data()
     recipient_user = await db_manager.get_user(data['recipient_id'])
     recipient_info = f"@{recipient_user.username}" if recipient_user and recipient_user.username else f"ID: {data['recipient_id']}"
-    text = f"<b>Перевод для {recipient_info}</b>\n\nМедиа добавлены. Выберите дальнейшие действия."
+    text = f"**Перевод для {recipient_info}**\n\nМедиа добавлены. Выберите дальнейшие действия."
     prompt_msg = await bot.send_message(callback.from_user.id, text, reply_markup=inline.get_transfer_options_keyboard(data))
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -287,14 +286,14 @@ async def ask_for_transfer_confirmation(message: Message, state: FSMContext):
     total_to_deduct = amount + commission
 
     confirmation_text = (
-        f"<b>Подтверждение перевода</b>\n\n"
-        f"<b>Получатель:</b> {recipient_info}\n"
-        f"<b>Сумма:</b> {amount:.2f} ⭐\n"
-        f"<b>Комиссия:</b> {commission:.2f} ⭐\n"
-        f"<b>К списанию: {total_to_deduct:.2f} ⭐</b>\n\n"
-        f"<b>Комментарий:</b> {data.get('transfer_comment') or 'Нет'}\n"
-        f"<b>Медиа:</b> {len(data.get('transfer_media', []))} шт.\n"
-        f"<b>Анонимно:</b> {'Да' if data.get('is_anonymous') else 'Нет'}\n\n"
+        f"**Подтверждение перевода**\n\n"
+        f"**Получатель:** {recipient_info}\n"
+        f"**Сумма:** {amount:.2f} ⭐\n"
+        f"**Комиссия:** {commission:.2f} ⭐\n"
+        f"**К списанию: {total_to_deduct:.2f} ⭐**\n\n"
+        f"**Комментарий:** {data.get('transfer_comment') or 'Нет'}\n"
+        f"**Медиа:** {len(data.get('transfer_media', []))} шт.\n"
+        f"**Анонимно:** {'Да' if data.get('is_anonymous') else 'Нет'}\n\n"
         "Подтверждаете операцию?"
     )
     
@@ -316,14 +315,21 @@ async def finish_transfer(user: User, state: FSMContext, bot: Bot):
     success, transfer_id = await db_manager.transfer_stars(sender_id, recipient_id, amount, comment, is_anonymous, media)
 
     if not success:
-        await bot.send_message(sender_id, "Произошла ошибка при переводе.", reply_markup=reply.get_main_menu_keyboard())
+        if transfer_id == -1:
+            await bot.send_message(
+                sender_id,
+                "❌ **Перевод невозможен.**\n\nЭтот пользователь еще не выполнил ни одного задания. "
+                "Он сможет получать переводы только после того, как его первый отзыв будет одобрен."
+            )
+        else:
+            await bot.send_message(sender_id, "Произошла ошибка при переводе (возможно, недостаточно средств).", reply_markup=reply.get_main_menu_keyboard())
         await state.clear()
         return
 
     sender_info = "Анонимный отправитель" if is_anonymous else (f"@{sender_username}" if sender_username else f"ID {sender_id}")
-    notification_text = f"✨ Вам переведены <b>{amount:.2f} ⭐</b> от {sender_info}!"
+    notification_text = f"✨ Вам переведены **{amount:.2f} ⭐** от {sender_info}!"
     if comment:
-        notification_text += f"\n\n<i>Комментарий:</i> {comment}"
+        notification_text += f"\n\n*Комментарий:* {comment}"
         
     try:
         if not media:
@@ -336,7 +342,7 @@ async def finish_transfer(user: User, state: FSMContext, bot: Bot):
                 elif m['type'] == 'gif': media_group.append(InputMediaAnimation(media=m['file_id'], caption=notification_text if i == 0 else None))
             
             await bot.send_media_group(recipient_id, media_group)
-            await bot.send_message(recipient_id, "⠀", reply_markup=inline.get_transfer_recipient_keyboard(transfer_id)) # Отправляем кнопку отдельно
+            await bot.send_message(recipient_id, "⠀", reply_markup=inline.get_transfer_recipient_keyboard(transfer_id))
     except Exception as e:
         logger.error(f"Не удалось уведомить о переводе {recipient_id}: {e}")
 
@@ -370,13 +376,11 @@ async def process_complaint_reason(message: Message, state: FSMContext, bot: Bot
         except Exception as e:
             logger.error(f"Failed to notify admin about complaint: {e}")
     else:
-        await message.answer("❌ Не удалось отправить жалобу.")
+        await message.answer("❌ Не удалось отправить жалобу (возможно, вы уже жаловались на этот перевод).")
         
     await state.clear()
 
-
-# --- (Остальная часть файла: Вывод, Холд и т.д. остается без изменений) ---
-# ...
+# --- Вывод, Холд и т.д. ---
 @router.callback_query(F.data == 'profile_withdraw')
 async def initiate_withdraw(callback: CallbackQuery, state: FSMContext, **kwargs):
     balance, _ = await db_manager.get_user_balance(callback.from_user.id)
@@ -468,15 +472,15 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
         return
 
     admin_message = (
-        f"🚨 <b>Новый запрос на вывод средств!</b> 🚨\n\n"
-        f"👤 <b>Отправитель:</b> @{user.username} (ID: <code>{user.id}</code>)\n"
-        f"💰 <b>Сумма:</b> {amount:.2f} ⭐\n"
-        f"🎯 <b>Получатель:</b> {recipient_info}\n"
+        f"🚨 **Новый запрос на вывод средств!** 🚨\n\n"
+        f"👤 **Отправитель:** @{user.username} (ID: `{user.id}`)\n"
+        f"💰 **Сумма:** {amount:.2f} ⭐\n"
+        f"🎯 **Получатель:** {recipient_info}\n"
     )
     if comment:
-        admin_message += f"💬 <b>Комментарий:</b> {comment}\n"
+        admin_message += f"💬 **Комментарий:** {comment}\n"
     
-    admin_message += f"\nЗапрос ID: <code>{request_id}</code>"
+    admin_message += f"\nЗапрос ID: `{request_id}`"
 
     try:
         await bot.send_message(
@@ -487,7 +491,6 @@ async def _create_and_notify_withdrawal(user: User, amount: float, recipient_inf
         await bot.send_message(user.id, "✅ Ваш запрос на вывод средств создан и отправлен на проверку администратору.\n\nСледить за статусом можно в нашем <a href='https://t.me/conclusions_starref'>канале выплат</a>.")
     except Exception as e:
         logger.error(f"Не удалось отправить запрос в канал выплат {WITHDRAWAL_CHANNEL_ID}: {e}", exc_info=True)
-        # Возвращаем звезды, если не удалось уведомить админов
         await db_manager.update_balance(user.id, amount, op_type="WITHDRAWAL", description="Возврат из-за ошибки отправки")
         await bot.send_message(user.id, "❌ Не удалось отправить запрос администратору. Вероятно, бот не добавлен в канал выплат. Ваши звезды возвращены на баланс.")
     

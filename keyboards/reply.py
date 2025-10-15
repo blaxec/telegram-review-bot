@@ -7,7 +7,7 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text='👤 Профиль'), KeyboardButton(text='💰 Заработок')],
         [KeyboardButton(text='📊 Статистика'), KeyboardButton(text='💬 Поддержка')],
-        [KeyboardButton(text='💼 Вакансия')]
+        [KeyboardButton(text='💼 Вакансия'), KeyboardButton(text='🎲 Игры')]
     ]
     keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     return keyboard

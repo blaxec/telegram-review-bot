@@ -4,7 +4,7 @@ import logging
 import datetime
 import asyncio
 from math import ceil
-from typing import Union
+from typing import Union, Tuple, List
 
 from aiogram.types import Message, LabeledPrice, CallbackQuery
 from aiogram import Bot, Dispatcher
@@ -14,6 +14,7 @@ from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from database import db_manager
+from database.models import Link
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from references import reference_manager
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- ЛОГИКА: Добавление ссылок ---
-async def process_add_links_logic(links_text: str, platform: str, is_fast_track: bool = False, requires_photo: bool = False) -> str:
+async def process_add_links_logic(links_text: str, platform: str, reward_amount: float, gender_requirement: str, campaign_tag: str | None) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
@@ -40,7 +41,14 @@ async def process_add_links_logic(links_text: str, platform: str, is_fast_track:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
             try:
-                if await db_manager.db_add_reference(stripped_link, platform, is_fast_track=is_fast_track, requires_photo=requires_photo):
+                # В db_add_reference теперь передаем все новые поля
+                if await db_manager.db_add_reference(
+                    url=stripped_link, 
+                    platform=platform, 
+                    reward_amount=reward_amount, 
+                    gender_requirement=gender_requirement, 
+                    campaign_tag=campaign_tag
+                ):
                     added_count += 1
                 else:
                     skipped_count += 1
@@ -229,9 +237,9 @@ async def apply_fine_to_user(user_id: int, admin_id: int, amount: float, reason:
 async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: AsyncIOScheduler) -> tuple[bool, str]:
     """Логика для одобрения начального отзыва и перевода его в холд."""
     review = await db_manager.get_review_by_id(review_id)
-    if not review or review.status != 'pending':
-        logger.error(f"Attempted to approve review {review_id}, but it was not found or status was not 'pending'.")
-        return False, "Ошибка: отзыв не найден или уже обработан."
+    if not review or review.status != 'pending' or not review.link:
+        logger.error(f"Attempted to approve review {review_id}, but it was not found, not pending, or had no associated link.")
+        return False, "Ошибка: отзыв не найден, уже обработан или не привязан к ссылке."
 
     user = await db_manager.get_user(review.user_id)
     
@@ -241,19 +249,14 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         if admin_rec:
             is_tester = admin_rec.is_tester
 
-
-    amount_map = {
-        'google': Rewards.GOOGLE_REVIEW,
-        'yandex_with_text': Rewards.YANDEX_WITH_TEXT,
-        'yandex_without_text': Rewards.YANDEX_WITHOUT_TEXT
-    }
+    # Динамическое получение награды из ссылки
+    amount = review.link.reward_amount
+    
     hold_minutes_map = {
         'google': Durations.HOLD_GOOGLE_MINUTES,
         'yandex_with_text': Durations.HOLD_YANDEX_WITH_TEXT_MINUTES,
         'yandex_without_text': Durations.HOLD_YANDEX_WITHOUT_TEXT_MINUTES
     }
-    
-    amount = amount_map.get(review.platform, 0.0)
     
     if is_tester:
         hold_duration_minutes = Durations.HOLD_TESTER_MINUTES
@@ -270,7 +273,7 @@ async def approve_review_to_hold_logic(review_id: int, bot: Bot, scheduler: Asyn
         'yandex_with_text': Durations.COOLDOWN_YANDEX_WITH_TEXT_HOURS,
         'yandex_without_text': Durations.COOLDOWN_YANDEX_WITHOUT_TEXT_HOURS
     }
-    cooldown_hours = cooldown_hours_map.get(review.platform, 24) # 24 часа по умолчанию
+    cooldown_hours = cooldown_hours_map.get(review.platform, 24)
     platform_for_cooldown = review.platform.replace('_maps', '')
 
     
@@ -345,20 +348,19 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
     user_id = approved_review.user_id
     user = await db_manager.get_user(user_id)
     
+    # Логика залога
+    if approved_review.stake_amount and approved_review.stake_amount > 0:
+        await db_manager.return_stake(user_id, approved_review.stake_amount)
+
+    # Логика первого задания
+    if user and not user.first_task_completed:
+        await db_manager.set_first_task_completed(user_id)
+    
+    # Логика реферальной системы (процентная)
     if user and user.referrer_id:
         referrer = await db_manager.get_user(user.referrer_id)
-        if referrer and referrer.referral_path:
-            referral_reward = 0
-            
-            if referrer.referral_path == 'google' and approved_review.platform == 'google_maps':
-                referral_reward = Rewards.REFERRAL_GOOGLE_REVIEW
-            
-            elif referrer.referral_path == 'yandex':
-                if referrer.referral_subpath == 'with_text' and approved_review.platform == 'yandex_with_text':
-                    referral_reward = Rewards.REFERRAL_YANDEX_WITH_TEXT
-                elif referrer.referral_subpath == 'without_text' and approved_review.platform == 'yandex_without_text':
-                    referral_reward = Rewards.REFERRAL_YANDEX_WITHOUT_TEXT
-            
+        if referrer:
+            referral_reward = approved_review.amount * (Rewards.REFERRAL_REWARD_PERCENT / 100.0)
             if referral_reward > 0:
                 await db_manager.add_referral_earning(user_id, referral_reward)
                 try:
@@ -468,21 +470,23 @@ async def schedule_message_deletion(message: Message, delay: int):
     asyncio.create_task(delete_after_delay())
 
 # --- ЛОГИКА ДЛЯ СПИСКОВ В АДМИНКЕ ---
-def get_paginated_links_text(links: list, current_page: int, total_pages: int, platform: str, filter_type: str) -> str:
+def get_paginated_links_text(links: List[Link], current_page: int, total_pages: int, platform: str, filter_type: str) -> str:
     """Форматирует текст для страницы со списком ссылок."""
     if not links:
         return f"📄 Список ссылок для <i>{platform}</i> (Фильтр: {filter_type})\n\nСсылок, соответствующих критериям, не найдено."
 
     base_text = f"📄 Список ссылок для <i>{platform}</i> (Фильтр: {filter_type})\n\n"
     icons = {"available": "🟢", "assigned": "🟡", "used": "🔴", "expired": "⚫"}
+    gender_icons = {"any": "👤", "male": "👨", "female": "👩"}
 
     for link in links:
         user_info = f"-> ID: {link.assigned_to_user_id}" if link.assigned_to_user_id else ""
         fast_track_icon = "🚀" if link.is_fast_track else ""
         requires_photo_icon = "📸" if link.requires_photo else ""
+        gender_icon = gender_icons.get(link.gender_requirement, '')
         
         base_text += (
-            f"{fast_track_icon}{requires_photo_icon}{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.status}</code> {user_info}\n"
+            f"{gender_icon}{fast_track_icon}{requires_photo_icon}{icons.get(link.status, '❓')} <b>ID:{link.id}</b> | <code>{link.reward_amount:.2f} ⭐</code> | <code>{link.status}</code> {user_info}\n"
             f"🔗 <code>{link.url}</code>\n\n"
         )
     

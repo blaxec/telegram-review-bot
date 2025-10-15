@@ -36,7 +36,7 @@ async def send_cooldown_expired_notification(bot: Bot, user_id: int, platform: s
     try:
         await bot.send_message(
             user_id,
-            f"⏰ Ваш кулдаун для задания '<b>{platform_name}</b>' закончился! Вы снова можете выполнять эту задачу."
+            f"⏰ Ваш кулдаун для задания '**{platform_name}**' закончился! Вы снова можете выполнять эту задачу."
         )
         logger.info(f"Sent cooldown expiration notification to user {user_id} for platform {platform}.")
     except (TelegramNetworkError, TelegramBadRequest):
@@ -53,65 +53,41 @@ def format_timedelta(td: datetime.timedelta) -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 async def send_liking_confirmation_button(bot: Bot, user_id: int, state: FSMContext):
-    """Отправляет пользователю кнопку подтверждения после этапа 'лайков' и удаляет сообщение с таймером."""
+    """Отправляет пользователю кнопку подтверждения после этапа 'лайков'."""
     try:
-        user_data = await state.get_data()
-        timer_message_id = user_data.get('current_task_message_id')
-        if timer_message_id:
-            try:
-                await bot.delete_message(user_id, timer_message_id)
-            except TelegramBadRequest:
-                pass
-        
         await bot.send_message(
             user_id,
             "Кнопка для подтверждения выполнения задания теперь доступна.",
             reply_markup=inline.get_liking_confirmation_keyboard()
         )
     except (TelegramNetworkError, TelegramBadRequest) as e:
-        logger.error(f"Не удалось отправить кнопку подтверждения 'лайков' пользователю {user_id} (возможно, бот заблокирован): {e}")
+        logger.error(f"Не удалось отправить кнопку подтверждения 'лайков' пользователю {user_id}: {e}")
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки 'лайков' пользователю {user_id}: {e}")
 
 async def send_yandex_liking_confirmation_button(bot: Bot, user_id: int, state: FSMContext):
-    """Отправляет пользователю кнопку подтверждения после этапа 'прогрева' Yandex и удаляет сообщение с таймером."""
+    """Отправляет пользователю кнопку подтверждения после этапа 'прогрева' Yandex."""
     try:
-        user_data = await state.get_data()
-        timer_message_id = user_data.get('current_task_message_id')
-        if timer_message_id:
-            try:
-                await bot.delete_message(user_id, timer_message_id)
-            except TelegramBadRequest:
-                pass
-                
         await bot.send_message(
             user_id,
             "Кнопка для подтверждения выполнения задания теперь доступна.",
             reply_markup=inline.get_yandex_liking_confirmation_keyboard()
         )
     except (TelegramNetworkError, TelegramBadRequest) as e:
-        logger.error(f"Не удалось отправить кнопку подтверждения 'прогрева' Yandex пользователю {user_id} (возможно, бот заблокирован): {e}")
+        logger.error(f"Не удалось отправить кнопку подтверждения 'прогрева' Yandex пользователю {user_id}: {e}")
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки 'прогрева' Yandex пользователю {user_id}: {e}")
 
 async def send_confirmation_button(bot: Bot, user_id: int, platform: str, state: FSMContext):
-    """Отправляет пользователю кнопку подтверждения основного задания и удаляет сообщение с таймером."""
+    """Отправляет пользователю кнопку подтверждения основного задания."""
     try:
-        user_data = await state.get_data()
-        timer_message_id = user_data.get('current_task_message_id')
-        if timer_message_id:
-            try:
-                await bot.delete_message(user_id, timer_message_id)
-            except TelegramBadRequest:
-                pass
-
         await bot.send_message(
             user_id,
             "Кнопка для подтверждения выполнения задания теперь доступна.",
             reply_markup=inline.get_task_confirmation_keyboard(platform)
         )
     except (TelegramNetworkError, TelegramBadRequest) as e:
-        logger.error(f"Не удалось отправить кнопку подтверждения пользователю {user_id} для платформы {platform} (возможно, бот заблокирован): {e}")
+        logger.error(f"Не удалось отправить кнопку подтверждения пользователю {user_id} для платформы {platform}: {e}")
     except Exception as e:
         logger.error(f"Неизвестная ошибка при отправке кнопки подтверждения пользователю {user_id}: {e}")
 
@@ -127,6 +103,12 @@ async def handle_task_timeout(bot: Bot, storage: BaseStorage, user_id: int, plat
     logger.info(f"Timeout for user {user_id} on platform {platform}. Current state: {current_state_str}. Releasing reference and setting cooldown.")
     
     user_data = await state.get_data()
+    
+    # Списание залога при провале
+    review_id = user_data.get('review_id_in_progress')
+    if review_id:
+        await db_manager.fail_stake(review_id)
+
     await reference_manager.release_reference_from_user(user_id, final_status='available')
     
     cooldown_hours = 72

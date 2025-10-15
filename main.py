@@ -26,11 +26,16 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin_panel, admin_moderation, gmail,
                       stats, promo, other, ban_system, referral, admin_roles, internship, posting)
+# Новые импорты
+from handlers.games import coinflip
+from handlers import deposits, donations, admin_scenarios, admin_stats
+
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
 from utils.username_updater import UsernameUpdaterMiddleware
 from logic.reward_logic import distribute_rewards
 from logic.cleanup_logic import check_and_expire_links, process_expired_holds
+from logic.deposit_logic import process_deposits
 
 
 async def sync_base_admins():
@@ -89,6 +94,9 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="roles", description="🛠️ Распределение ролей"),
         BotCommand(command="admin_refs", description="🔗 Управление ссылками"),
         BotCommand(command="stat_rewards", description="🏆 Упр. наградами топа"),
+        BotCommand(command="campaigns", description="📊 Статистика по кампаниям"),
+        BotCommand(command="stats_admin", description="📈 Бизнес-аналитика"),
+        BotCommand(command="scenarios", description="✍️ Банк сценариев для AI")
     ]
 
     tester_commands = [
@@ -113,7 +121,6 @@ async def set_bot_commands(bot: Bot):
             if admin.role == 'super_admin':
                 commands_to_set = super_admin_commands.copy()
                 if admin.is_tester:
-                    # Добавляем только уникальные команды тестера
                     current_cmds = {cmd.command for cmd in commands_to_set}
                     for t_cmd in tester_commands:
                         if t_cmd.command not in current_cmds:
@@ -183,6 +190,13 @@ async def main():
     dp.include_router(support.router)
     dp.include_router(gmail.router)
     dp.include_router(stats.router)
+    # Новые роутеры
+    dp.include_router(coinflip.router)
+    dp.include_router(deposits.router)
+    dp.include_router(donations.router)
+    dp.include_router(admin_scenarios.router)
+    dp.include_router(admin_stats.router)
+    # Роутер "other" должен быть последним
     dp.include_router(other.router)
 
     dp.errors.register(handle_telegram_bad_request)
@@ -190,7 +204,7 @@ async def main():
     scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
     scheduler.add_job(check_and_expire_links, 'interval', hours=6, args=[bot, dp.storage])
     scheduler.add_job(process_expired_holds, 'interval', minutes=1, args=[bot, dp.storage, scheduler])
-
+    scheduler.add_job(process_deposits, 'interval', minutes=5, args=[bot]) # Новая задача
 
     try:
         scheduler.start()

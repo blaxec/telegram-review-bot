@@ -55,7 +55,18 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
     except Exception as e:
         logger.exception("An error occurred during the check_and_expire_links job.")
 
-# --- НОВАЯ ЛОГИКА ДЛЯ ВЕРИФИКАЦИИ ПОСЛЕ ХОЛДА ---
+async def handle_screenshot_timeout(bot: Bot, user_id: int, state: FSMContext):
+    """Срабатывает, если пользователь не прислал скриншот вовремя."""
+    await state.clear()
+    try:
+        msg = await bot.send_message(
+            user_id,
+            "⏳ К сожалению, время на отправку скриншота истекло. Ваше задание отменено. Вы можете начать заново из раздела 'Заработок'."
+        )
+        await bot.edit_message_reply_markup(user_id, msg.message_id, reply_markup=inline.get_notification_close_keyboard())
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_id} about screenshot timeout: {e}")
+
 
 async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, state: FSMContext):
     """Срабатывает, если пользователь не прислал подтверждающий скриншот вовремя."""
@@ -78,7 +89,7 @@ async def handle_confirmation_timeout(bot: Bot, user_id: int, review_id: int, st
                 f"⏳ К сожалению, время на подтверждение отзыва истекло. Холд для отзыва #{review_id} был отменен."
             )
             admin_id = await get_other_hold_admin()
-            if review.user: # Убедимся, что пользователь загружен
+            if review.user: 
                 await bot.send_message(
                     admin_id,
                     f"⚠️ Пользователь @{review.user.username} (ID: <code>{user_id}</code>) не прислал подтверждающий скриншот для отзыва #{review_id} вовремя. Холд отменен автоматически."
