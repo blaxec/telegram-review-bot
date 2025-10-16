@@ -19,18 +19,19 @@ if TYPE_CHECKING:
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
-from references import reference_manager
-from config import Durations, TESTER_IDS
+from config import Durations, TESTER_IDS, Limits, STAKE_THRESHOLD_REWARD, STAKE_AMOUNT # Added: STAKE_THRESHOLD_REWARD, STAKE_AMOUNT
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
     handle_task_timeout,
-    send_confirmation_button
+    send_confirmation_button,
+    handle_screenshot_timeout # Added: handle_screenshot_timeout
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
 from logic.notification_manager import send_notification_to_admins
+from logic.notification_logic import notify_subscribers # Added: notify_subscribers
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -91,15 +92,15 @@ async def skip_timer_command_successful(message: Message, state: FSMContext, bot
 
     response_msg = None
     if current_state == UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE:
-        await send_liking_confirmation_button(bot, user_id)
+        await send_liking_confirmation_button(bot, user_id, state)
         response_msg = await message.answer("✅ Таймер лайков пропущен.")
     elif current_state == UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE:
-        await send_yandex_liking_confirmation_button(bot, user_id)
+        await send_yandex_liking_confirmation_button(bot, user_id, state)
         response_msg = await message.answer("✅ Таймер прогрева пропущен.")
     elif current_state in [UserState.GOOGLE_REVIEW_TASK_ACTIVE, UserState.YANDEX_REVIEW_TASK_ACTIVE]:
         platform = user_data.get("platform_for_task")
         if platform:
-            await send_confirmation_button(bot, user_id, platform)
+            await send_confirmation_button(bot, user_id, platform, state)
             response_msg = await message.answer(f"✅ Таймер написания отзыва для {platform} пропущен.")
     
     asyncio.create_task(schedule_message_deletion(message, 5))
@@ -161,6 +162,66 @@ async def initiate_write_review(callback: CallbackQuery, state: FSMContext):
 async def earning_menu_back(callback: CallbackQuery, state: FSMContext):
     await earning_menu_logic(callback)
 
+# --- Добавленные информационные кнопки ---
+
+@router.callback_query(F.data == 'info_how_to_improve_pass_rate')
+async def info_how_to_improve_pass_rate(callback: CallbackQuery):
+    text = (
+        "💡 **Советы для улучшения проходимости отзывов:**\n\n"
+        "1. **Очистите профиль:** Удалите с аккаунта ранее не опубликованные (отклоненные) отзывы. Одобренные оставьте.\n"
+        "2. **Дайте аккаунту \"отдохнуть\":** Не пишите с него никаких отзывов в течение недели перед выполнением нашего задания.\n"
+        "3. **Пишите аккуратно:** После отдыха можете снова пробовать писать отзывы.\n\n"
+        "❗ **ВАЖНО (Напоминание):**\n"
+        "• **Отключайте геолокацию** перед написанием отзыва.\n"
+        "• На одном устройстве должен быть **только один аккаунт**, с которого вы работаете.\n"
+        "• Всегда **перепечатывайте текст отзыва вручную**. Копирование запрещено!"
+    )
+    await callback.message.edit_text(text, reply_markup=inline.get_back_to_platform_choice_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == 'info_yandex_moderation_stages')
+async def info_yandex_moderation_stages(callback: CallbackQuery):
+    text = (
+        "✏ **Этапы модерации в Яндекс.Картах:**\n\n"
+        "Всего их два:\n\n"
+        "✅ **1. \"На модерации\"**\n"
+        "Этот этап может занять несколько часов. Он **НЕ** означает, что ваш отзыв успешно опубликован!\n\n"
+        "✅ **2. \"Общий доступ\"**\n"
+        "Этот этап проверки занимает 2-3 дня. Только после него становится ясно, прошел ли ваш отзыв."
+    )
+    await callback.message.edit_text(text, reply_markup=inline.get_back_to_yandex_type_choice_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == 'info_how_to_check_publication')
+async def info_how_to_check_publication(callback: CallbackQuery):
+    text = (
+        "❓ **Как правильно проверить, опубликован ли отзыв?**\n\n"
+        "Чтобы быть уверенным, что отзыв прошел модерацию и виден всем, проверять его нужно **исключительно с другого аккаунта или в режиме инкогнито в браузере!**\n\n"
+        "1. Откройте ссылку на компанию (ту, которую выдал бот).\n"
+        "2. Найдите свой отзыв в общем списке.\n\n"
+        "**Почему нельзя проверять иначе?**\n"
+        "• Если вы перейдете по прямой ссылке на ваш отзыв, он будет виден, даже если не прошел модерацию.\n"
+        "• Если вы видите отзыв в своем профиле, это также не гарантирует его публикацию для всех."
+    )
+    await callback.message.edit_text(text, reply_markup=inline.get_back_to_awaiting_text_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data.startswith('subscribe_for_tasks:'))
+async def subscribe_for_tasks_handler(callback: CallbackQuery):
+    _, platform, gender = callback.data.split(':')
+    user_id = callback.from_user.id
+
+    success = await db_manager.add_task_subscription(user_id, platform, gender)
+
+    if success:
+        await callback.answer("✅ Вы подписаны на уведомления. Мы сообщим вам, как только появятся подходящие задания.", show_alert=True)
+        # Remove the subscribe button from the message to prevent re-subscribing
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=None)
+    else:
+        await callback.answer("🔔 Вы уже подписаны на уведомления для этого типа заданий.", show_alert=True)
+
+
 # --- Логика для Google Карт ---
 
 @router.callback_query(F.data == 'review_google_maps')
@@ -171,14 +232,38 @@ async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
         await callback.answer(f"Вы сможете написать отзыв в Google через {format_timedelta(cooldown)}.", show_alert=True)
         return
 
-    if not await reference_manager.has_available_references('google_maps'):
-        await callback.answer("К сожалению, в данный момент задания для Google Карт закончились. Попробуйте позже.", show_alert=True)
+    # Assign a dummy link to get its reward_amount and gender_requirement to check staking
+    dummy_link = await reference_manager.assign_reference_to_user(user_id, 'google_maps', dry_run=True)
+    if not dummy_link: # No available links
+        # Offer subscription
+        await callback.answer("К сожалению, в данный момент задания для Google Карт закончились.", show_alert=True)
+        await callback.message.edit_text(
+            "Извините, сейчас нет доступных заданий для Google Карт. 😔\n\n"
+            "Нажмите кнопку ниже, чтобы получить уведомление, когда задания появятся.",
+            reply_markup=inline.get_subscribe_for_tasks_keyboard("google_maps", "any") # 'any' as a default for now
+        )
+        await state.clear()
         return
-        
+
+    # Check for staking requirement BEFORE assigning the actual link
+    user = await db_manager.get_user(user_id)
+    stake_amount_for_task = 0.0
+    if dummy_link.reward_amount >= STAKE_THRESHOLD_REWARD:
+        if user.balance < STAKE_AMOUNT:
+            await callback.answer(
+                f"Для этого задания требуется залог в {STAKE_AMOUNT:.2f} ⭐. Ваш текущий баланс ({user.balance:.2f} ⭐) недостаточен. Пожалуйста, пополните баланс или выберите другое задание.",
+                show_alert=True
+            )
+            return
+        stake_amount_for_task = STAKE_AMOUNT
+
     await state.set_state(UserState.GOOGLE_REVIEW_INIT)
+    await state.update_data(stake_amount_for_task=stake_amount_for_task, platform_for_task='google') # Storing platform for timeout
+    
     if callback.message:
         prompt_msg = await callback.message.edit_text(
-            "⭐ За отзыв в Google.Картах начисляется 15 звезд.\n\n"
+            f"⭐ За отзыв в Google.Картах начисляется {dummy_link.reward_amount:.2f} звезд.\n"
+            f"{f'💡 Для этого задания требуется залог {stake_amount_for_task:.2f} ⭐.' if stake_amount_for_task > 0 else ''}\n\n"
             "💡 Для повышения проходимости вашего отзыва, пожалуйста, временно отключите "
             "<i>«Определение местоположения»</i> в настройках приложения на вашем телефоне.",
             reply_markup=inline.get_google_init_keyboard()
@@ -187,17 +272,38 @@ async def initiate_google_review(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == 'google_review_done', UserState.GOOGLE_REVIEW_INIT)
-async def process_google_review_done(callback: CallbackQuery, state: FSMContext):
+async def process_google_review_done(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
+    user_data = await state.get_data()
+    stake_amount = user_data.get('stake_amount_for_task', 0.0)
+
+    # If stake is required, deduct it now
+    if stake_amount > 0:
+        success = await db_manager.deduct_stake(user_id, stake_amount)
+        if not success:
+            await callback.answer("❌ Недостаточно средств для залога. Попробуйте снова или выберите другое задание.", show_alert=True)
+            await state.clear()
+            return
+        await state.update_data(stake_deducted=True) # Mark that stake was deducted
+
     await state.set_state(UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
-        prompt_msg = await callback.message.edit_text(
+        prompt_text = (
             "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
             "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
             "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
-            "Отправьте фото следующим сообщением.",
+            f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+        )
+        prompt_msg = await callback.message.edit_text(
+            prompt_text,
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+        # Schedule timeout for screenshot submission
+        run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+        job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, user_id, state])
+        await state.update_data(screenshot_timeout_job_id=job.id)
 
 @router.callback_query(F.data == 'google_get_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
@@ -217,13 +323,21 @@ async def show_google_profile_screenshot_instructions(callback: CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data == 'google_back_to_profile_screenshot', UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
-async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext):
+async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
+    user_data = await state.get_data()
+    # If returning from instructions, reschedule the timeout job if it was removed.
+    # Or simply edit the message and let the existing job continue.
+    # For simplicity, we just edit the message and rely on the original job.
     if callback.message:
-        await callback.message.edit_text(
+        prompt_text = (
             "Отлично! Теперь, чтобы мы могли проверить, готовы ли вы писать отзыв, пожалуйста, "
             "пришлите <i>скриншот вашего профиля</i> в Google.Картах. "
             "Отзывы на новых аккаунтах не будут проходить проверку.\n\n"
-            "Отправьте фото следующим сообщением.",
+            f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+        )
+        await callback.message.edit_text(
+            prompt_text,
             reply_markup=inline.get_google_ask_profile_screenshot_keyboard()
         )
     await callback.answer()
@@ -231,6 +345,14 @@ async def back_to_profile_screenshot(callback: CallbackQuery, state: FSMContext)
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_google_profile_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    job_id = user_data.get('screenshot_timeout_job_id')
+    if job_id:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception as e:
+            logger.warning(f"Failed to remove screenshot timeout job {job_id}: {e}")
+
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -256,6 +378,12 @@ async def process_google_profile_screenshot(message: Message, state: FSMContext,
     except Exception as e:
         logger.error(f"Ошибка отправки фото профиля админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(message.from_user.id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
+
         await state.clear()
 
 @router.callback_query(F.data == 'google_last_reviews_where', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
@@ -275,17 +403,36 @@ async def show_google_last_reviews_instructions(callback: CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data == 'google_back_to_last_reviews', UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
-async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext):
+async def back_to_last_reviews_check(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
     if callback.message:
-        await callback.message.edit_text(
-            "Профиль прошел проверку. Пришлите скриншот последних отзывов.",
+        prompt_text = (
+            "Профиль прошел проверку. Пришлите скриншот последних отзывов.\n\n"
+            f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+        )
+        prompt_msg = await callback.message.edit_text(
+            prompt_text,
             reply_markup=inline.get_google_last_reviews_check_keyboard()
         )
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        
+        run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+        job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, user_id, state])
+        await state.update_data(screenshot_timeout_job_id=job.id)
+
     await callback.answer()
 
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
 async def process_google_last_reviews_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    job_id = user_data.get('screenshot_timeout_job_id')
+    if job_id:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception as e:
+            logger.warning(f"Failed to remove screenshot timeout job {job_id}: {e}")
+
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
 
@@ -298,6 +445,7 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     caption = f"Проверьте последние отзывы пользователя. Интервал - 3 дня.\n{user_info_text}"
 
     try:
+        user_data = await state.get_data()
         await send_notification_to_admins(
             bot,
             text=caption,
@@ -313,12 +461,40 @@ async def process_google_last_reviews_screenshot(message: Message, state: FSMCon
     except Exception as e:
         logger.error(f"Ошибка отправки фото последних отзывов админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(message.from_user.id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
+
         await state.clear()
 
-async def start_google_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, link):
+async def start_google_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     """Общая логика для начала этапа лайков или сразу основного задания (для быстрых ссылок)."""
     user_id = callback.from_user.id
     
+    # Actually assign the link now that staking and previous checks are done
+    link = await reference_manager.assign_reference_to_user(user_id, 'google_maps')
+    if not link: # Should not happen if dry-run passed, but for safety
+        await callback.message.edit_text("К сожалению, в данный момент доступных ссылок для написания отзывов не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
+        await state.clear()
+        return
+
+    user_data = await state.get_data()
+    stake_amount = user_data.get('stake_amount_for_task', 0.0)
+    
+    # Create review draft early to save stake amount, it will be updated later
+    review_id = await db_manager.create_review_draft(
+        user_id=user_id,
+        link_id=link.id,
+        platform='google',
+        text=None, # Text will be added later
+        admin_message_id=0,
+        screenshot_file_id=None, # Screenshot will be added later
+        stake_amount=stake_amount # Save stake amount here
+    )
+    await state.update_data(review_id_in_progress=review_id) # Store review_id for stake handling
+
     if link.is_fast_track:
         logger.info(f"Link {link.id} is a fast-track. Skipping liking step for user {user_id}.")
         await process_liking_completion(callback, state, bot, scheduler)
@@ -335,7 +511,7 @@ async def start_google_liking_or_main_task(callback: CallbackQuery, state: FSMCo
         await state.update_data(username=callback.from_user.username, active_link_id=link.id)
         
         now = datetime.datetime.now(datetime.timezone.utc)
-        confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+        confirm_job = scheduler.add_job(send_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_CONFIRM_APPEARS), args=[bot, user_id, state])
         timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_GOOGLE_LIKING_TIMEOUT), args=[bot, state.storage, user_id, 'google', 'этап лайков', scheduler])
         await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
@@ -343,14 +519,9 @@ async def start_google_liking_or_main_task(callback: CallbackQuery, state: FSMCo
 async def start_liking_step(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_id = callback.from_user.id
     
-    link = await reference_manager.assign_reference_to_user(user_id, 'google_maps')
-    if not link:
-        if callback.message:
-            await callback.message.edit_text("К сожалению, в данный момент доступных ссылок для написания отзывов не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
-        await state.clear()
-        return
-
-    await start_google_liking_or_main_task(callback, state, bot, scheduler, link)
+    # Previous checks (cooldown, staking, link availability dry-run) should have happened in initiate_google_review.
+    # Now, we proceed to assign the link and start the task.
+    await start_google_liking_or_main_task(callback, state, bot, scheduler)
 
 @router.callback_query(F.data == 'google_confirm_liking_task', UserState.GOOGLE_REVIEW_LIKING_TASK_ACTIVE)
 async def process_liking_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
@@ -365,8 +536,11 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_ADMIN_TEXT)
     if callback.message:
         try:
-            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
-            await schedule_message_deletion(response_msg, 25)
+            response_msg = await callback.message.edit_text(
+                "✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...",
+                reply_markup=inline.get_how_to_check_publication_keyboard() # Added: info button
+            )
+            # await schedule_message_deletion(response_msg, 25) # Removed auto-delete since info button is present
         except TelegramBadRequest: pass
             
     user_info = await bot.get_chat(callback.from_user.id)
@@ -377,6 +551,10 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
     if not link:
         if callback.message:
             await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(callback.from_user.id, user_data['stake_amount_for_task'])
+            await callback.message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
         await state.clear()
         return
 
@@ -390,13 +568,19 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
             bot,
             text=admin_notification_text,
             photo_id=profile_screenshot_id,
-            keyboard=inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id),
+            keyboard=inline.get_admin_provide_text_keyboard('google', callback.from_user.id, link.id, link.requires_photo),
             task_type="google_issue_text",
             scheduler=scheduler,
             original_user_id=callback.from_user.id
         )
     except Exception as e:
         logger.error(f"Failed to send task to admin: {e}")
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(callback.from_user.id, user_data['stake_amount_for_task'])
+            await callback.message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
+        await state.clear()
+
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
 async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
@@ -409,15 +593,32 @@ async def process_google_task_completion(callback: CallbackQuery, state: FSMCont
             logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
     
     await state.set_state(UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
-    if callback.message:
-        prompt_msg = await callback.message.edit_text(
-            "Отлично! Теперь, пожалуйста, отправьте <i>скриншот вашего опубликованного отзыва</i>."
-        )
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
+    prompt_text = (
+        "Отлично! Теперь, пожалуйста, отправьте <i>скриншот вашего опубликованного отзыва</i>.\n\n"
+        f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+    )
+    prompt_msg = await callback.message.edit_text(
+        prompt_text,
+        reply_markup=inline.get_cancel_inline_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+    # Schedule timeout for screenshot submission
+    run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+    job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, callback.from_user.id, state])
+    await state.update_data(screenshot_timeout_job_id=job.id)
 
 
 @router.message(F.photo, UserState.GOOGLE_REVIEW_AWAITING_SCREENSHOT)
 async def process_google_review_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    job_id = user_data.get('screenshot_timeout_job_id')
+    if job_id:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception as e:
+            logger.warning(f"Failed to remove screenshot timeout job {job_id}: {e}")
+
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
@@ -428,6 +629,10 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     active_link_id = await reference_manager.get_user_active_link_id(user_id)
     if not active_link_id:
         await message.answer("Произошла критическая ошибка: не найдена активная задача. Начните заново.")
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
         await state.clear()
         return
     
@@ -443,17 +648,32 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     )
     
     try:
-        review_id = await db_manager.create_review_draft(
-            user_id=user_id,
-            link_id=active_link_id,
-            platform='google',
-            text=review_text,
-            admin_message_id=0,
-            screenshot_file_id=photo_file_id
-        )
+        review_id_in_progress = user_data.get('review_id_in_progress')
+        if review_id_in_progress:
+            # Update existing draft
+            await db_manager.update_review_draft(
+                review_id_in_progress,
+                text=review_text,
+                screenshot_file_id=photo_file_id,
+                attached_photo_file_id=user_data.get('attached_photo_file_id') # Pass attached photo if any
+            )
+            review_id = review_id_in_progress
+        else:
+            # Should not happen if initial draft was created
+            logger.error(f"Critical: review_id_in_progress missing for user {user_id} during screenshot submission.")
+            review_id = await db_manager.create_review_draft(
+                user_id=user_id,
+                link_id=active_link_id,
+                platform='google',
+                text=review_text,
+                admin_message_id=0,
+                screenshot_file_id=photo_file_id,
+                attached_photo_file_id=user_data.get('attached_photo_file_id'),
+                stake_amount=user_data.get('stake_amount_for_task', 0.0)
+            )
 
         if not review_id:
-            raise Exception("Failed to create review draft in DB.")
+            raise Exception("Failed to create or update review draft in DB.")
 
         sent_message_list = await send_notification_to_admins(
             bot,
@@ -478,6 +698,10 @@ async def process_google_review_screenshot(message: Message, state: FSMContext, 
     except Exception as e:
         logger.error(f"Не удалось отправить финальный отзыв админу: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
     
     await state.clear()
     await state.set_state(UserState.MAIN_MENU)
@@ -503,19 +727,41 @@ async def initiate_yandex_review(callback: CallbackQuery, state: FSMContext):
     if cooldown:
         await callback.answer(f"Вы сможете написать отзыв в Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'}) через {format_timedelta(cooldown)}.", show_alert=True)
         return
-        
-    if not await reference_manager.has_available_references(platform):
-        await callback.answer(f"К сожалению, задания для 'Yandex ({'с текстом' if review_type == 'with_text' else 'без текста'})' закончились.", show_alert=True)
-        return
     
-    await state.update_data(yandex_review_type=review_type)
-    await state.set_state(UserState.YANDEX_REVIEW_INIT)
+    # Assign a dummy link to get its reward_amount and gender_requirement to check staking
+    dummy_link = await reference_manager.assign_reference_to_user(user_id, platform, dry_run=True)
+    if not dummy_link: # No available links
+        # Offer subscription
+        platform_name_text = 'Яндекс (с текстом)' if review_type == 'with_text' else 'Яндекс (без текста)'
+        await callback.answer(f"К сожалению, задания для {platform_name_text} закончились.", show_alert=True)
+        await callback.message.edit_text(
+            f"Извините, сейчас нет доступных заданий для {platform_name_text}. 😔\n\n"
+            "Нажмите кнопку ниже, чтобы получить уведомление, когда задания появятся.",
+            reply_markup=inline.get_subscribe_for_tasks_keyboard(platform, "any") # 'any' as a default for now
+        )
+        await state.clear()
+        return
 
-    reward = 50 if review_type == "with_text" else 15
+    # Check for staking requirement BEFORE assigning the actual link
+    user = await db_manager.get_user(user_id)
+    stake_amount_for_task = 0.0
+    if dummy_link.reward_amount >= STAKE_THRESHOLD_REWARD:
+        if user.balance < STAKE_AMOUNT:
+            await callback.answer(
+                f"Для этого задания требуется залог в {STAKE_AMOUNT:.2f} ⭐. Ваш текущий баланс ({user.balance:.2f} ⭐) недостаточен. Пожалуйста, пополните баланс или выберите другое задание.",
+                show_alert=True
+            )
+            return
+        stake_amount_for_task = STAKE_AMOUNT
+
+    await state.update_data(yandex_review_type=review_type, stake_amount_for_task=stake_amount_for_task, platform_for_task=platform)
+
+    reward = dummy_link.reward_amount
     
     if callback.message:
         await callback.message.edit_text(
-            f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward} звезд.\n\n"
+            f"⭐ За отзыв в Yandex.Картах ({'с текстом' if review_type == 'with_text' else 'без текста'}) начисляется {reward:.2f} звезд.\n"
+            f"{f'💡 Для этого задания требуется залог {stake_amount_for_task:.2f} ⭐.' if stake_amount_for_task > 0 else ''}\n\n"
             "💡 Для проверки нам понадобится скриншот вашего профиля.\n"
             "💡 Также выключите <i>«Определение местоположения»</i> для приложения в настройках телефона.\n"
             "💡 Аккаунты принимаются не ниже <i>«Знатока города»</i> 3-го уровня.",
@@ -530,23 +776,52 @@ async def show_yandex_instructions(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=inline.get_yandex_init_keyboard())
 
 @router.callback_query(F.data == 'yandex_ready_to_screenshot', UserState.YANDEX_REVIEW_INIT)
-async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext):
+async def ask_for_yandex_screenshot(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_id = callback.from_user.id
+    user_data = await state.get_data()
+    stake_amount = user_data.get('stake_amount_for_task', 0.0)
+
+    # If stake is required, deduct it now
+    if stake_amount > 0:
+        success = await db_manager.deduct_stake(user_id, stake_amount)
+        if not success:
+            await callback.answer("❌ Недостаточно средств для залога. Попробуйте снова или выберите другое задание.", show_alert=True)
+            await state.clear()
+            return
+        await state.update_data(stake_deducted=True) # Mark that stake was deducted
+
     await state.set_state(UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
     if callback.message:
-        prompt_msg = await callback.message.edit_text(
+        prompt_text = (
             "Хорошо. Пожалуйста, сделайте и пришлите <i>скриншот вашего профиля</i> в Яндекс.Картах.\n\n"
             "❗️<i>Требования к скриншоту:</i>\n"
             "1. Скриншот должен быть <i>полным</i>, без обрезаний и замазывания.\n"
             "2. На нем должен быть хорошо виден ваш уровень <i>«Знатока города»</i>.\n"
             "3. Должна быть видна <i>дата вашего последнего отзыва</i>.\n\n"
-            "Отправьте фото следующим сообщением.",
+            f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+        )
+        prompt_msg = await callback.message.edit_text(
+            prompt_text,
             reply_markup=inline.get_yandex_ask_profile_screenshot_keyboard()
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
 
+        # Schedule timeout for screenshot submission
+        run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+        job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, user_id, state])
+        await state.update_data(screenshot_timeout_job_id=job.id)
+
 
 @router.message(F.photo, UserState.YANDEX_REVIEW_ASK_PROFILE_SCREENSHOT)
 async def process_yandex_profile_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    job_id = user_data.get('screenshot_timeout_job_id')
+    if job_id:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception as e:
+            logger.warning(f"Failed to remove screenshot timeout job {job_id}: {e}")
+
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     
@@ -581,11 +856,41 @@ async def process_yandex_profile_screenshot(message: Message, state: FSMContext,
     except Exception as e:
         logger.error(f"Ошибка отправки скриншота Yandex админу: {e}")
         await message.answer("Не удалось отправить фото на проверку. Попробуйте позже.")
+        
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(message.from_user.id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
+
         await state.clear()
 
-async def start_yandex_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, link, platform: str):
+async def start_yandex_liking_or_main_task(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler, platform: str):
     """Общая логика для начала этапа прогрева или сразу основного задания (для быстрых ссылок)."""
     user_id = callback.from_user.id
+
+    # Actually assign the link now that staking and previous checks are done
+    link = await reference_manager.assign_reference_to_user(user_id, platform)
+    if not link: # Should not happen if dry-run passed, but for safety
+        if callback.message:
+            await callback.message.edit_text(f"К сожалению, в данный момент доступных ссылок для Yandex.Карт не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
+        await state.clear()
+        return
+
+    user_data = await state.get_data()
+    stake_amount = user_data.get('stake_amount_for_task', 0.0)
+
+    # Create review draft early to save stake amount, it will be updated later
+    review_id = await db_manager.create_review_draft(
+        user_id=user_id,
+        link_id=link.id,
+        platform=platform,
+        text=None, # Text will be added later
+        admin_message_id=0,
+        screenshot_file_id=None, # Screenshot will be added later
+        stake_amount=stake_amount # Save stake amount here
+    )
+    await state.update_data(review_id_in_progress=review_id) # Store review_id for stake handling
+
 
     if link.is_fast_track:
         logger.info(f"Link {link.id} is a fast-track. Skipping liking step for user {user_id}.")
@@ -605,7 +910,7 @@ async def start_yandex_liking_or_main_task(callback: CallbackQuery, state: FSMCo
             await callback.message.edit_text(task_text, disable_web_page_preview=True)
         
         now = datetime.datetime.now(datetime.timezone.utc)
-        confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id])
+        confirm_job = scheduler.add_job(send_yandex_liking_confirmation_button, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_CONFIRM_APPEARS), args=[bot, user_id, state])
         timeout_job = scheduler.add_job(handle_task_timeout, 'date', run_date=now + datetime.timedelta(minutes=Durations.TASK_YANDEX_LIKING_TIMEOUT), args=[bot, state.storage, user_id, platform, 'этап прогрева', scheduler])
         await state.update_data(confirm_job_id=confirm_job.id, timeout_job_id=timeout_job.id)
 
@@ -617,14 +922,9 @@ async def start_yandex_liking_step(callback: CallbackQuery, state: FSMContext, b
     review_type = user_data.get("yandex_review_type", "with_text")
     platform = f"yandex_{review_type}"
 
-    link = await reference_manager.assign_reference_to_user(user_id, platform)
-    if not link:
-        if callback.message:
-            await callback.message.edit_text(f"К сожалению, в данный момент доступных ссылок для Yandex.Карт ({'с текстом' if review_type == 'with_text' else 'без текста'}) не осталось. Попробуйте позже.", reply_markup=inline.get_earning_keyboard())
-        await state.clear()
-        return
-
-    await start_yandex_liking_or_main_task(callback, state, bot, scheduler, link, platform)
+    # Previous checks (cooldown, staking, link availability dry-run) should have happened in initiate_yandex_review.
+    # Now, we proceed to assign the link and start the task.
+    await start_yandex_liking_or_main_task(callback, state, bot, scheduler, platform)
 
 
 @router.callback_query(F.data == 'yandex_confirm_liking_task', UserState.YANDEX_REVIEW_LIKING_TASK_ACTIVE)
@@ -636,12 +936,17 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         except Exception as e: logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
 
     review_type = user_data.get("yandex_review_type", "with_text")
+    platform = user_data.get("platform_for_task")
+
 
     if review_type == "with_text":
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_ADMIN_TEXT)
         if callback.message:
-            response_msg = await callback.message.edit_text("✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...")
-            await schedule_message_deletion(response_msg, 25)
+            response_msg = await callback.message.edit_text(
+                "✅ Отлично!\n\n⏳ Администратор уже придумывает для вас текст отзыва. Пожалуйста, ожидайте...",
+                reply_markup=inline.get_how_to_check_publication_keyboard() # Added: info button
+            )
+            # await schedule_message_deletion(response_msg, 25) # Removed auto-delete since info button is present
         
         user_id = callback.from_user.id
         user_info = await bot.get_chat(user_id)
@@ -652,6 +957,10 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         if not link:
             if callback.message:
                 await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+            # If stake was deducted, return it on critical error
+            if user_data.get('stake_deducted'):
+                await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+                await callback.message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
             await state.clear()
             return
 
@@ -665,13 +974,18 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
                 bot,
                 text=admin_notification_text,
                 photo_id=profile_screenshot_id,
-                keyboard=inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id),
+                keyboard=inline.get_admin_provide_text_keyboard('yandex_with_text', user_id, link.id, link.requires_photo),
                 task_type="yandex_with_text_issue_text",
                 scheduler=scheduler,
                 original_user_id=callback.from_user.id
             )
         except Exception as e:
             logger.error(f"Failed to send task to admin for Yandex: {e}")
+            # If stake was deducted, return it on critical error
+            if user_data.get('stake_deducted'):
+                await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+                await callback.message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
+            await state.clear()
     
     else: # review_type == "without_text"
         link_id = user_data.get('active_link_id')
@@ -680,6 +994,10 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         if not link:
             if callback.message:
                 await callback.message.edit_text("Произошла критическая ошибка: не найдена ваша активная ссылка. Начните заново.", reply_markup=inline.get_earning_keyboard())
+            # If stake was deducted, return it on critical error
+            if user_data.get('stake_deducted'):
+                await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+                await callback.message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
             await state.clear()
             return
 
@@ -691,8 +1009,18 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
             "После этого сделайте скриншот опубликованного отзыва и отправьте его сюда."
         )
         if callback.message:
-            prompt_msg = await callback.message.edit_text(task_text, disable_web_page_preview=True)
+            prompt_text = (
+                f"{task_text}\n\n"
+                f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+            )
+            prompt_msg = await callback.message.edit_text(prompt_text, disable_web_page_preview=True, reply_markup=inline.get_cancel_inline_keyboard())
             await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+            # Schedule timeout for screenshot submission
+            run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+            job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, user_id, state])
+            await state.update_data(screenshot_timeout_job_id=job.id)
+
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 
 @router.callback_query(F.data == 'yandex_with_text_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
@@ -707,20 +1035,38 @@ async def process_yandex_review_task_completion(callback: CallbackQuery, state: 
         except Exception: 
             pass
     await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
+    prompt_text = (
+        "Отлично! Теперь отправьте <i>скриншот опубликованного отзыва</i>.\n\n"
+        f"⏳ *У вас есть {Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES} минут, чтобы отправить скриншот.*"
+    )
     prompt_msg = await callback.message.answer(
-        "Отлично! Теперь отправьте <i>скриншот опубликованного отзыва</i>."
+        prompt_text,
+        reply_markup=inline.get_cancel_inline_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+    # Schedule timeout for screenshot submission
+    run_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=Durations.SCREENSHOT_SUBMIT_TIMEOUT_MINUTES)
+    job = scheduler.add_job(handle_screenshot_timeout, 'date', run_date=run_date, args=[bot, callback.from_user.id, state])
+    await state.update_data(screenshot_timeout_job_id=job.id)
 
     
 @router.message(F.photo, UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 async def process_yandex_review_screenshot(message: Message, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
+    user_data = await state.get_data()
+    job_id = user_data.get('screenshot_timeout_job_id')
+    if job_id:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception as e:
+            logger.warning(f"Failed to remove screenshot timeout job {job_id}: {e}")
+
     await delete_user_and_prompt_messages(message, state)
     if not message.photo: return
     user_data = await state.get_data()
     user_id = message.from_user.id
     review_type = user_data.get("yandex_review_type", "with_text")
-    platform = f"yandex_{review_type}"
+    platform = user_data.get("platform_for_task")
     photo_file_id = message.photo[-1].file_id
 
     review_text = user_data.get('review_text', '')
@@ -728,6 +1074,10 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     active_link_id = await reference_manager.get_user_active_link_id(user_id)
     if not active_link_id:
         await message.answer("Произошла критическая ошибка: не найдена активная задача. Начните заново.")
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
         await state.clear()
         return
         
@@ -747,17 +1097,32 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     caption += "Скриншот прикреплен. Проверьте отзыв и примите решение."
     
     try:
-        review_id = await db_manager.create_review_draft(
-            user_id=user_id,
-            link_id=active_link_id,
-            platform=platform,
-            text=review_text,
-            admin_message_id=0,
-            screenshot_file_id=photo_file_id
-        )
+        review_id_in_progress = user_data.get('review_id_in_progress')
+        if review_id_in_progress:
+            # Update existing draft
+            await db_manager.update_review_draft(
+                review_id_in_progress,
+                text=review_text,
+                screenshot_file_id=photo_file_id,
+                attached_photo_file_id=user_data.get('attached_photo_file_id') # Pass attached photo if any
+            )
+            review_id = review_id_in_progress
+        else:
+            # Should not happen if initial draft was created
+            logger.error(f"Critical: review_id_in_progress missing for user {user_id} during screenshot submission.")
+            review_id = await db_manager.create_review_draft(
+                user_id=user_id,
+                link_id=active_link_id,
+                platform=platform,
+                text=review_text,
+                admin_message_id=0,
+                screenshot_file_id=photo_file_id,
+                attached_photo_file_id=user_data.get('attached_photo_file_id'),
+                stake_amount=user_data.get('stake_amount_for_task', 0.0)
+            )
 
         if not review_id:
-            raise Exception("Failed to create review draft in DB.")
+            raise Exception("Failed to create or update review draft in DB.")
         
         task_type = "yandex_with_text_final_verdict" if review_type == "with_text" else "yandex_without_text_final_verdict"
 
@@ -783,7 +1148,10 @@ async def process_yandex_review_screenshot(message: Message, state: FSMContext, 
     except Exception as e:
         logger.error(f"Не удалось отправить финальный отзыв админу: {e}", exc_info=True)
         await message.answer("Произошла ошибка при отправке отзыва на проверку. Пожалуйста, свяжитесь с поддержкой.")
-        await state.clear()
+        # If stake was deducted, return it on critical error
+        if user_data.get('stake_deducted'):
+            await db_manager.return_stake(user_id, user_data['stake_amount_for_task'])
+            await message.answer(f"Залог {user_data['stake_amount_for_task']:.2f} ⭐ возвращен на баланс из-за технической ошибки.")
         return
 
     await state.clear()
@@ -890,6 +1258,14 @@ async def handle_unsupported_services(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'cancel_to_earning')
 async def cancel_to_earning_menu(callback: CallbackQuery, state: FSMContext):
+    user_data = await state.get_data()
+    # If stake was deducted, return it on cancel
+    if user_data.get('stake_deducted'):
+        user_id = callback.from_user.id
+        stake_amount = user_data['stake_amount_for_task']
+        await db_manager.return_stake(user_id, stake_amount)
+        await callback.message.answer(f"Залог {stake_amount:.2f} ⭐ возвращен на баланс из-за отмены задания.")
+
     await state.clear()
     await callback.answer("Действие отменено")
     await earning_menu_logic(callback)

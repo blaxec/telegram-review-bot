@@ -1,5 +1,3 @@
-# file: handlers/internship.py
-
 import logging
 import asyncio
 from math import ceil

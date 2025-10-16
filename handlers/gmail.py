@@ -379,13 +379,14 @@ async def admin_confirm_gmail_account(callback: CallbackQuery, bot: Bot, schedul
     if user and user.referrer_id:
         referrer = await db_manager.get_user(user.referrer_id)
         if referrer and referrer.referral_path == 'gmail':
+            referral_reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER * (Rewards.REFERRAL_REWARD_PERCENT / 100.0) # Calculate percentage reward
             reward_amount = Rewards.GMAIL_FOR_REFERRAL_USER
-            await db_manager.add_referral_earning(user_id, Rewards.REFERRAL_GMAIL_ACCOUNT)
+            await db_manager.add_referral_earning(referrer.id, referral_reward_amount) # Add to referrer's earnings
             try:
                 await bot.send_message(
                     referrer.id,
                     f"🎉 Ваш реферал @{user.username} успешно создал Gmail аккаунт! "
-                    f"Вам начислено {Rewards.REFERRAL_GMAIL_ACCOUNT:.2f} ⭐ в копилку."
+                    f"Вам начислено {referral_reward_amount:.2f} ⭐ в копилку."
                 )
             except Exception as e:
                 logger.error(f"Не удалось уведомить реферера {referrer.id} о Gmail награде: {e}")

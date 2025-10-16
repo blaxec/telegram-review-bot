@@ -1,9 +1,8 @@
-#file: config.py
 import os
 import logging
 from urllib.parse import urlparse
 from datetime import timedelta
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__) # Fixed: 'name' is not defined, use __name__
 #--- Основные настройки бота и ролей ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 #ID Главного Администратора (полный доступ)
@@ -61,7 +60,7 @@ class Rewards:
     GMAIL_ACCOUNT = 5.0
     ADMIN_ADD_STARS = 999.0
 # Реферальные награды (теперь в процентах, эти значения устарели)
-    REFERRAL_REWARD_PERCENT = 10.0 # 10%
+    REFERRAL_REWARD_PERCENT = float(os.getenv("REFERRAL_REWARD_PERCENT", "5.0")) # 5%
     REFERRAL_GOOGLE_REVIEW = 0.45 
     GMAIL_FOR_REFERRAL_USER = 4.5
     REFERRAL_GMAIL_ACCOUNT = 0.5
@@ -109,9 +108,9 @@ class Limits:
     LINKS_PER_PAGE = 10
 #--- Экономика и игры ---
     TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT") or 5.0)
-    STAKE_THRESHOLD_REWARD = 50.0
-    STAKE_AMOUNT = 5.0
-    NOVICE_HELP_AMOUNT = 0.5
+    STAKE_THRESHOLD_REWARD = float(os.getenv("STAKE_THRESHOLD_REWARD") or 50.0) # Залог за задания
+    STAKE_AMOUNT = float(os.getenv("STAKE_AMOUNT") or 5.0) # Сумма залога
+    NOVICE_HELP_AMOUNT = float(os.getenv("NOVICE_HELP_AMOUNT") or 0.5) # Сумма помощи новичкам
 #--- Депозитные планы ---
 DEPOSIT_PLANS = {
 "starter": {
@@ -154,7 +153,7 @@ elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-    REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL")
 if REDIS_URL:
     redis_parsed_url = urlparse(REDIS_URL)
     REDIS_HOST = redis_parsed_url.hostname

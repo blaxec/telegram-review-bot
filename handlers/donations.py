@@ -1,5 +1,4 @@
 # handlers/donations.py
-# (Новый файл)
 import logging
 import datetime
 from aiogram import Router, F, Bot
@@ -7,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
-from states.user_states import DonationStates
+from states.game_states import DonationStates # Changed: Import from game_states
 from keyboards import inline
 from database import db_manager
 from config import NOVICE_HELP_AMOUNT
@@ -26,8 +25,9 @@ async def show_donation_menu(callback: CallbackQuery):
         leaderboard_text = "Пока никто не сделал пожертвований."
     else:
         emojis = ["🥇", "🥈", "🥉", "4.", "5."]
-        for i, (username, amount) in enumerate(top_donators):
-            display_name = f"@{username}" if username else f"ID {top_donators[i][0]}" # Fallback to user_id if username is None
+        for i, (user_id_or_username, amount) in enumerate(top_donators): # Changed: top_donators now returns (user_id, username)
+            user_obj = await db_manager.get_user(user_id_or_username) # Get user object to check for username
+            display_name = f"@{user_obj.username}" if user_obj and user_obj.username else f"ID {user_id_or_username}" 
             leaderboard_text += f"{emojis[i]} {display_name} - {amount:.2f} ⭐\n"
             
     menu_text = (
@@ -75,8 +75,9 @@ async def process_donation_amount(message: Message, state: FSMContext, bot: Bot)
     data = await state.get_data()
     if prompt_id := data.get("prompt_message_id"):
         try: await bot.delete_message(message.chat.id, prompt_id)
-        except: pass
-    await message.delete()
+        except TelegramBadRequest: pass # Fixed: Catch TelegramBadRequest
+    try: await message.delete() # Fixed: Added message.delete()
+    except TelegramBadRequest: pass # Fixed: Catch TelegramBadRequest
     
     await state.clear()
     
