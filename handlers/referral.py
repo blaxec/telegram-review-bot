@@ -22,7 +22,9 @@ async def show_selected_referral_path(message_or_callback: Message | CallbackQue
     referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
     referral_earnings = await db_manager.get_referral_earnings(user_id)
 
-    path_description = f"Вы получаете **{Rewards.REFERRAL_REWARD_PERCENT}%** от суммы вознаграждения за каждый успешно выполненный отзыв на Google и Яндекс картах вашими рефералами."
+    path_description = (
+        "Приглашайте друзей и получайте **10%** от их заработка за каждый успешно выполненный отзыв на Google и Яндекс картах!"
+    )
 
     ref_text = (
         f"🚀 **Ваша реферальная система**\n\n"

@@ -8,7 +8,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-
 from database import db_manager
 from keyboards import reply, inline
 from states.user_states import UserState
@@ -55,9 +54,19 @@ async def check_and_expire_links(bot: Bot, storage: BaseStorage):
     except Exception as e:
         logger.exception("An error occurred during the check_and_expire_links job.")
 
+
 async def handle_screenshot_timeout(bot: Bot, user_id: int, state: FSMContext):
     """Срабатывает, если пользователь не прислал скриншот вовремя."""
+    user_data = await state.get_data()
+    
+    # Логика списания залога, если он был взят
+    review_id = user_data.get('review_id_in_progress')
+    if review_id:
+        await db_manager.fail_stake(review_id)
+        logger.info(f"User {user_id} timed out on screenshot. Stake for review {review_id} forfeited.")
+
     await state.clear()
+    
     try:
         msg = await bot.send_message(
             user_id,

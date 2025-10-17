@@ -4,6 +4,7 @@ import asyncio
 import logging
 from math import ceil
 from typing import Union
+import random
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
@@ -18,6 +19,7 @@ from database import db_manager
 from keyboards import inline, reply
 from logic import (admin_logic, admin_roles, internship_logic)
 from logic.ai_helper import generate_review_text
+from logic.notification_logic import notify_subscribers
 from logic.notification_manager import send_notification_to_admins
 from logic.ocr_helper import analyze_screenshot
 from references import reference_manager
@@ -51,7 +53,7 @@ async def delete_previous_messages(message: Message, state: FSMContext):
         pass
 
 
-# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ ---
+# --- БЛОК: УПРАВЛЕНИЕ ССЫЛКАМИ (НОВЫЙ FSM) ---
 
 @router.message(Command("admin_refs"), IsSuperAdmin())
 async def admin_refs_menu(message: Message, state: FSMContext):
@@ -80,6 +82,125 @@ async def admin_select_ref_platform(callback: CallbackQuery, state: FSMContext):
             reply_markup=inline.get_admin_platform_refs_keyboard(platform)
         )
 
+# --- Начало FSM добавления ссылок ---
+@router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin())
+async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(':')[2]
+    await state.update_data(platform_for_links=platform)
+    
+    await state.set_state(AdminState.ADD_LINKS_TYPE)
+    prompt_msg = await callback.message.edit_text(
+        f"Выбрана платформа: <i>{platform}</i>.\n\n"
+        "<b>Шаг 1/5:</b> Выберите тип ссылок:",
+        reply_markup=inline.get_link_type_keyboard(platform)
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("link_type:"), AdminState.ADD_LINKS_TYPE)
+async def admin_add_link_type(callback: CallbackQuery, state: FSMContext):
+    link_type_data = callback.data.split(":")[1]
+    is_fast = "fast" in link_type_data
+    requires_photo = "photo" in link_type_data
+    
+    await state.update_data(
+        is_fast_track_for_links=is_fast,
+        requires_photo_for_links=requires_photo
+    )
+    
+    await state.set_state(AdminState.waiting_for_reward_amount)
+    prompt_msg = await callback.message.edit_text(
+        "<b>Шаг 2/5:</b> Введите сумму награды в звездах за выполнение отзыва по этим ссылкам (например, 15 или 25.5).",
+        reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_reward_amount, IsSuperAdmin())
+async def admin_add_link_reward(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    try:
+        reward = float(message.text.replace(",", "."))
+        if reward < 0: raise ValueError
+    except ValueError:
+        prompt_msg = await message.answer("❌ Некорректная сумма. Введите положительное число.")
+        await state.update_data(prompt_message_id=prompt_msg.message_id)
+        return
+
+    await state.update_data(reward_amount_for_links=reward)
+    await state.set_state(AdminState.waiting_for_gender_requirement)
+    prompt_msg = await message.answer(
+        "<b>Шаг 3/5:</b> Укажите гендерное требование для этих ссылок:",
+        reply_markup=inline.get_gender_requirement_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+@router.callback_query(F.data.startswith("gender_"), AdminState.waiting_for_gender_requirement)
+async def admin_add_link_gender(callback: CallbackQuery, state: FSMContext):
+    gender = callback.data.split("_")[1]
+    await state.update_data(gender_requirement_for_links=gender)
+    
+    await state.set_state(AdminState.waiting_for_campaign_tag)
+    prompt_msg = await callback.message.edit_text(
+        "<b>Шаг 4/5 (необязательно):</b> Хотите добавить тег кампании для этих ссылок? (Например, #кафе_ромашка). Это поможет отслеживать статистику. Введите тег или нажмите 'Пропустить'.",
+        reply_markup=inline.get_campaign_tag_keyboard()
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer()
+
+@router.callback_query(F.data == "skip_campaign_tag", AdminState.waiting_for_campaign_tag)
+async def admin_skip_campaign_tag(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(campaign_tag_for_links=None)
+    await state.set_state(AdminState.waiting_for_links)
+    prompt_msg = await callback.message.edit_text(
+        "<b>Шаг 5/5:</b> Отправьте URL-ссылки. Каждая ссылка с новой строки.",
+        reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+    await callback.answer()
+
+@router.message(AdminState.waiting_for_campaign_tag, IsSuperAdmin())
+async def admin_add_link_campaign(message: Message, state: FSMContext):
+    await delete_previous_messages(message, state)
+    await state.update_data(campaign_tag_for_links=message.text.strip())
+    
+    await state.set_state(AdminState.waiting_for_links)
+    prompt_msg = await message.answer(
+        "<b>Шаг 5/5:</b> Отправьте URL-ссылки. Каждая ссылка с новой строки.",
+        reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+@router.message(AdminState.waiting_for_links, F.text, IsSuperAdmin())
+async def admin_add_links_handler(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    await delete_previous_messages(message, state)
+
+    platform = data.get("platform_for_links")
+    reward = data.get("reward_amount_for_links")
+    gender = data.get("gender_requirement_for_links")
+    campaign = data.get("campaign_tag_for_links")
+    
+    try:
+        # Модифицируем вызов, передавая все собранные данные
+        result_text = await admin_logic.process_add_links_logic(
+            links_text=message.text, 
+            platform=platform, 
+            reward_amount=reward,
+            gender_requirement=gender,
+            campaign_tag=campaign
+        )
+        await message.answer(result_text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
+        
+        # Уведомляем подписчиков
+        await notify_subscribers(platform, gender, bot)
+
+    except Exception as e:
+        logger.exception(f"Критическая ошибка (FSM) при добавлении ссылок: {e}")
+        await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.", reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
+    finally:
+        await state.clear()
+
 
 @router.callback_query(F.data == "admin_refs:back_to_selection", IsSuperAdmin())
 async def admin_back_to_platform_selection(callback: CallbackQuery):
@@ -87,60 +208,6 @@ async def admin_back_to_platform_selection(callback: CallbackQuery):
     if callback.message:
         await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
-
-@router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin())
-async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
-    try:
-        _, _, link_type, photo_req, platform = callback.data.split(':')
-    except ValueError:
-        await callback.answer("Ошибка в данных кнопки.", show_alert=True)
-        return
-        
-    is_fast = (link_type == 'fast')
-    requires_photo = (photo_req == 'photo')
-
-    type_text = []
-    if is_fast: type_text.append("быстрые 🚀")
-    if requires_photo: type_text.append("с фото 📸")
-    if not type_text: type_text.append("обычные")
-    
-    final_type_text = " и ".join(type_text)
-
-    await state.set_state(AdminState.ADD_LINKS)
-    await state.update_data(
-        platform_for_links=platform,
-        is_fast_track_for_links=is_fast,
-        requires_photo_for_links=requires_photo
-    )
-    
-    if callback.message:
-        cancel_button = inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
-        prompt_msg = await callback.message.edit_text(
-            f"Выбрана платформа: <i>{platform}</i>.\n"
-            f"Тип добавляемых ссылок: <b>{final_type_text}</b>.\n\n"
-            f"Отправьте ссылки следующим сообщением. Каждая ссылка с новой строки.",
-            reply_markup=cancel_button
-        )
-        await state.update_data(prompt_message_id=prompt_msg.message_id)
-    await callback.answer()
-
-@router.message(AdminState.ADD_LINKS, F.text, IsSuperAdmin())
-async def admin_add_links_handler(message: Message, state: FSMContext):
-    data = await state.get_data()
-    await delete_previous_messages(message, state)
-
-    platform = data.get("platform_for_links")
-    is_fast = data.get("is_fast_track_for_links")
-    requires_photo = data.get("requires_photo_for_links")
-    
-    try:
-        result_text = await admin_logic.process_add_links_logic(message.text, platform, is_fast_track=is_fast, requires_photo=requires_photo)
-        await message.answer(result_text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
-    except Exception as e:
-        logger.exception(f"Критическая ошибка (FSM) при добавлении ссылок: {e}")
-        await message.answer("❌ Произошла критическая ошибка. Обратитесь к логам.", reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
-    finally:
-        await state.clear()
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), IsSuperAdmin())
 async def admin_view_refs_stats(callback: CallbackQuery):
@@ -159,45 +226,100 @@ async def admin_view_refs_stats(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
 
 
-# --- ОБНОВЛЕННЫЙ БЛОК ПРОСМОТРА СПИСКА ССЫЛОК ---
+# --- ОБНОВЛЕННЫЙ БЛОК ПРОСМОТРА СПИСКА ССЫЛОК С ФИЛЬТРАМИ ---
 
-@router.callback_query(F.data.startswith("admin_refs:list"), IsSuperAdmin())
-async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
-    """Отображает первую страницу списка ссылок с фильтрами."""
-    await callback.answer()
-    await state.set_state(AdminState.LINK_LIST_VIEW)
-    
-    parts = callback.data.split(':')
-    platform = parts[2]
-    filter_type = parts[3] if len(parts) > 3 else "all"
-    
-    await state.update_data(link_list_filter=filter_type)
-    
-    await show_links_page(callback, state, platform, filter_type, page=1)
+async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: str, page: int):
+    """Отображает конкретную страницу списка ссылок с учетом всех фильтров из state."""
+    data = await state.get_data()
+    filter_type = data.get("link_list_filter_type", "all")
+    gender_filter = data.get("link_list_gender_filter")
+    reward_filter = data.get("link_list_reward_filter")
 
-async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: str, filter_type: str, page: int):
-    """Отображает конкретную страницу списка ссылок."""
-    total_links, links_on_page = await db_manager.db_get_paginated_references(platform, page, Limits.LINKS_PER_PAGE, filter_type)
+    total_links, links_on_page = await db_manager.db_get_paginated_references(
+        platform, page, Limits.LINKS_PER_PAGE, filter_type, gender_filter, reward_filter
+    )
     total_pages = ceil(total_links / Limits.LINKS_PER_PAGE) if total_links > 0 else 1
     
     page_text = admin_logic.get_paginated_links_text(links_on_page, page, total_pages, platform, filter_type)
-    keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type)
+    keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type, reward_filter, gender_filter)
     
     if callback.message:
         await callback.message.edit_text(page_text, reply_markup=keyboard, disable_web_page_preview=True)
 
+@router.callback_query(F.data.startswith("admin_refs:list"), IsSuperAdmin())
+async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    parts = callback.data.split(':')
+    platform = parts[2]
+    filter_type = parts[3] if len(parts) > 3 else "all"
+    
+    await state.set_state(AdminState.LINK_LIST_VIEW)
+    # При смене типа сбрасываем остальные фильтры
+    await state.update_data(
+        link_list_platform=platform,
+        link_list_filter_type=filter_type,
+        link_list_gender_filter=None,
+        link_list_reward_filter=None
+    )
+    await show_links_page(callback, state, platform, 1)
+
 @router.callback_query(F.data.startswith("links_page:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def link_list_paginator(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает пагинацию."""
     await callback.answer()
-    
     _, platform, page_str = callback.data.split(":")
-    page = int(page_str)
-    
+    await show_links_page(callback, state, platform, int(page_str))
+
+@router.callback_query(F.data.startswith("admin_refs:filter_gender:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
+async def filter_by_gender_start(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(":")[-1]
+    await callback.message.edit_reply_markup(reply_markup=inline.get_gender_filter_keyboard(platform))
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_refs:set_gender:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
+async def set_gender_filter(callback: CallbackQuery, state: FSMContext):
+    _, _, gender, platform = callback.data.split(":")
+    await state.update_data(link_list_gender_filter=gender)
+    await show_links_page(callback, state, platform, 1)
+
+@router.callback_query(F.data.startswith("admin_refs:filter_reward:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
+async def filter_by_reward_start(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(":")[-1]
+    await state.set_state(AdminState.waiting_for_reward_filter_amount)
+    prompt_msg = await callback.message.edit_text(
+        "Введите точную сумму награды для фильтрации (например, 15.0):",
+        reply_markup=inline.get_reward_filter_keyboard(platform)
+    )
+    await state.update_data(prompt_message_id=prompt_msg.message_id)
+
+@router.message(AdminState.waiting_for_reward_filter_amount, IsSuperAdmin())
+async def set_reward_filter(message: Message, state: FSMContext, bot: Bot):
+    await delete_previous_messages(message, state)
+    try:
+        reward = float(message.text.replace(",", "."))
+    except ValueError:
+        msg = await message.answer("Неверный формат. Введите число.")
+        await asyncio.sleep(3)
+        await msg.delete()
+        return
+
     data = await state.get_data()
-    filter_type = data.get("link_list_filter", "all")
+    platform = data.get("link_list_platform")
+    await state.update_data(link_list_reward_filter=reward)
+    await state.set_state(AdminState.LINK_LIST_VIEW)
     
-    await show_links_page(callback, state, platform, filter_type, page)
+    # Имитируем callback для обновления списка
+    dummy_callback_message = await message.answer("Применяю фильтр...")
+    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=dummy_callback_message)
+    await show_links_page(dummy_callback, state, platform, 1)
+    await dummy_callback_message.delete()
+
+@router.callback_query(F.data.startswith("admin_refs:reset_filters:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
+async def reset_all_filters(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(":")[-1]
+    await state.update_data(link_list_gender_filter=None, link_list_reward_filter=None)
+    await show_links_page(callback, state, platform, 1)
+
+# --- Остальные действия со ссылками (удаление, возврат) ---
 
 @router.callback_query(F.data.startswith("admin_refs:delete_start:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
@@ -526,41 +648,21 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext,
 @router.callback_query(F.data.startswith('admin_ai_generate_start:'), IsAdmin())
 async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try:
-        await callback.answer("Ожидаю сценарий...")
-    except TelegramBadRequest:
-        pass
+        await callback.answer()
+    except TelegramBadRequest: pass
     
     try:
         _, platform, user_id_str, link_id_str, photo_required = callback.data.split(':')
         
-        if platform == 'google':
-            responsible_admin = await admin_roles.get_google_issue_admin()
-        elif platform == 'yandex_with_text':
-            responsible_admin = await admin_roles.get_yandex_text_issue_admin()
-        else:
-            await callback.answer("Ошибка: неизвестная платформа для генерации текста.", show_alert=True)
-            return
+        if platform == 'google': responsible_admin = await admin_roles.get_google_issue_admin()
+        elif platform == 'yandex_with_text': responsible_admin = await admin_roles.get_yandex_text_issue_admin()
+        else: return
         
         if callback.from_user.id != responsible_admin:
             admin_name = await admin_roles.get_admin_username(bot, responsible_admin)
             await callback.answer(f"Эту задачу выполняет {admin_name}", show_alert=True)
             return
 
-        edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
-        if photo_required == 'true':
-            edit_text += "\n\n❗️<b>ВНИМАНИЕ:</b> К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, сценарий."
-
-        new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
-        
-        prompt_msg = None
-        if callback.message:
-            cancel_kb = inline.get_cancel_inline_keyboard(f"admin_back_to_text_choice:{platform}:{user_id_str}:{link_id_str}:{photo_required}")
-            if callback.message.photo: 
-                await callback.message.edit_caption(caption=new_content, reply_markup=cancel_kb)
-            else: 
-                await callback.message.edit_text(new_content, reply_markup=cancel_kb)
-
-        await state.set_state(AdminState.AI_AWAITING_SCENARIO)
         await state.update_data(
             target_user_id=int(user_id_str), 
             target_link_id=int(link_id_str), 
@@ -568,10 +670,77 @@ async def admin_ai_generate_start(callback: CallbackQuery, state: FSMContext, bo
             photo_required=(photo_required == 'true'),
             original_message_id=callback.message.message_id
         )
+        
+        await callback.message.edit_reply_markup(reply_markup=inline.get_manual_text_scenario_keyboard())
+
     except Exception as e: 
         logger.exception(f"Ошибка на старте AI генерации: {e}")
-        if callback.message:
-            await callback.message.answer("Произошла ошибка на старте генерации.", show_alert=True)
+
+@router.callback_query(F.data == "input_scenario_manually", IsAdmin())
+async def input_scenario_manually(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
+    if data.get('photo_required'):
+        edit_text += "\n\n❗️<b>ВНИМАНИЕ:</b> К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, сценарий."
+
+    await callback.message.edit_text(edit_text, reply_markup=inline.get_cancel_inline_keyboard("cancel_action"))
+    await state.set_state(AdminState.AI_AWAITING_SCENARIO)
+
+@router.callback_query(F.data == "use_scenario_template", IsAdmin())
+async def use_scenario_template(callback: CallbackQuery, state: FSMContext):
+    categories = await db_manager.get_all_scenario_categories()
+    if not categories:
+        await callback.answer("Банк сценариев пуст. Сначала добавьте шаблоны через /scenarios.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "Выберите категорию для шаблона:",
+        reply_markup=inline.get_scenario_category_selection_keyboard(categories)
+    )
+
+@router.callback_query(F.data.startswith("use_scenario_cat:"), IsAdmin())
+async def select_scenario_from_template(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split(":", 1)[1]
+    scenarios = await db_manager.get_ai_scenarios_by_category(category)
+    if not scenarios:
+        await callback.answer("В этой категории нет сценариев.", show_alert=True)
+        return
+
+    random_scenario = random.choice(scenarios)
+    await state.update_data(ai_scenario=random_scenario.text)
+
+    await callback.message.edit_text(
+        f"Выбран случайный шаблон из категории '{category}':\n\n"
+        f"<i>{random_scenario.text}</i>\n\n"
+        "Использовать этот сценарий для генерации?",
+        reply_markup=inline.get_ai_template_use_keyboard()
+    )
+
+@router.callback_query(F.data.startswith("ai_template:"), IsAdmin())
+async def handle_template_action(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    data = await state.get_data()
+    scenario = data.get('ai_scenario')
+    if not scenario:
+        await callback.answer("Ошибка: сценарий не найден. Начните заново.", show_alert=True)
+        return
+
+    if action == "confirm_use":
+        # Имитируем отправку сообщения со сценарием для запуска генерации
+        dummy_message = callback.message
+        dummy_message.text = scenario
+        await admin_process_ai_scenario(dummy_message, state, callback.bot)
+    elif action == "edit_text":
+        await state.set_state(AdminState.waiting_for_edited_scenario_text)
+        await callback.message.edit_text(
+            "Отредактируйте текст сценария и отправьте его:",
+            reply_markup=inline.get_cancel_inline_keyboard("cancel_action")
+        )
+
+@router.message(AdminState.waiting_for_edited_scenario_text, IsAdmin())
+async def process_edited_scenario(message: Message, state: FSMContext, bot: Bot):
+    # Этот обработчик теперь тоже запускает генерацию
+    await admin_process_ai_scenario(message, state, bot)
+
 
 @router.callback_query(F.data.startswith("admin_back_to_text_choice:"))
 async def back_to_text_choice(callback: CallbackQuery, state: FSMContext, bot: Bot):

@@ -1,7 +1,8 @@
 import datetime
 import logging
 import json
-from typing import Union, List, Tuple, Dict, Optional, Set
+import asyncio
+from typing import Union, List, Tuple, Dict, Optional, Set, Any
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, and_, delete, func, desc, case, insert
 from sqlalchemy.orm import selectinload
@@ -431,7 +432,7 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
             base_query = base_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
             count_query = count_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
         
-        if gender_filter:
+        if gender_filter and gender_filter != 'all':
             base_query = base_query.where(Link.gender_requirement == gender_filter)
             count_query = count_query.where(Link.gender_requirement == gender_filter)
 
@@ -1432,3 +1433,295 @@ async def get_transfer_complaints(page: int = 1, limit: int = 5) -> Tuple[List[T
         complaints = result.scalars().all()
 
         return complaints, total_count
+
+
+# --- НОВЫЕ ФУНКЦИИ ---
+
+# --- Кампании (Модуль 1.2) ---
+async def get_all_campaign_tags() -> List[str]:
+    async with async_session() as session:
+        query = select(Link.campaign_tag).where(Link.campaign_tag.isnot(None)).distinct()
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_stats_for_campaign(tag: str) -> Dict[str, int]:
+    async with async_session() as session:
+        query = (
+            select(
+                Link.status,
+                func.count(Link.id)
+            )
+            .where(Link.campaign_tag == tag)
+            .group_by(Link.status)
+        )
+        result = await session.execute(query)
+        stats = {status: count for status, count in result.all()}
+
+        total_query = select(func.count(Link.id)).where(Link.campaign_tag == tag)
+        total_count = await session.scalar(total_query)
+        stats['total'] = total_count
+        return stats
+
+# --- Подписки на задания (Модуль 2.1) ---
+async def add_task_subscription(user_id: int, platform: str, gender: str) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            stmt = insert(TaskSubscription).values(user_id=user_id, platform=platform, gender=gender)
+            try:
+                await session.execute(stmt)
+                return True
+            except IntegrityError: # Сработает, если подписка уже существует
+                return False
+
+async def find_subscribers(platform: str, gender: str) -> List[TaskSubscription]:
+    async with async_session() as session:
+        query = select(TaskSubscription).where(
+            TaskSubscription.platform == platform,
+            TaskSubscription.gender == gender
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def delete_subscriptions(user_ids: List[int], platform: str, gender: str):
+    async with async_session() as session:
+        async with session.begin():
+            stmt = delete(TaskSubscription).where(
+                TaskSubscription.user_id.in_(user_ids),
+                TaskSubscription.platform == platform,
+                TaskSubscription.gender == gender
+            )
+            await session.execute(stmt)
+
+# --- Залог (Модуль 3.2) ---
+async def deduct_stake(user_id: int, amount: float) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id, with_for_update=True)
+            if not user or user.balance < amount:
+                return False
+            user.balance -= amount
+            user.hold_balance += amount
+            return True
+
+async def return_stake(user_id: int, amount: float):
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id, with_for_update=True)
+            if user and user.hold_balance >= amount:
+                user.hold_balance -= amount
+                user.balance += amount
+
+async def fail_stake(review_id: int):
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id, with_for_update=True)
+            if not review or not review.stake_amount or review.stake_amount <= 0:
+                return
+            
+            user = await session.get(User, review.user_id, with_for_update=True)
+            if user and user.hold_balance >= review.stake_amount:
+                user.hold_balance -= review.stake_amount
+                logger.info(f"Stake amount {review.stake_amount} forfeited from user {user.id} for failed review {review.id}.")
+
+# --- Первое задание (Модуль 3.3) ---
+async def set_first_task_completed(user_id: int):
+    async with async_session() as session:
+        async with session.begin():
+            stmt = update(User).where(User.id == user_id).values(first_task_completed=True)
+            await session.execute(stmt)
+
+# --- Расширенная статистика (Модуль 3.4) ---
+async def get_extended_admin_stats() -> Dict[str, Any]:
+    async with async_session() as session:
+        now_utc = datetime.datetime.utcnow()
+        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        seven_days_ago = today_start - datetime.timedelta(days=7)
+        thirty_days_ago = today_start - datetime.timedelta(days=30)
+
+        # Кол-во выполненных отзывов
+        q_rev_today = select(func.count(Review.id)).where(Review.status == 'approved', Review.created_at >= today_start)
+        q_rev_7d = select(func.count(Review.id)).where(Review.status == 'approved', Review.created_at >= seven_days_ago)
+        q_rev_30d = select(func.count(Review.id)).where(Review.status == 'approved', Review.created_at >= thirty_days_ago)
+        
+        # Сумма выплат
+        q_paid_today = select(func.sum(Review.amount)).where(Review.status == 'approved', Review.created_at >= today_start)
+        q_paid_7d = select(func.sum(Review.amount)).where(Review.status == 'approved', Review.created_at >= seven_days_ago)
+        q_paid_30d = select(func.sum(Review.amount)).where(Review.status == 'approved', Review.created_at >= thirty_days_ago)
+
+        # Топ-5 активных
+        q_top_active = (
+            select(User.username, func.count(Review.id).label('c'))
+            .join(Review, User.id == Review.user_id)
+            .where(Review.status == 'approved', Review.created_at >= thirty_days_ago)
+            .group_by(User.id)
+            .order_by(desc('c'))
+            .limit(5)
+        )
+        
+        # Топ-5 "риска"
+        q_top_rejected = (
+            select(User.username, func.count(Review.id).label('c'))
+            .join(Review, User.id == Review.user_id)
+            .where(Review.status == 'rejected', Review.created_at >= thirty_days_ago)
+            .group_by(User.id)
+            .order_by(desc('c'))
+            .limit(5)
+        )
+
+        res = await asyncio.gather(
+            session.scalar(q_rev_today), session.scalar(q_rev_7d), session.scalar(q_rev_30d),
+            session.scalar(q_paid_today), session.scalar(q_paid_7d), session.scalar(q_paid_30d),
+            session.execute(q_top_active), session.execute(q_top_rejected)
+        )
+        
+        stats = {
+            'reviews_today': res[0] or 0, 'reviews_7_days': res[1] or 0, 'reviews_30_days': res[2] or 0,
+            'paid_today': res[3] or 0.0, 'paid_7_days': res[4] or 0.0, 'paid_30_days': res[5] or 0.0
+        }
+        
+        stats['avg_reward'] = (stats['paid_30_days'] / stats['reviews_30_days']) if stats['reviews_30_days'] > 0 else 0.0
+        
+        stats['top_5_active'] = "\n".join([f" • @{u} ({c} шт.)" for u, c in res[6].all()]) or "Нет данных"
+        stats['top_5_rejected'] = "\n".join([f" • @{u} ({c} шт.)" for u, c in res[7].all()]) or "Нет данных"
+
+        return stats
+
+# --- Орёл и Решка (Модуль 4.1) ---
+async def update_user_balance_and_streak(user_id: int, balance_change: float, new_streak: int):
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id, with_for_update=True)
+            if user:
+                user.balance += balance_change
+                user.win_streak = new_streak
+
+# --- Депозиты (Модуль 4.2) ---
+async def create_user_deposit(user_id: int, plan_id: str, amount: float):
+    from config import DEPOSIT_PLANS # Import here to avoid circular dependency
+    plan = DEPOSIT_PLANS[plan_id]
+    
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id, with_for_update=True)
+            if not user or user.balance < amount:
+                return
+            
+            user.balance -= amount
+            now = datetime.datetime.utcnow()
+            new_deposit = UserDeposit(
+                user_id=user_id,
+                deposit_plan_id=plan_id,
+                initial_amount=amount,
+                current_balance=amount,
+                opens_at=now,
+                closes_at=now + datetime.timedelta(days=plan['duration_days']),
+                last_accrual_at=now
+            )
+            session.add(new_deposit)
+            await log_operation(session, user_id, 'DEPOSIT_OPEN', -amount, f"Открытие депозита '{plan['name']}'")
+
+async def get_active_user_deposits(user_id: int) -> List[UserDeposit]:
+    async with async_session() as session:
+        query = select(UserDeposit).where(UserDeposit.user_id == user_id).order_by(UserDeposit.closes_at)
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_all_active_deposits() -> List[UserDeposit]:
+    async with async_session() as session:
+        query = select(UserDeposit).where(UserDeposit.closes_at > datetime.datetime.utcnow())
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_deposits_to_close() -> List[UserDeposit]:
+    async with async_session() as session:
+        query = select(UserDeposit).where(UserDeposit.closes_at <= datetime.datetime.utcnow())
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def update_deposit_balance(deposit_id: int, new_balance: float, new_last_accrual: datetime.datetime):
+    async with async_session() as session:
+        async with session.begin():
+            stmt = update(UserDeposit).where(UserDeposit.id == deposit_id).values(
+                current_balance=new_balance,
+                last_accrual_at=new_last_accrual
+            )
+            await session.execute(stmt)
+
+async def close_deposit(deposit_id: int, final_balance: float):
+    from config import DEPOSIT_PLANS
+    async with async_session() as session:
+        async with session.begin():
+            deposit = await session.get(UserDeposit, deposit_id)
+            if not deposit: return
+            
+            user = await session.get(User, deposit.user_id)
+            if user:
+                user.balance += final_balance
+                plan_name = DEPOSIT_PLANS.get(deposit.deposit_plan_id, {}).get('name', 'N/A')
+                await log_operation(session, user.id, 'DEPOSIT_CLOSE', final_balance, f"Закрытие депозита '{plan_name}'")
+
+            await session.delete(deposit)
+
+# --- AI Сценарии (Модуль 5.1) ---
+async def create_ai_scenario(category: str, text: str):
+    async with async_session() as session:
+        async with session.begin():
+            session.add(AIScenario(category=category, text=text))
+
+async def get_all_scenario_categories() -> List[str]:
+    async with async_session() as session:
+        query = select(AIScenario.category).distinct()
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def get_ai_scenarios_by_category(category: str) -> List[AIScenario]:
+    async with async_session() as session:
+        query = select(AIScenario).where(AIScenario.category == category)
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def delete_ai_scenario(scenario_id: int) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(delete(AIScenario).where(AIScenario.id == scenario_id))
+            return result.rowcount > 0
+
+# --- Донаты (Модуль 6) ---
+async def get_top_donators(limit: int = 5) -> List[Tuple[int, float]]:
+    async with async_session() as session:
+        query = (
+            select(Donation.user_id, func.sum(Donation.amount).label('total'))
+            .group_by(Donation.user_id)
+            .order_by(desc('total'))
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return result.all()
+
+async def process_donation(user_id: int, amount: float):
+    async with async_session() as session:
+        async with session.begin():
+            user = await session.get(User, user_id)
+            user.balance -= amount
+            session.add(Donation(user_id=user_id, amount=amount))
+            await log_operation(session, user_id, 'DONATION', -amount, "Пожертвование в Фонд Помощи")
+
+            fund_balance_str = await get_system_setting("donation_fund_balance")
+            fund_balance = float(fund_balance_str) if fund_balance_str else 0.0
+            await set_system_setting("donation_fund_balance", str(fund_balance + amount))
+
+async def process_help_request(user_id: int, amount: float) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            fund_balance_str = await get_system_setting("donation_fund_balance")
+            fund_balance = float(fund_balance_str) if fund_balance_str else 0.0
+            
+            if fund_balance < amount:
+                return False
+            
+            user = await session.get(User, user_id)
+            user.balance += amount
+            user.last_help_request_at = datetime.datetime.utcnow()
+            await log_operation(session, user_id, 'HELP_RECEIVED', amount, "Помощь из Фонда")
+            await set_system_setting("donation_fund_balance", str(fund_balance - amount))
+            return True

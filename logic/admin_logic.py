@@ -348,21 +348,19 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
     user_id = approved_review.user_id
     user = await db_manager.get_user(user_id)
     
-    # Логика залога
-    if approved_review.stake_amount and approved_review.stake_amount > 0:
-        await db_manager.return_stake(user_id, approved_review.stake_amount)
-
-    # Логика первого задания
+    # Логика первого задания (Модуль 3.3)
     if user and not user.first_task_completed:
         await db_manager.set_first_task_completed(user_id)
     
-    # Логика реферальной системы (процентная)
-    if user and user.referrer_id:
+    # Логика реферальной системы (Модуль 3.1)
+    referral_platforms = ['google_maps', 'yandex_with_text', 'yandex_without_text']
+    if user and user.referrer_id and approved_review.link.platform in referral_platforms:
         referrer = await db_manager.get_user(user.referrer_id)
         if referrer:
-            referral_reward = approved_review.amount * (Rewards.REFERRAL_REWARD_PERCENT / 100.0)
+            # Награда берется из amount отзыва, которое равно reward_amount ссылки
+            referral_reward = approved_review.amount * 0.10 # 10%
             if referral_reward > 0:
-                await db_manager.add_referral_earning(user_id, referral_reward)
+                await db_manager.add_referral_earning(user.id, referral_reward)
                 try:
                     await bot.send_message(
                         referrer.id,
@@ -372,6 +370,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
                 except Exception as e:
                     logger.error(f"Не удалось уведомить реферера {referrer.id}: {e}")
 
+    # Логика промокодов (уже была)
     if approved_review.platform == 'google_maps':
         await check_and_apply_promo_reward(user_id, "google_review", bot)
     elif 'yandex' in approved_review.platform:
@@ -383,6 +382,7 @@ async def approve_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, st
         logger.error(f"Не удалось уведомить пользователя {user_id} об окончательном одобрении: {e}")
         
     return True, "✅ Отзыв одобрен и выплачен!"
+
 
 async def reject_final_review_logic(review_id: int, bot: Bot) -> tuple[bool, str]:
     """Логика для отклонения отзыва на финальном этапе проверки."""
