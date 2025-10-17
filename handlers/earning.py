@@ -11,6 +11,10 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from typing import Union, bot
+from references import reference_manager
+from logic.cleanup_logic import handle_screenshot_timeout
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import sys

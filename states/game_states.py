@@ -1,5 +1,5 @@
 # file: states/game_states.py
-# (Новый файл)
+
 from aiogram.fsm.state import State, StatesGroup
 
 class CoinflipStates(StatesGroup):

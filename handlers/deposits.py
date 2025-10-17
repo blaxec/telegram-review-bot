@@ -1,5 +1,5 @@
 # file: handlers/deposits.py
-# (Новый файл)
+
 import logging
 from datetime import datetime
 from aiogram import Router, F, Bot
@@ -28,15 +28,17 @@ async def show_deposits_menu(callback: CallbackQuery):
         text += "**Активные вклады:**\n"
         for dep in deposits:
             time_left = dep.closes_at - datetime.utcnow()
-            days, rem = divmod(time_left.total_seconds(), 86400)
-            hours, _ = divmod(rem, 3600)
-            time_left_str = f"осталось {int(days)}д {int(hours)}ч"
+            if time_left.total_seconds() > 0:
+                days, rem = divmod(time_left.total_seconds(), 86400)
+                hours, _ = divmod(rem, 3600)
+                time_left_str = f"осталось {int(days)}д {int(hours)}ч"
+            else:
+                time_left_str = "завершается"
             
             plan_name = DEPOSIT_PLANS.get(dep.deposit_plan_id, {}).get("name", "Неизвестный")
             text += f"• План '{plan_name}': **{dep.current_balance:.2f} ⭐**, закроется {dep.closes_at.strftime('%d.%m.%Y %H:%M')} ({time_left_str})\n"
 
     await callback.message.edit_text(text, reply_markup=inline.get_deposits_menu_keyboard())
-
 
 @router.callback_query(F.data == 'show_deposits_menu')
 async def deposits_entry_point(callback: CallbackQuery):
@@ -108,6 +110,8 @@ async def process_deposit_amount(message: Message, state: FSMContext, bot: Bot):
 
     await state.clear()
     
-    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=await message.answer("..."))
+    # Имитируем callback, чтобы обновить меню
+    dummy_callback_message = await message.answer("...")
+    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=dummy_callback_message)
     await show_deposits_menu(dummy_callback)
-    await dummy_callback.message.delete()
+    await dummy_callback_message.delete()

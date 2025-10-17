@@ -1,4 +1,5 @@
-# handlers/donations.py
+# file: handlers/donations.py
+
 import logging
 import datetime
 from aiogram import Router, F, Bot
@@ -6,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
-from states.game_states import DonationStates # Changed: Import from game_states
+from states.user_states import DonationStates
 from keyboards import inline
 from database import db_manager
 from config import NOVICE_HELP_AMOUNT
@@ -15,7 +16,7 @@ from logic.user_notifications import format_timedelta
 router = Router()
 logger = logging.getLogger(__name__)
 
-async def show_donation_menu(callback: CallbackQuery):
+async def show_donation_menu(callback: CallbackQuery, bot: Bot):
     fund_balance_str = await db_manager.get_system_setting('donation_fund_balance')
     fund_balance = float(fund_balance_str) if fund_balance_str else 0.0
     top_donators = await db_manager.get_top_donators(limit=5)
@@ -25,9 +26,12 @@ async def show_donation_menu(callback: CallbackQuery):
         leaderboard_text = "Пока никто не сделал пожертвований."
     else:
         emojis = ["🥇", "🥈", "🥉", "4.", "5."]
-        for i, (user_id_or_username, amount) in enumerate(top_donators): # Changed: top_donators now returns (user_id, username)
-            user_obj = await db_manager.get_user(user_id_or_username) # Get user object to check for username
-            display_name = f"@{user_obj.username}" if user_obj and user_obj.username else f"ID {user_id_or_username}" 
+        for i, (user_id, amount) in enumerate(top_donators):
+            try:
+                user_info = await bot.get_chat(user_id)
+                display_name = f"@{user_info.username}" if user_info.username else f"{user_info.first_name}"
+            except Exception:
+                display_name = f"ID {user_id}"
             leaderboard_text += f"{emojis[i]} {display_name} - {amount:.2f} ⭐\n"
             
     menu_text = (
@@ -42,8 +46,8 @@ async def show_donation_menu(callback: CallbackQuery):
     await callback.message.edit_text(menu_text, reply_markup=inline.get_donation_menu_keyboard())
 
 @router.callback_query(F.data == 'profile_donate')
-async def donation_entry(callback: CallbackQuery):
-    await show_donation_menu(callback)
+async def donation_entry(callback: CallbackQuery, bot: Bot):
+    await show_donation_menu(callback, bot)
 
 @router.callback_query(F.data == 'make_donation')
 async def make_donation_start(callback: CallbackQuery, state: FSMContext):
@@ -75,16 +79,16 @@ async def process_donation_amount(message: Message, state: FSMContext, bot: Bot)
     data = await state.get_data()
     if prompt_id := data.get("prompt_message_id"):
         try: await bot.delete_message(message.chat.id, prompt_id)
-        except TelegramBadRequest: pass # Fixed: Catch TelegramBadRequest
-    try: await message.delete() # Fixed: Added message.delete()
-    except TelegramBadRequest: pass # Fixed: Catch TelegramBadRequest
+        except TelegramBadRequest: pass
+    try: await message.delete()
+    except TelegramBadRequest: pass
     
     await state.clear()
     
-    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=await message.answer("..."))
-    await show_donation_menu(dummy_callback)
-    await dummy_callback.message.delete()
-
+    dummy_callback_message = await message.answer("...")
+    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=dummy_callback_message)
+    await show_donation_menu(dummy_callback, bot)
+    await dummy_callback_message.delete()
 
 @router.callback_query(F.data == 'get_daily_help')
 async def get_daily_help(callback: CallbackQuery, bot: Bot):

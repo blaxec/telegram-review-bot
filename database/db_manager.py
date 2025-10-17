@@ -1,5 +1,3 @@
-## file: telegram-review-bot-main/database/db_manager.py
-
 import datetime
 import logging
 import json
@@ -13,7 +11,8 @@ from database.models import (Base, User, Review, Link, WithdrawalRequest,
                              PromoCode, PromoActivation, SupportTicket,
                              RewardSetting, SystemSetting, OperationHistory, UnbanRequest,
                              InternshipApplication, InternshipTask, InternshipMistake,
-                             Administrator, PostTemplate, TransferComplaint)
+                             Administrator, PostTemplate, TransferComplaint, TaskSubscription,
+                             AIScenario, UserDeposit, Donation)
 from config import DATABASE_URL, Durations, Limits, TRANSFER_COMMISSION_PERCENT
 
 logger = logging.getLogger(__name__)
@@ -171,16 +170,19 @@ async def transfer_stars(sender_id: int, recipient_id: int, amount: float, comme
             sender = await session.get(User, sender_id)
             recipient = await session.get(User, recipient_id)
 
+            # Проверка получателя на выполнение первого задания
+            if not recipient or not recipient.first_task_completed:
+                return False, -1
+
             commission = amount * (TRANSFER_COMMISSION_PERCENT / 100)
             total_to_deduct = amount + commission
 
-            if not sender or not recipient or sender.balance < total_to_deduct:
+            if not sender or sender.balance < total_to_deduct:
                 return False, 0
 
             sender.balance -= total_to_deduct
             recipient.balance += amount
             
-            # Логирование для отправителя
             recipient_info = f"@{recipient.username}" if recipient.username else f"ID {recipient.id}"
             sender_description = f"Получатель: {recipient_info}. Комиссия: {commission:.2f} ⭐"
             await log_operation(
@@ -188,7 +190,6 @@ async def transfer_stars(sender_id: int, recipient_id: int, amount: float, comme
                 comment=comment, media_json=json.dumps(media_list), is_anonymous=is_anonymous
             )
             
-            # Логирование для получателя
             sender_info = "Анонимный отправитель" if is_anonymous else (f"@{sender.username}" if sender.username else f"ID {sender.id}")
             recipient_description = f"Отправитель: {sender_info}"
             transfer_id = await log_operation(
@@ -255,7 +256,7 @@ async def add_user_warning(user_id: int, platform: str, hours_block: int = Durat
                 user.warnings = 0
     return current_warnings
 
-async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int, screenshot_file_id: str = None, attached_photo_file_id: str = None) -> int:
+async def create_review_draft(user_id: int, link_id: int, platform: str, text: str, admin_message_id: int, screenshot_file_id: str = None, attached_photo_file_id: str = None, stake_amount: float = None) -> int:
     review_id = 0
     async with async_session() as session:
         async with session.begin():
@@ -267,7 +268,8 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
                 review_text=text,
                 admin_message_id=admin_message_id,
                 screenshot_file_id=screenshot_file_id,
-                attached_photo_file_id=attached_photo_file_id
+                attached_photo_file_id=attached_photo_file_id,
+                stake_amount=stake_amount
             )
             session.add(new_review)
             await session.flush()
@@ -326,6 +328,10 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
             user = await session.get(User, review.user_id)
             if user and review.status == 'on_hold':
                 user.hold_balance -= review.amount
+            
+            # Списание залога при отклонении
+            if review.stake_amount and review.stake_amount > 0 and user.hold_balance >= review.stake_amount:
+                user.hold_balance -= review.stake_amount
 
             review.status = 'rejected'
             return review
@@ -333,19 +339,29 @@ async def admin_reject_review(review_id: int) -> Union[Review, None]:
 async def admin_approve_review(review_id: int) -> Union[Review, None]:
     async with async_session() as session:
         async with session.begin():
-            review = await session.get(Review, review_id)
+            review = await session.get(Review, review_id, options=[selectinload(Review.link)])
             if not review or review.status not in ['on_hold', 'awaiting_confirmation']:
                 logger.warning(f"Admin approve failed for review {review_id}. Status was {review.status}, not 'awaiting_confirmation' or 'on_hold'.")
                 return None
 
             user = await session.get(User, review.user_id)
             if user:
+                # Списание награды из холда
                 if user.hold_balance >= review.amount:
                     user.hold_balance -= review.amount
                 else:
                     logger.warning(f"User {user.id} hold balance ({user.hold_balance}) is less than review amount ({review.amount}) for review {review_id}. Setting hold to 0.")
                     user.hold_balance = 0
-
+                
+                # Возврат залога из холда на основной баланс
+                if review.stake_amount and review.stake_amount > 0:
+                    if user.hold_balance >= review.stake_amount:
+                        user.hold_balance -= review.stake_amount
+                        user.balance += review.stake_amount
+                    else:
+                         logger.warning(f"User {user.id} hold balance ({user.hold_balance}) is less than stake amount ({review.stake_amount}) for review {review_id}.")
+                
+                # Начисление основной награды на баланс
                 user.balance += review.amount
                 await log_operation(session, user.id, "REVIEW_APPROVED", review.amount, f"Отзыв #{review.id} ({review.platform})")
 
@@ -358,19 +374,28 @@ async def get_all_hold_reviews() -> list[Review]:
         result = await session.execute(query)
         return result.scalars().all()
 
-async def db_add_reference(url: str, platform: str, is_fast_track: bool = False, requires_photo: bool = False) -> bool:
+async def db_add_reference(url: str, platform: str, is_fast_track: bool = False, requires_photo: bool = False, reward_amount: float = 0.0, gender_requirement: str = 'any', campaign_tag: str = None) -> bool:
     async with async_session() as session:
         async with session.begin():
-            new_link = Link(url=url, platform=platform, is_fast_track=is_fast_track, requires_photo=requires_photo)
+            new_link = Link(
+                url=url, 
+                platform=platform, 
+                is_fast_track=is_fast_track, 
+                requires_photo=requires_photo,
+                reward_amount=reward_amount,
+                gender_requirement=gender_requirement,
+                campaign_tag=campaign_tag
+            )
             session.add(new_link)
         return True
 
-async def db_get_available_reference(platform: str) -> Union[Link, None]:
+async def db_get_available_reference(platform: str, gender: str) -> Union[Link, None]:
     async with async_session() as session:
         async with session.begin():
             stmt = select(Link.id).where(
                 Link.platform == platform,
-                Link.status == 'available'
+                Link.status == 'available',
+                Link.gender_requirement.in_(['any', gender])
             ).limit(1).with_for_update(skip_locked=True)
 
             result = await session.execute(stmt)
@@ -391,7 +416,7 @@ async def db_update_link_status(link_id: int, status: str, user_id: int | None =
             )
             await session.execute(stmt)
 
-async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all") -> Tuple[int, List[Link]]:
+async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all", gender_filter: str = None, reward_filter: float = None) -> Tuple[int, List[Link]]:
     async with async_session() as session:
         base_query = select(Link).where(Link.platform == platform)
         count_query = select(func.count(Link.id)).where(Link.platform == platform)
@@ -405,6 +430,14 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
         elif filter_type == 'regular':
             base_query = base_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
             count_query = count_query.where(and_(Link.is_fast_track == False, Link.requires_photo == False))
+        
+        if gender_filter:
+            base_query = base_query.where(Link.gender_requirement == gender_filter)
+            count_query = count_query.where(Link.gender_requirement == gender_filter)
+
+        if reward_filter is not None:
+            base_query = base_query.where(Link.reward_amount == reward_filter)
+            count_query = count_query.where(Link.reward_amount == reward_filter)
 
         total_count = await session.scalar(count_query)
 
@@ -1205,15 +1238,13 @@ async def complete_internship(task: InternshipTask) -> float:
 async def process_intern_decision(review_id: int, is_approved: bool, reason: Optional[str] = None):
     async with async_session() as session:
         async with session.begin():
-            # Находим, какой стажер работал над этим отзывом
             review = await session.get(Review, review_id, options=[selectinload(Review.user)])
             if not review or not review.user or not review.user.is_busy_intern:
-                return # Это не была задача стажера
+                return
 
             intern = review.user
             intern.is_busy_intern = False
 
-            # Используем существующую сессию для получения задачи
             task_result = await session.execute(
                 select(InternshipTask).where(
                     InternshipTask.intern_id == intern.id,
@@ -1244,12 +1275,10 @@ async def process_intern_decision(review_id: int, is_approved: bool, reason: Opt
 
 # --- Функции для управления администраторами ---
 async def get_administrator(user_id: int) -> Optional[Administrator]:
-    """Получает запись администратора по его ID."""
     async with async_session() as session:
         return await session.get(Administrator, user_id)
 
 async def add_administrator(user_id: int, role: str, is_tester: bool, added_by: int, is_removable: bool = True) -> bool:
-    """Добавляет нового администратора в базу данных."""
     async with async_session() as session:
         async with session.begin():
             existing_admin = await session.get(Administrator, user_id)
@@ -1268,21 +1297,18 @@ async def add_administrator(user_id: int, role: str, is_tester: bool, added_by: 
         return True
 
 async def get_all_administrators_by_role() -> List[Administrator]:
-    """Получает список всех администраторов из базы данных."""
     async with async_session() as session:
         query = select(Administrator).order_by(case((Administrator.role == 'super_admin', 0), else_=1), Administrator.user_id)
         result = await session.execute(query)
         return result.scalars().all()
 
 async def delete_administrator(user_id: int, self_delete_check: int = 0) -> bool:
-    """Удаляет администратора по ID, с проверкой на самоудаление."""
     async with async_session() as session:
         async with session.begin():
             admin = await session.get(Administrator, user_id)
             if not admin or not admin.is_removable:
                 return False
             
-            # Проверка на самоудаление
             if user_id == self_delete_check:
                 logger.warning(f"Admin {user_id} attempted to self-delete. Action blocked.")
                 return False
@@ -1291,7 +1317,6 @@ async def delete_administrator(user_id: int, self_delete_check: int = 0) -> bool
             return True
 
 async def reassign_tasks_from_deleted_admin(deleted_admin_id: int, default_admin_id: int):
-    """Переназначает все роли удаленного админа на админа по умолчанию."""
     async with async_session() as session:
         async with session.begin():
             stmt = update(SystemSetting).where(
@@ -1302,7 +1327,6 @@ async def reassign_tasks_from_deleted_admin(deleted_admin_id: int, default_admin
 
 
 async def update_administrator(user_id: int, **kwargs) -> Optional[Administrator]:
-    """Обновляет данные администратора."""
     async with async_session() as session:
         async with session.begin():
             admin = await session.get(Administrator, user_id)
@@ -1316,9 +1340,8 @@ async def update_administrator(user_id: int, **kwargs) -> Optional[Administrator
             return admin
 
 
-# --- Новые функции для системы постов ---
+# --- Функции для системы постов ---
 async def get_user_ids_for_broadcast(audience: List[str]) -> Set[int]:
-    """Получает уникальные ID пользователей для рассылки на основе аудитории."""
     user_ids = set()
     async with async_session() as session:
         if "all_users" in audience:
@@ -1342,7 +1365,6 @@ async def get_user_ids_for_broadcast(audience: List[str]) -> Set[int]:
     return user_ids
 
 async def save_post_template(template_name: str, text: str, media_json: str, buttons_json: str, created_by: int) -> Tuple[bool, str]:
-    """Сохраняет шаблон поста в базу данных."""
     async with async_session() as session:
         async with session.begin():
             existing = await session.execute(select(PostTemplate).where(PostTemplate.template_name == template_name))
@@ -1360,32 +1382,27 @@ async def save_post_template(template_name: str, text: str, media_json: str, but
             return True, f"✅ Шаблон '{template_name}' успешно сохранен."
 
 async def get_post_template_by_id(template_id: int) -> Optional[PostTemplate]:
-    """Получает шаблон поста по ID."""
     async with async_session() as session:
         return await session.get(PostTemplate, template_id)
 
 async def get_all_post_templates() -> List[PostTemplate]:
-    """Получает все сохраненные шаблоны постов."""
     async with async_session() as session:
         result = await session.execute(select(PostTemplate).order_by(PostTemplate.template_name))
         return result.scalars().all()
 
 async def delete_post_template(template_id: int) -> bool:
-    """Удаляет шаблон поста по ID."""
     async with async_session() as session:
         async with session.begin():
             result = await session.execute(delete(PostTemplate).where(PostTemplate.id == template_id))
             return result.rowcount > 0
 
-# --- Новые функции для жалоб ---
+# --- Функции для жалоб ---
 async def create_transfer_complaint(transfer_id: int, complainant_id: int, reason: str) -> bool:
-    """Создает жалобу на перевод."""
     async with async_session() as session:
         async with session.begin():
-            # Проверяем, существует ли уже жалоба на этот перевод
             existing = await session.execute(select(TransferComplaint).where(TransferComplaint.transfer_id == transfer_id))
             if existing.scalar_one_or_none():
-                return False # Жалоба уже существует
+                return False
 
             new_complaint = TransferComplaint(
                 transfer_id=transfer_id,
@@ -1396,7 +1413,6 @@ async def create_transfer_complaint(transfer_id: int, complainant_id: int, reaso
         return True
 
 async def get_transfer_complaints(page: int = 1, limit: int = 5) -> Tuple[List[TransferComplaint], int]:
-    """Получает список жалоб на переводы с пагинацией."""
     async with async_session() as session:
         query = (
             select(TransferComplaint)

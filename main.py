@@ -37,7 +37,6 @@ from logic.reward_logic import distribute_rewards
 from logic.cleanup_logic import check_and_expire_links, process_expired_holds
 from logic.deposit_logic import process_deposits
 
-
 async def sync_base_admins():
     """
     Синхронизирует базовых администраторов из config.py с базой данных
@@ -68,7 +67,6 @@ async def sync_base_admins():
             )
             logger.info(f"Added non-removable admin from config: {ADMIN_ID_2}")
     logger.info("Base administrators sync complete.")
-
 
 async def set_bot_commands(bot: Bot):
     """
@@ -112,7 +110,6 @@ async def set_bot_commands(bot: Bot):
         logger.info("Default user commands have been set for all users.")
     except Exception as e:
         logger.error(f"Failed to set default commands: {e}")
-
 
     all_admins = await db_manager.get_all_administrators_by_role()
 
@@ -217,7 +214,6 @@ async def main():
         await bot.session.close()
         scheduler.shutdown()
         logger.info("--- БОТ ОСТАНОВЛЕН ---")
-
 
 if __name__ == "__main__":
     if not BOT_TOKEN:

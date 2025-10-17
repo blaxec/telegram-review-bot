@@ -1,13 +1,14 @@
-# handlers/games/coinflip.py
-# (Новый файл)
+# file: handlers/games/coinflip.py
 
 import logging
 import random
 import asyncio
-from aiogram import Router, F, Bot, bot
+from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
+
+from typing import Union
 
 from states.user_states import CoinflipStates
 from keyboards import inline
@@ -23,7 +24,8 @@ async def games_menu(message: Message):
     await message.answer("Выберите игру:", reply_markup=inline.get_games_menu_keyboard())
 
 @router.callback_query(F.data == "back_to_games_menu")
-async def back_to_games_menu(callback: CallbackQuery):
+async def back_to_games_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.edit_text("Выберите игру:", reply_markup=inline.get_games_menu_keyboard())
 
 @router.callback_query(F.data == "start_coinflip")
@@ -38,15 +40,21 @@ async def start_coinflip(callback: CallbackQuery, state: FSMContext):
         reply_markup=inline.get_coinflip_bet_keyboard()
     )
 
-async def process_bet(callback: CallbackQuery, state: FSMContext, amount: float):
-    user = await db_manager.get_user(callback.from_user.id)
+async def process_bet(callback_or_message: Union[Message, CallbackQuery], state: FSMContext, amount: float):
+    user_id = callback_or_message.from_user.id
+    user = await db_manager.get_user(user_id)
     if not user or user.balance < amount:
-        await callback.answer("❌ Недостаточно средств на балансе!", show_alert=True)
+        if isinstance(callback_or_message, CallbackQuery):
+            await callback_or_message.answer("❌ Недостаточно средств на балансе!", show_alert=True)
+        else:
+            await callback_or_message.answer("❌ Недостаточно средств на балансе!")
         return
 
     await state.update_data(current_bet_amount=amount)
     await state.set_state(CoinflipStates.waiting_for_choice)
-    await callback.message.edit_text(
+    
+    message_to_edit = callback_or_message.message if isinstance(callback_or_message, CallbackQuery) else await callback_or_message.answer("...")
+    await message_to_edit.edit_text(
         f"Ставка принята: {amount:.2f} ⭐. Выберите сторону:",
         reply_markup=inline.get_coinflip_choice_keyboard()
     )
@@ -63,7 +71,7 @@ async def handle_custom_bet_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(CoinflipStates.waiting_for_custom_bet)
-async def handle_custom_bet_input(message: Message, state: FSMContext):
+async def handle_custom_bet_input(message: Message, state: FSMContext, bot: Bot):
     try:
         amount = float(message.text.replace(",", "."))
         if amount <= 0: raise ValueError
@@ -71,23 +79,15 @@ async def handle_custom_bet_input(message: Message, state: FSMContext):
         await message.answer("❌ Некорректная сумма. Пожалуйста, введите положительное число.")
         return
 
-    user = await db_manager.get_user(message.from_user.id)
-    if not user or user.balance < amount:
-        await message.answer("❌ Недостаточно средств на балансе!")
-        return
-
     data = await state.get_data()
-    prompt_id = data.get("prompt_message_id")
-    if prompt_id:
-        try: await bot.delete_message(message.chat.id, prompt_id)
-        except: pass
+    if prompt_id := data.get("prompt_message_id"):
+        try:
+            await bot.delete_message(message.chat.id, prompt_id)
+        except TelegramBadRequest:
+            pass
     await message.delete()
-
-    # Имитируем callback для передачи в общую логику
-    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=await message.answer("..."))
-    await process_bet(dummy_callback, state, amount)
-    await dummy_callback.message.delete()
-
+    
+    await process_bet(message, state, amount)
 
 @router.callback_query(F.data.startswith("choice_"), CoinflipStates.waiting_for_choice)
 async def handle_coinflip_choice(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -129,14 +129,14 @@ async def handle_coinflip_choice(callback: CallbackQuery, state: FSMContext, bot
         base_win = bet_amount * 0.95
         combo_win = base_win * combo_multiplier
         final_win = combo_win * 2 if is_lucky_coin else combo_win
-        total_change = final_win - bet_amount
+        total_change = final_win
 
         result_text = f"Выпал {final_side}! Вы победили!\n"
         if is_lucky_coin: result_text += "✨ **Счастливая монетка! Ваш выигрыш удвоен!**\n"
         if combo_multiplier > 1.0: result_text += f"🔥 **Комбо!** Ваша серия побед ({win_streak}) дает бонус +{int((combo_multiplier-1)*100)}%!\n"
         result_text += f"Итоговый выигрыш: **{final_win:.2f} ⭐**\nНовая серия побед: **{new_win_streak}**"
         
-        await db_manager.update_user_balance_and_streak(user.id, total_change, new_win_streak)
+        await db_manager.update_user_balance_and_streak(user.id, total_change - bet_amount, new_win_streak)
 
     else:
         new_win_streak = 0
@@ -145,4 +145,8 @@ async def handle_coinflip_choice(callback: CallbackQuery, state: FSMContext, bot
         await db_manager.update_user_balance_and_streak(user.id, total_change, new_win_streak)
 
     await state.set_state(CoinflipStates.waiting_for_bet)
+    
+    win_streak_text = f"\n\n🔥 Ваша серия побед: {new_win_streak}" if new_win_streak > 0 else ""
+    result_text += win_streak_text
+    
     await callback.message.edit_text(result_text, reply_markup=inline.get_coinflip_bet_keyboard(play_again=True))
