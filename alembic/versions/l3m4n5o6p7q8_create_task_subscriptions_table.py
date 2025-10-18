@@ -2,7 +2,7 @@
 
 """create task_subscriptions table
 Revision ID: l3m4n5o6p7q8
-Revises: g7h8i9j0k1l2
+Revises: m9n0o1p2q3r4
 Create Date: 2025-10-10 13:00:00.000000
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'l3m4n5o6p7q8'
-down_revision: Union[str, None] = 'g7h8i9j0k1l2'
+down_revision: Union[str, None] = 'm9n0o1p2q3r4'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

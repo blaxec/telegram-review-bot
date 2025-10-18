@@ -1,7 +1,7 @@
 """add first_task_completed flag and win_streak to users
 
 Revision ID: m9n0o1p2q3r4
-Revises: l3m4n5o6p7q8
+Revises: g7h8i9j0k1l2
 Create Date: 2025-10-10 12:00:00.000000
 
 """
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'm9n0o1p2q3r4'
-# --- ИЗМЕНЕНИЕ: Указываем, что эта миграция идет ПОСЛЕ l3m4n5o6p7q8 ---
-down_revision: Union[str, None] = 'l3m4n5o6p7q8'
+# --- ИЗМЕНЕНИЕ: Указываем, что эта миграция идет ПОСЛЕ g7h8i9j0k1l2 ---
+down_revision: Union[str, None] = 'g7h8i9j0k1l2'
 # --------------------------------------------------------------------
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

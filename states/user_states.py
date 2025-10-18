@@ -93,6 +93,7 @@ class AdminState(StatesGroup):
     # Состояния для генерации с ИИ
     AI_AWAITING_SCENARIO = State()
     AI_AWAITING_MODERATION = State()
+    waiting_for_edited_scenario_text = State()
     
     # Состояния для предоставления данных Gmail
     ENTER_GMAIL_DATA = State()
@@ -163,9 +164,11 @@ class AdminState(StatesGroup):
 
     # Состояния для банка сценариев
     SCENARIO_CHOOSING_CATEGORY = State()
+    SCENARIO_AWAITING_NEW_CATEGORY = State()
     waiting_for_scenario_text = State()
-    waiting_for_scenario_id_to_delete = State()
-    waiting_for_edited_scenario_text = State()
+    SCENARIO_AWAITING_ID_TO_DELETE = State()
+    SCENARIO_AWAITING_ID_TO_EDIT = State()
+    SCENARIO_AWAITING_EDITED_TEXT = State()
 
 
 class CoinflipStates(StatesGroup):

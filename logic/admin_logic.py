@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- ЛОГИКА: Добавление ссылок ---
-async def process_add_links_logic(links_text: str, platform: str, reward_amount: float, gender_requirement: str, campaign_tag: str | None) -> str:
+async def process_add_links_logic(links_text: str, platform: str, is_fast_track: bool, requires_photo: bool, reward_amount: float, gender_requirement: str, campaign_tag: str | None) -> str:
     """
     Обрабатывает текст со ссылками, добавляет их в базу данных
     и возвращает отформатированную строку с результатом.
@@ -41,10 +41,11 @@ async def process_add_links_logic(links_text: str, platform: str, reward_amount:
         stripped_link = link.strip()
         if stripped_link and (stripped_link.startswith("http://") or stripped_link.startswith("https://")):
             try:
-                # В db_add_reference теперь передаем все новые поля
                 if await db_manager.db_add_reference(
                     url=stripped_link, 
                     platform=platform, 
+                    is_fast_track=is_fast_track,
+                    requires_photo=requires_photo,
                     reward_amount=reward_amount, 
                     gender_requirement=gender_requirement, 
                     campaign_tag=campaign_tag

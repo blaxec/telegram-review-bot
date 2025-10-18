@@ -134,12 +134,13 @@ async def update_username(user_id: int, new_username: str):
 async def add_referral_earning(user_id: int, amount: float):
     async with async_session() as session:
         async with session.begin():
-            user = await session.get(User, user_id)
+            user = await get_user(user_id)
             if user and user.referrer_id:
                 referrer = await session.get(User, user.referrer_id)
                 if referrer:
                     referrer.referral_earnings += amount
                     logger.info(f"Added {amount} stars to referrer {referrer.id} from user {user_id}")
+
 
 async def get_referrer_info(user_id: int) -> str:
     async with async_session() as session:
@@ -215,7 +216,7 @@ async def get_referral_earnings(user_id: int) -> float:
 async def claim_referral_earnings(user_id: int):
     async with async_session() as session:
         async with session.begin():
-            user = await session.get(User, user_id)
+            user = await get_user(user_id)
             if user and user.referral_earnings > 0:
                 earnings = user.referral_earnings
                 user.balance += earnings
@@ -278,6 +279,21 @@ async def create_review_draft(user_id: int, link_id: int, platform: str, text: s
             await session.flush()
             review_id = new_review.id
     return review_id
+
+async def update_review_draft(review_id: int, text: str, screenshot_file_id: str, attached_photo_file_id: Optional[str]) -> bool:
+    """Находит черновик отзыва и обновляет его поля перед финальной проверкой."""
+    async with async_session() as session:
+        async with session.begin():
+            review = await session.get(Review, review_id)
+            if not review:
+                logger.error(f"Attempted to update non-existent review draft with ID {review_id}")
+                return False
+            
+            review.review_text = text
+            review.screenshot_file_id = screenshot_file_id
+            review.attached_photo_file_id = attached_photo_file_id
+            return True
+
 
 async def db_update_review_admin_message_id(review_id: int, admin_message_id: int) -> bool:
     async with async_session() as session:
@@ -1763,6 +1779,6 @@ async def process_help_request(user_id: int, amount: float) -> bool:
             user = await session.get(User, user_id)
             user.balance += amount
             user.last_help_request_at = datetime.datetime.utcnow()
-            await log_operation(session, user_id, 'HELP_RECEIVED', amount, "Помощь из Фонда")
+            await log_operation(session, user.id, 'HELP_RECEIVED', amount, "Помощь из Фонда")
             await set_system_setting("donation_fund_balance", str(fund_balance - amount))
             return True

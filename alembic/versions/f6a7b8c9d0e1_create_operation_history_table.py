@@ -23,7 +23,7 @@ def upgrade() -> None:
     op.create_table('operation_history',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.BigInteger(), nullable=False),
-    sa.Column('operation_type', sa.Enum('REVIEW_APPROVED', 'PROMO_ACTIVATED', 'WITHDRAWAL', 'FINE', 'TRANSFER_SENT', 'TRANSFER_RECEIVED', 'TOP_REWARD', name='operation_type_enum'), nullable=False),
+    sa.Column('operation_type', sa.Enum('REVIEW_APPROVED', 'PROMO_ACTIVATED', 'WITHDRAWAL', 'FINE', 'TRANSFER_SENT', 'TRANSFER_RECEIVED', 'TOP_REWARD', 'DEPOSIT_OPEN', 'DEPOSIT_CLOSE', 'DONATION', 'HELP_RECEIVED', name='operation_type_enum'), nullable=False),
     sa.Column('amount', sa.Float(), nullable=False),
     sa.Column('description', sa.String(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
