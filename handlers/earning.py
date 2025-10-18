@@ -1,4 +1,4 @@
-# file: handlers/earning.py
+# telegram-review-bot-main/handlers/earning.py
 
 import datetime
 import logging
@@ -11,7 +11,7 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from typing import Union, bot
+from typing import Union
 from references import reference_manager
 from logic.cleanup_logic import handle_screenshot_timeout
 
@@ -23,19 +23,19 @@ if TYPE_CHECKING:
 from states.user_states import UserState, AdminState
 from keyboards import inline, reply
 from database import db_manager
-from config import Durations, TESTER_IDS, Limits, STAKE_THRESHOLD_REWARD, STAKE_AMOUNT # Added: STAKE_THRESHOLD_REWARD, STAKE_AMOUNT
+from config import Durations, TESTER_IDS, Limits, STAKE_THRESHOLD_REWARD, STAKE_AMOUNT
 from logic.user_notifications import (
     format_timedelta,
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
     handle_task_timeout,
     send_confirmation_button,
-    handle_screenshot_timeout # Added: handle_screenshot_timeout
+    handle_screenshot_timeout
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
 from logic.notification_manager import send_notification_to_admins
-from logic.notification_logic import notify_subscribers # Added: notify_subscribers
+from logic.notification_logic import notify_subscribers
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -587,7 +587,7 @@ async def process_liking_completion(callback: CallbackQuery, state: FSMContext, 
 
 
 @router.callback_query(F.data == 'google_confirm_task', UserState.GOOGLE_REVIEW_TASK_ACTIVE)
-async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+async def process_google_task_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
@@ -936,8 +936,10 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
     user_data = await state.get_data()
     timeout_job_id = user_data.get('timeout_job_id')
     if timeout_job_id:
-        try: scheduler.remove_job(timeout_job_id)
-        except Exception as e: logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
+        try:
+            scheduler.remove_job(timeout_job_id)
+        except Exception as e:
+            logger.warning(f"Не удалось отменить задачу таймаута {timeout_job_id}: {e}")
 
     review_type = user_data.get("yandex_review_type", "with_text")
     platform = user_data.get("platform_for_task")
@@ -1028,7 +1030,7 @@ async def process_yandex_liking_completion(callback: CallbackQuery, state: FSMCo
         await state.set_state(UserState.YANDEX_REVIEW_AWAITING_SCREENSHOT)
 
 @router.callback_query(F.data == 'yandex_with_text_confirm_task', UserState.YANDEX_REVIEW_TASK_ACTIVE)
-async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+async def process_yandex_review_task_completion(callback: CallbackQuery, state: FSMContext, bot: Bot, scheduler: AsyncIOScheduler):
     if callback.message:
         await callback.message.delete()
     user_data = await state.get_data()
