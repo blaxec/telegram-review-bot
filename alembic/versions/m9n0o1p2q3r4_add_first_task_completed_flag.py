@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'm9n0o1p2q3r4'
-down_revision: Union[str, None] = 'g7h8i9j0k1l2'
+down_revision: Union[str, None] = 'g7h8i9j0k1l2' # Эта строка правильная, она ссылается на предыдущую
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
