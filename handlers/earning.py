@@ -29,8 +29,7 @@ from logic.user_notifications import (
     send_liking_confirmation_button,
     send_yandex_liking_confirmation_button,
     handle_task_timeout,
-    send_confirmation_button,
-    handle_screenshot_timeout
+    send_confirmation_button
 )
 from utils.tester_filter import IsTester
 from logic import admin_roles
