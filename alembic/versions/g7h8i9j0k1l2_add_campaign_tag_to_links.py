@@ -30,3 +30,4 @@ def downgrade() -> None:
     op.drop_column('reviews', 'stake_amount')
     op.drop_column('links', 'campaign_tag')
     # ### end Alembic commands ###
+
