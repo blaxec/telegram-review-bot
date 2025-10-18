@@ -1,3 +1,5 @@
+# telegram-review-bot-main/config.py
+
 import os
 import logging
 from urllib.parse import urlparse
@@ -106,11 +108,13 @@ class Limits:
     MIN_TRANSFER_AMOUNT = 10.0
     WARNINGS_THRESHOLD_FOR_BAN = 3
     LINKS_PER_PAGE = 10
+
 #--- Экономика и игры ---
-    TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT") or 5.0)
-    STAKE_THRESHOLD_REWARD = float(os.getenv("STAKE_THRESHOLD_REWARD") or 50.0) # Залог за задания
-    STAKE_AMOUNT = float(os.getenv("STAKE_AMOUNT") or 5.0) # Сумма залога
-    NOVICE_HELP_AMOUNT = float(os.getenv("NOVICE_HELP_AMOUNT") or 0.5) # Сумма помощи новичкам
+TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT") or 5.0)
+STAKE_THRESHOLD_REWARD = float(os.getenv("STAKE_THRESHOLD_REWARD") or 50.0) # Залог за задания
+STAKE_AMOUNT = float(os.getenv("STAKE_AMOUNT") or 5.0) # Сумма залога
+NOVICE_HELP_AMOUNT = float(os.getenv("NOVICE_HELP_AMOUNT") or 0.5) # Сумма помощи новичкам
+
 #--- Депозитные планы ---
 DEPOSIT_PLANS = {
 "starter": {
