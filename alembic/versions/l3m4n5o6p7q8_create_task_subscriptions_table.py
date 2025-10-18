@@ -1,10 +1,7 @@
-
 """create task_subscriptions table
-
 Revision ID: l3m4n5o6p7q8
-Revises: m9n0o1p2q3r4
+Revises: g7h8i9j0k1l2
 Create Date: 2025-10-10 13:00:00.000000
-
 """
 from typing import Sequence, Union
 
@@ -14,7 +11,7 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 revision: str = 'l3m4n5o6p7q8'
 # Зависимость правильная, так как эта миграция идет после
-down_revision: Union[str, None] = 'm9n0o1p2q3r4'
+down_revision: Union[str, None] = 'g7h8i9j0k1l2'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
