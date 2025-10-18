@@ -2,6 +2,7 @@
 
 import logging
 from typing import List, Tuple
+import asyncio
 
 from aiogram import Bot
 from database import db_manager
@@ -40,7 +41,6 @@ ROLE_DESCRIPTIONS = {
     OTHER_HOLD_REVIEW_ADMIN: "Проверка отзывов после холда"
 }
 
-# --- ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ ---
 def get_tasks_for_category(category: str, subcategory: str = None) -> List[str]:
     """Возвращает список ключей ролей для указанной категории."""
     if category == "yandex":
@@ -68,7 +68,6 @@ def get_category_from_role_key(role_key: str) -> Tuple[str, str | None]:
     elif "other" in role_key:
         return "other", None
     return "unknown", None
-
 
 # --- Функции-геттеры для получения ответственного администратора ---
 
@@ -127,67 +126,79 @@ async def get_gmail_final_admin() -> int:
 async def get_other_hold_admin() -> int:
     return await get_responsible_admin(OTHER_HOLD_REVIEW_ADMIN, ADMIN_ID_1)
 
-async def get_all_roles_readable(bot: Bot) -> str:
-    """Собирает информацию обо всех ролях и ответственных в читаемый текст."""
-    roles_data = {
-        "📍 Яндекс (с текстом)": [
-            (YANDEX_TEXT_PROFILE_CHECK_ADMIN, await get_yandex_text_profile_admin()),
-            (YANDEX_TEXT_ISSUE_TEXT_ADMIN, await get_yandex_text_issue_admin()),
-            (YANDEX_TEXT_FINAL_CHECK_ADMIN, await get_yandex_text_final_admin()),
+async def get_all_roles_readable_optimized(bot: Bot) -> str:
+    """
+    Оптимизированная версия: собирает информацию обо всех ролях, минимизируя запросы.
+    """
+    roles_data_structure = {
+        "**📍 Яндекс (с текстом):**": [
+            YANDEX_TEXT_PROFILE_CHECK_ADMIN, YANDEX_TEXT_ISSUE_TEXT_ADMIN, YANDEX_TEXT_FINAL_CHECK_ADMIN
         ],
-        "📍 Яндекс (без текста)": [
-            (YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, await get_yandex_no_text_profile_admin()),
-            (YANDEX_NO_TEXT_FINAL_CHECK_ADMIN, await get_yandex_no_text_final_admin()),
+        "**📍 Яндекс (без текста):**": [
+            YANDEX_NO_TEXT_PROFILE_CHECK_ADMIN, YANDEX_NO_TEXT_FINAL_CHECK_ADMIN
         ],
-        "🌍 Google Maps": [
-            (GOOGLE_PROFILE_CHECK_ADMIN, await get_google_profile_admin()),
-            (GOOGLE_LAST_REVIEWS_CHECK_ADMIN, await get_google_reviews_admin()),
-            (GOOGLE_ISSUE_TEXT_ADMIN, await get_google_issue_admin()),
-            (GOOGLE_FINAL_CHECK_ADMIN, await get_google_final_admin()),
+        "**🌍 Google Maps:**": [
+            GOOGLE_PROFILE_CHECK_ADMIN, GOOGLE_LAST_REVIEWS_CHECK_ADMIN, GOOGLE_ISSUE_TEXT_ADMIN, GOOGLE_FINAL_CHECK_ADMIN
         ],
-        "📧 Gmail": [
-            (GMAIL_DEVICE_MODEL_CHECK_ADMIN, await get_gmail_device_admin()),
-            (GMAIL_ISSUE_DATA_ADMIN, await get_gmail_data_admin()),
-            (GMAIL_FINAL_CHECK_ADMIN, await get_gmail_final_admin()),
+        "**📧 Gmail:**": [
+            GMAIL_DEVICE_MODEL_CHECK_ADMIN, GMAIL_ISSUE_DATA_ADMIN, GMAIL_FINAL_CHECK_ADMIN
         ],
-        "📦 Другое": [
-            (OTHER_HOLD_REVIEW_ADMIN, await get_other_hold_admin())
+        "**📦 Другое:**": [
+            OTHER_HOLD_REVIEW_ADMIN
         ]
     }
+    
+    # 1. Получаем все настройки ролей из БД одним запросом
+    all_role_keys = [key for sublist in roles_data_structure.values() for key in sublist]
+    all_settings = await db_manager.get_system_settings_batch(all_role_keys)
+    
+    # 2. Собираем все уникальные ID админов, которые реально назначены
+    admin_ids = {int(setting.value) for setting in all_settings if setting.value and setting.value.isdigit()}
+    admin_ids.update([ADMIN_ID_1, ADMIN_ID_2]) # Добавляем дефолтных
+    
+    # 3. Получаем информацию (username) для этих ID
+    admins_info = await db_manager.get_administrators_details(list(admin_ids))
+    admins_map = {admin.user_id: f"@{admin.username}" if admin.username else f"ID: {admin.user_id}" for admin in admins_info}
 
-    full_text = "<b>⚙ Текущее распределение ролей:</b>\n\n"
-    for category, tasks in roles_data.items():
-        full_text += f"<b>{category}:</b>\n"
-        for key, admin_id in tasks:
+    # 4. Формируем текст
+    full_text = "**⚙ Текущее распределение ролей:**\n\n"
+    for category, keys in roles_data_structure.items():
+        full_text += f"{category}\n"
+        for key in keys:
+            # Находим настройку для текущего ключа
+            admin_id_str = next((s.value for s in all_settings if s.key == key), None)
+            
+            # Определяем ID админа (с учетом дефолтного значения)
+            if key in [YANDEX_TEXT_FINAL_CHECK_ADMIN, YANDEX_NO_TEXT_FINAL_CHECK_ADMIN, GOOGLE_FINAL_CHECK_ADMIN, GMAIL_FINAL_CHECK_ADMIN]:
+                admin_id = int(admin_id_str) if admin_id_str else ADMIN_ID_2
+            else:
+                admin_id = int(admin_id_str) if admin_id_str else ADMIN_ID_1
+            
             description = ROLE_DESCRIPTIONS.get(key, key)
-            admin_name = await get_admin_username(bot, admin_id)
-            full_text += f"  - <i>{description}:</i> {admin_name}\n"
+            admin_name = admins_map.get(admin_id, f"ID: {admin_id}") # Берем имя из кэша
+            full_text += f"  - *{description}:* {admin_name}\n"
         full_text += "\n"
         
     return full_text
+
 
 async def get_admins_for_task(task_type: str) -> List[int]:
     """
     Возвращает список ID администраторов, ответственных за данный тип задачи.
     """
     task_map = {
-        # Google
         "google_profile": get_google_profile_admin,
         "google_last_reviews": get_google_reviews_admin,
         "google_issue_text": get_google_issue_admin,
         "google_final_verdict": get_google_final_admin,
-        # Yandex with text
         "yandex_with_text_profile_screenshot": get_yandex_text_profile_admin,
         "yandex_with_text_issue_text": get_yandex_text_issue_admin,
         "yandex_with_text_final_verdict": get_yandex_text_final_admin,
-        # Yandex without text
         "yandex_without_text_profile_screenshot": get_yandex_no_text_profile_admin,
         "yandex_without_text_final_verdict": get_yandex_no_text_final_admin,
-        # Gmail
         "gmail_device_model": get_gmail_device_admin,
         "gmail_issue_data": get_gmail_data_admin,
         "gmail_final_check": get_gmail_final_admin,
-        # Other
         "other_hold_check": get_other_hold_admin,
     }
 

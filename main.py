@@ -25,10 +25,9 @@ from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from handlers import (start, profile, support, earning, admin_panel, admin_moderation, gmail,
-                      stats, promo, other, ban_system, referral, admin_roles, internship, posting)
-# Новые импорты
+                      stats, promo, other, ban_system, referral, admin_roles, internship, posting, admin_scenarios, admin_stats)
 from handlers.games import coinflip
-from handlers import deposits, donations, admin_scenarios, admin_stats
+from handlers import deposits, donations
 
 from database import db_manager
 from utils.ban_middleware import BanMiddleware
@@ -201,7 +200,7 @@ async def main():
     scheduler.add_job(distribute_rewards, 'interval', minutes=30, args=[bot])
     scheduler.add_job(check_and_expire_links, 'interval', hours=6, args=[bot, dp.storage])
     scheduler.add_job(process_expired_holds, 'interval', minutes=1, args=[bot, dp.storage, scheduler])
-    scheduler.add_job(process_deposits, 'interval', minutes=5, args=[bot]) # Новая задача
+    scheduler.add_job(process_deposits, 'interval', minutes=5, args=[bot])
 
     try:
         scheduler.start()

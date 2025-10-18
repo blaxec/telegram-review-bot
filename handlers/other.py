@@ -9,8 +9,18 @@ from config import Durations
 # Создаем новый роутер специально для "прочих" обработчиков
 router = Router()
 
-# --- ИЗМЕНЕНИЕ: Добавлен фильтр F.text & ~F.text.startswith('/') ---
-# Теперь этот обработчик будет ловить только текстовые сообщения,
+@router.callback_query(F.data == "close_post")
+async def close_post_handler(callback: CallbackQuery):
+    """
+    Обрабатывает универсальную кнопку 'Закрыть', удаляя сообщение.
+    """
+    try:
+        await callback.message.delete()
+        await callback.answer()
+    except TelegramBadRequest:
+        await callback.answer("Это сообщение уже было удалено.", show_alert=True)
+
+# Этот обработчик будет ловить только текстовые сообщения,
 # которые НЕ начинаются со слеша '/', игнорируя любые команды.
 @router.message(F.text & ~F.text.startswith('/'))
 async def handle_unknown_messages(message: Message):

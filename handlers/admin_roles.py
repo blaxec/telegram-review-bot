@@ -1,3 +1,5 @@
+# file: handlers/admin_roles.py
+
 import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
@@ -5,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from math import ceil
+import asyncio
 
 from config import ADMIN_ID_1, ADMIN_ID_2, SUPER_ADMIN_ID
 from keyboards import inline
@@ -13,8 +16,6 @@ from logic import admin_roles
 from utils.access_filters import IsSuperAdmin
 from states.user_states import AdminState
 
-
-# --- ИЗМЕНЕНИЕ: Импортируем функцию для обновления команд ---
 from main import set_bot_commands
 
 
@@ -43,7 +44,7 @@ async def cmd_roles(message: Message):
     except TelegramBadRequest:
         pass
     await message.answer(
-        "🛠️ <b>Управление ролями администраторов</b>\n\n"
+        "🛠️ **Управление ролями администраторов**\n\n"
         "Выберите категорию для настройки ответственных.",
         reply_markup=await inline.get_roles_main_menu()
     )
@@ -54,7 +55,7 @@ async def cmd_roles(message: Message):
 async def roles_back_to_main(callback: CallbackQuery):
     """Возврат в главное меню ролей."""
     await callback.message.edit_text(
-        "🛠️ <b>Управление ролями администраторов</b>\n\n"
+        "🛠️ **Управление ролями администраторов**\n\n"
         "Выберите категорию для настройки ответственных.",
         reply_markup=await inline.get_roles_main_menu()
     )
@@ -66,22 +67,22 @@ async def roles_select_category(callback: CallbackQuery, bot: Bot):
     
     if category == "yandex":
         await callback.message.edit_text(
-            "<b>📍 Яндекс.Карты</b>\n\nВыберите тип задачи для настройки.",
+            "**📍 Яндекс.Карты**\n\nВыберите тип задачи для настройки.",
             reply_markup=await inline.get_roles_yandex_menu()
         )
     elif category == "google":
         await callback.message.edit_text(
-            "<b>🌍 Google Maps</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            "**🌍 Google Maps**\n\nНажмите на задачу, чтобы сменить ответственного.",
             reply_markup=await inline.get_task_switching_keyboard(bot, "google")
         )
     elif category == "gmail":
         await callback.message.edit_text(
-            "<b>📧 Gmail</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            "**📧 Gmail**\n\nНажмите на задачу, чтобы сменить ответственного.",
             reply_markup=await inline.get_task_switching_keyboard(bot, "gmail")
         )
     elif category == "other":
         await callback.message.edit_text(
-            "<b>📦 Другие задачи</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+            "**📦 Другие задачи**\n\nНажмите на задачу, чтобы сменить ответственного.",
             reply_markup=await inline.get_task_switching_keyboard(bot, "other")
         )
 
@@ -97,7 +98,7 @@ async def roles_select_subcategory(callback: CallbackQuery, bot: Bot):
     }
     
     await callback.message.edit_text(
-        f"<b>{title_map.get(sub_type)}</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+        f"**{title_map.get(sub_type)}**\n\nНажмите на задачу, чтобы сменить ответственного.",
         reply_markup=await inline.get_task_switching_keyboard(bot, category, sub_type)
     )
 
@@ -105,7 +106,7 @@ async def roles_select_subcategory(callback: CallbackQuery, bot: Bot):
 async def roles_back_to_yandex_cat(callback: CallbackQuery):
     """Возврат к выбору типа Яндекс задач."""
     await callback.message.edit_text(
-        "<b>📍 Яндекс.Карты</b>\n\nВыберите тип задачи для настройки.",
+        "**📍 Яндекс.Карты**\n\nВыберите тип задачи для настройки.",
         reply_markup=await inline.get_roles_yandex_menu()
     )
     
@@ -123,7 +124,7 @@ async def roles_switch_admin_start(callback: CallbackQuery, bot: Bot):
     task_description = admin_roles.ROLE_DESCRIPTIONS.get(role_key, "Неизвестная задача")
     
     await callback.message.edit_text(
-        f"Выберите нового ответственного для задачи:\n<b>«{task_description}»</b>",
+        f"Выберите нового ответственного для задачи:\n**«{task_description}»**",
         reply_markup=await inline.get_admin_selection_keyboard(all_admins, role_key, current_admin_id, bot)
     )
     await callback.answer()
@@ -152,8 +153,8 @@ async def roles_set_new_admin(callback: CallbackQuery, bot: Bot):
     task_description = admin_roles.ROLE_DESCRIPTIONS.get(role_key, "Неизвестная задача")
 
     notification_text = (
-        f"🔄 <b>Смена ролей!</b>\n\n"
-        f"Задача «<b>{task_description}</b>» была передана от {old_admin_name} к {new_admin_name}."
+        f"🔄 **Смена ролей!**\n\n"
+        f"Задача «**{task_description}**» была передана от {old_admin_name} к {new_admin_name}."
     )
     
     all_db_admins = await db_manager.get_all_administrators_by_role()
@@ -174,15 +175,16 @@ async def roles_set_new_admin(callback: CallbackQuery, bot: Bot):
         title = category_title_map.get(category)
         
     await callback.message.edit_text(
-        f"<b>{title}</b>\n\nНажмите на задачу, чтобы сменить ответственного.",
+        f"**{title}**\n\nНажмите на задачу, чтобы сменить ответственного.",
         reply_markup=await inline.get_task_switching_keyboard(bot, category, subcategory)
     )
 
 @router.callback_query(F.data == "roles_show_current")
 async def roles_show_current_settings(callback: CallbackQuery, bot: Bot):
     """Показывает отдельное сообщение с текущими настройками."""
-    await callback.answer()
-    settings_text = await admin_roles.get_all_roles_readable(bot)
+    await callback.answer("Загружаю настройки...", show_alert=False)
+    # Вызываем оптимизированную функцию
+    settings_text = await admin_roles.get_all_roles_readable_optimized(bot)
     await callback.message.answer(
         settings_text,
         reply_markup=inline.get_current_settings_keyboard()
@@ -207,7 +209,7 @@ async def cmd_roles_manage(message: Message):
     except TelegramBadRequest:
         pass
     await message.answer(
-        "👥 <b>Управление администраторами</b>\n\n"
+        "👥 **Управление администраторами**\n\n"
         "Здесь вы можете добавлять, удалять и просматривать администраторов и тестеров.",
         reply_markup=inline.get_roles_manage_menu()
     )
@@ -215,7 +217,7 @@ async def cmd_roles_manage(message: Message):
 @router.callback_query(F.data == "roles_manage:back_to_menu")
 async def roles_manage_back_to_menu(callback: CallbackQuery):
     await callback.message.edit_text(
-         "👥 <b>Управление администраторами</b>\n\n"
+         "👥 **Управление администраторами**\n\n"
         "Здесь вы можете добавлять, удалять и просматривать администраторов и тестеров.",
         reply_markup=inline.get_roles_manage_menu()
     )
@@ -257,11 +259,11 @@ async def view_single_admin(callback: CallbackQuery, bot: Bot):
     role_text = "Главный админ" if admin.role == 'super_admin' else "Админ"
     tester_text = "Да" if admin.is_tester else "Нет"
     
-    text = (f"<b>Управление: {username}</b>\n\n"
-            f"<b>Роль:</b> {role_text}\n"
-            f"<b>Тестер:</b> {tester_text}\n"
-            f"<b>Добавил:</b> ID {admin.added_by}\n"
-            f"<b>Можно удалить:</b> {'Да' if admin.is_removable else 'Нет'}")
+    text = (f"**Управление: {username}**\n\n"
+            f"**Роль:** {role_text}\n"
+            f"**Тестер:** {tester_text}\n"
+            f"**Добавил:** ID {admin.added_by}\n"
+            f"**Можно удалить:** {'Да' if admin.is_removable else 'Нет'}")
             
     await callback.message.edit_text(text, reply_markup=inline.get_single_admin_manage_keyboard(admin))
 
@@ -300,20 +302,16 @@ async def confirm_delete_admin(callback: CallbackQuery, bot: Bot):
 async def execute_delete_admin(callback: CallbackQuery, bot: Bot):
     user_id = int(callback.data.split(":")[-1])
     
-    # Добавлена повторная проверка на самоудаление
     if user_id == callback.from_user.id:
         await callback.answer("Вы не можете удалить самого себя.", show_alert=True)
         return
 
     success = await db_manager.delete_administrator(user_id, self_delete_check=callback.from_user.id)
     if success:
-        # Переназначаем роли удаленного админа на главного
         await db_manager.reassign_tasks_from_deleted_admin(user_id, SUPER_ADMIN_ID)
         
         await callback.answer("Администратор удален. Его роли переданы главному администратору.", show_alert=True)
-        # Обновляем команды для всех
         await set_bot_commands(bot)
-        # Возвращаемся к списку, вызывая ту же логику, что и для `list_admins`
         callback.data = "roles_manage:list:1"
         await list_admins(callback, bot)
     else:
@@ -370,6 +368,5 @@ async def process_add_admin_role(callback: CallbackQuery, state: FSMContext, bot
     await state.clear()
     await callback.message.delete()
     
-    # Возвращаемся к списку администраторов
     callback.data = "roles_manage:list:1"
     await list_admins(callback, bot)

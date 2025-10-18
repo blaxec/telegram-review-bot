@@ -1,3 +1,5 @@
+# file: database/db_manager.py
+
 import datetime
 import logging
 import json
@@ -417,7 +419,7 @@ async def db_update_link_status(link_id: int, status: str, user_id: int | None =
             )
             await session.execute(stmt)
 
-async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all", gender_filter: str = None, reward_filter: float = None) -> Tuple[int, List[Link]]:
+async def db_get_paginated_references(platform: str, page: int, limit: int, filter_type: str = "all", gender_filter: str = None, reward_filter: float = None, sort_by_tag: bool = False) -> Tuple[int, List[Link]]:
     async with async_session() as session:
         base_query = select(Link).where(Link.platform == platform)
         count_query = select(func.count(Link.id)).where(Link.platform == platform)
@@ -442,7 +444,12 @@ async def db_get_paginated_references(platform: str, page: int, limit: int, filt
 
         total_count = await session.scalar(count_query)
 
-        paginated_query = base_query.order_by(desc(Link.id)).offset((page - 1) * limit).limit(limit)
+        order_by_clause = desc(Link.id)
+        if sort_by_tag:
+            # Сортируем так, чтобы ссылки с тегами были вверху, затем по ID
+            order_by_clause = desc(Link.campaign_tag.isnot(None)), desc(Link.id)
+
+        paginated_query = base_query.order_by(order_by_clause).offset((page - 1) * limit).limit(limit)
         result = await session.execute(paginated_query)
         links = result.scalars().all()
 
@@ -466,6 +473,13 @@ async def db_get_link_stats(platform: str) -> Dict[str, int]:
         stats['total'] = total_count
 
         return stats
+
+async def db_get_links_count(platform: str) -> int:
+    """Возвращает общее количество ссылок для платформы."""
+    async with async_session() as session:
+        query = select(func.count(Link.id)).where(Link.platform == platform)
+        result = await session.scalar(query)
+        return result or 0
 
 async def db_delete_reference(link_id: int):
     async with async_session() as session:
@@ -950,6 +964,13 @@ async def get_system_setting(key: str) -> Optional[str]:
         setting = await session.get(SystemSetting, key)
         return setting.value if setting else None
 
+async def get_system_settings_batch(keys: List[str]) -> List[SystemSetting]:
+    """Получает несколько настроек одним запросом."""
+    async with async_session() as session:
+        query = select(SystemSetting).where(SystemSetting.key.in_(keys))
+        result = await session.execute(query)
+        return result.scalars().all()
+
 async def set_system_setting(key: str, value: str):
     async with async_session() as session:
         async with session.begin():
@@ -1278,6 +1299,13 @@ async def process_intern_decision(review_id: int, is_approved: bool, reason: Opt
 async def get_administrator(user_id: int) -> Optional[Administrator]:
     async with async_session() as session:
         return await session.get(Administrator, user_id)
+
+async def get_administrators_details(user_ids: List[int]) -> List[User]:
+    """Получает детали (username) для списка ID администраторов."""
+    async with async_session() as session:
+        query = select(User).where(User.id.in_(user_ids))
+        result = await session.execute(query)
+        return result.scalars().all()
 
 async def add_administrator(user_id: int, role: str, is_tester: bool, added_by: int, is_removable: bool = True) -> bool:
     async with async_session() as session:
@@ -1679,6 +1707,19 @@ async def get_ai_scenarios_by_category(category: str) -> List[AIScenario]:
         query = select(AIScenario).where(AIScenario.category == category)
         result = await session.execute(query)
         return result.scalars().all()
+
+async def get_ai_scenario_by_id(scenario_id: int) -> Optional[AIScenario]:
+    async with async_session() as session:
+        return await session.get(AIScenario, scenario_id)
+
+async def update_ai_scenario(scenario_id: int, new_text: str) -> bool:
+    async with async_session() as session:
+        async with session.begin():
+            scenario = await session.get(AIScenario, scenario_id)
+            if not scenario:
+                return False
+            scenario.text = new_text
+            return True
 
 async def delete_ai_scenario(scenario_id: int) -> bool:
     async with async_session() as session:

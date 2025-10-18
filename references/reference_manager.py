@@ -9,17 +9,23 @@ logger = logging.getLogger(__name__)
 
 active_assignments = {}
 
-async def assign_reference_to_user(user_id: int, platform: str) -> Link | None:
-    link = await db_manager.db_get_available_reference(platform)
+async def assign_reference_to_user(user_id: int, platform: str, dry_run: bool = False) -> Link | None:
+    """
+    Назначает доступную ссылку пользователю.
+    Если dry_run=True, просто проверяет наличие ссылки, не назначая ее.
+    """
+    link = await db_manager.db_get_available_reference(platform, 'any') # 'any' as default for now
     
     if not link:
         return None
+
+    if dry_run:
+        return link
 
     await db_manager.db_update_link_status(link.id, 'assigned', user_id=user_id)
 
     active_assignments[user_id] = link.id
     
-    # Мы возвращаем сам объект, чтобы можно было проверить is_fast_track
     link.status = 'assigned'
     link.assigned_to_user_id = user_id
     link.assigned_at = datetime.datetime.utcnow()
@@ -90,5 +96,5 @@ async def force_release_reference(link_id: int) -> tuple[bool, int | None]:
 
 
 async def has_available_references(platform: str) -> bool:
-    link = await db_manager.db_get_available_reference(platform)
+    link = await db_manager.db_get_available_reference(platform, 'any')
     return link is not None

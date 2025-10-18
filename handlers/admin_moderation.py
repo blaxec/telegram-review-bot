@@ -78,7 +78,7 @@ async def admin_select_ref_platform(callback: CallbackQuery, state: FSMContext):
     
     if callback.message:
         await callback.message.edit_text(
-            f"Управление ссылками для платформы: <b>{platform_name}</b>",
+            f"Управление ссылками для платформы: **{platform_name}**",
             reply_markup=inline.get_admin_platform_refs_keyboard(platform)
         )
 
@@ -86,35 +86,22 @@ async def admin_select_ref_platform(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("admin_refs:add:"), IsSuperAdmin())
 async def admin_add_ref_start(callback: CallbackQuery, state: FSMContext):
     platform = callback.data.split(':')[2]
-    await state.update_data(platform_for_links=platform)
-    
-    await state.set_state(AdminState.ADD_LINKS_TYPE)
-    prompt_msg = await callback.message.edit_text(
-        f"Выбрана платформа: <i>{platform}</i>.\n\n"
-        "<b>Шаг 1/5:</b> Выберите тип ссылок:",
-        reply_markup=inline.get_link_type_keyboard(platform)
-    )
-    await state.update_data(prompt_message_id=prompt_msg.message_id)
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("link_type:"), AdminState.ADD_LINKS_TYPE)
-async def admin_add_link_type(callback: CallbackQuery, state: FSMContext):
-    link_type_data = callback.data.split(":")[1]
-    is_fast = "fast" in link_type_data
-    requires_photo = "photo" in link_type_data
+    link_type_data = callback.data.split(':')[3]
     
     await state.update_data(
-        is_fast_track_for_links=is_fast,
-        requires_photo_for_links=requires_photo
+        platform_for_links=platform,
+        is_fast_track_for_links="fast" in link_type_data,
+        requires_photo_for_links="photo" in link_type_data
     )
     
     await state.set_state(AdminState.waiting_for_reward_amount)
     prompt_msg = await callback.message.edit_text(
-        "<b>Шаг 2/5:</b> Введите сумму награды в звездах за выполнение отзыва по этим ссылкам (например, 15 или 25.5).",
-        reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
+        "**Шаг 1/4:** Введите сумму награды в звездах за выполнение отзыва по этим ссылкам (например, 15 или 25.5).",
+        reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{platform}")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
     await callback.answer()
+
 
 @router.message(AdminState.waiting_for_reward_amount, IsSuperAdmin())
 async def admin_add_link_reward(message: Message, state: FSMContext):
@@ -130,7 +117,7 @@ async def admin_add_link_reward(message: Message, state: FSMContext):
     await state.update_data(reward_amount_for_links=reward)
     await state.set_state(AdminState.waiting_for_gender_requirement)
     prompt_msg = await message.answer(
-        "<b>Шаг 3/5:</b> Укажите гендерное требование для этих ссылок:",
+        "**Шаг 2/4:** Укажите гендерное требование для этих ссылок:",
         reply_markup=inline.get_gender_requirement_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -142,7 +129,7 @@ async def admin_add_link_gender(callback: CallbackQuery, state: FSMContext):
     
     await state.set_state(AdminState.waiting_for_campaign_tag)
     prompt_msg = await callback.message.edit_text(
-        "<b>Шаг 4/5 (необязательно):</b> Хотите добавить тег кампании для этих ссылок? (Например, #кафе_ромашка). Это поможет отслеживать статистику. Введите тег или нажмите 'Пропустить'.",
+        "**Шаг 3/4 (необязательно):** Хотите добавить тег кампании для этих ссылок? (Например, #кафе_ромашка). Это поможет отслеживать статистику. Введите тег или нажмите 'Пропустить'.",
         reply_markup=inline.get_campaign_tag_keyboard()
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -153,7 +140,7 @@ async def admin_skip_campaign_tag(callback: CallbackQuery, state: FSMContext):
     await state.update_data(campaign_tag_for_links=None)
     await state.set_state(AdminState.waiting_for_links)
     prompt_msg = await callback.message.edit_text(
-        "<b>Шаг 5/5:</b> Отправьте URL-ссылки. Каждая ссылка с новой строки.",
+        "**Шаг 4/4:** Отправьте URL-ссылки. Каждая ссылка с новой строки.",
         reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -166,7 +153,7 @@ async def admin_add_link_campaign(message: Message, state: FSMContext):
     
     await state.set_state(AdminState.waiting_for_links)
     prompt_msg = await message.answer(
-        "<b>Шаг 5/5:</b> Отправьте URL-ссылки. Каждая ссылка с новой строки.",
+        "**Шаг 4/4:** Отправьте URL-ссылки. Каждая ссылка с новой строки.",
         reply_markup=inline.get_cancel_inline_keyboard(f"admin_refs:select_platform:{(await state.get_data())['platform_for_links']}")
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -180,19 +167,21 @@ async def admin_add_links_handler(message: Message, state: FSMContext, bot: Bot)
     reward = data.get("reward_amount_for_links")
     gender = data.get("gender_requirement_for_links")
     campaign = data.get("campaign_tag_for_links")
-    
+    is_fast = data.get("is_fast_track_for_links")
+    requires_photo = data.get("requires_photo_for_links")
+
     try:
-        # Модифицируем вызов, передавая все собранные данные
         result_text = await admin_logic.process_add_links_logic(
             links_text=message.text, 
-            platform=platform, 
+            platform=platform,
+            is_fast_track=is_fast,
+            requires_photo=requires_photo,
             reward_amount=reward,
             gender_requirement=gender,
             campaign_tag=campaign
         )
         await message.answer(result_text, reply_markup=inline.get_back_to_platform_refs_keyboard(platform))
         
-        # Уведомляем подписчиков
         await notify_subscribers(platform, gender, bot)
 
     except Exception as e:
@@ -203,19 +192,21 @@ async def admin_add_links_handler(message: Message, state: FSMContext, bot: Bot)
 
 
 @router.callback_query(F.data == "admin_refs:back_to_selection", IsSuperAdmin())
-async def admin_back_to_platform_selection(callback: CallbackQuery):
+async def admin_back_to_platform_selection(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    await state.clear()
     if callback.message:
         await callback.message.edit_text("Меню управления ссылками:", reply_markup=inline.get_admin_refs_keyboard())
 
 
 @router.callback_query(F.data.startswith("admin_refs:stats:"), IsSuperAdmin())
-async def admin_view_refs_stats(callback: CallbackQuery):
+async def admin_view_refs_stats(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Загружаю...", show_alert=False)
     platform = callback.data.split(':')[2]
+    await state.clear()
     stats = await db_manager.db_get_link_stats(platform)
     
-    text = (f"📊 Статистика по <i>{platform}</i>:\n\n"
+    text = (f"📊 Статистика по *{platform}*:\n\n"
             f"Всего: {stats.get('total', 0)}\n"
             f"🟢 Доступно: {stats.get('available', 0)}\n"
             f"🟡 В работе: {stats.get('assigned', 0)}\n"
@@ -234,14 +225,15 @@ async def show_links_page(callback: CallbackQuery, state: FSMContext, platform: 
     filter_type = data.get("link_list_filter_type", "all")
     gender_filter = data.get("link_list_gender_filter")
     reward_filter = data.get("link_list_reward_filter")
+    sort_by_tag = data.get("link_list_sort_by_tag", False)
 
     total_links, links_on_page = await db_manager.db_get_paginated_references(
-        platform, page, Limits.LINKS_PER_PAGE, filter_type, gender_filter, reward_filter
+        platform, page, Limits.LINKS_PER_PAGE, filter_type, gender_filter, reward_filter, sort_by_tag
     )
     total_pages = ceil(total_links / Limits.LINKS_PER_PAGE) if total_links > 0 else 1
     
     page_text = admin_logic.get_paginated_links_text(links_on_page, page, total_pages, platform, filter_type)
-    keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type, reward_filter, gender_filter)
+    keyboard = inline.get_link_list_control_keyboard(platform, page, total_pages, filter_type, reward_filter, gender_filter, sort_by_tag)
     
     if callback.message:
         await callback.message.edit_text(page_text, reply_markup=keyboard, disable_web_page_preview=True)
@@ -259,7 +251,8 @@ async def admin_view_refs_list(callback: CallbackQuery, state: FSMContext):
         link_list_platform=platform,
         link_list_filter_type=filter_type,
         link_list_gender_filter=None,
-        link_list_reward_filter=None
+        link_list_reward_filter=None,
+        link_list_sort_by_tag=False
     )
     await show_links_page(callback, state, platform, 1)
 
@@ -292,26 +285,38 @@ async def filter_by_reward_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
 @router.message(AdminState.waiting_for_reward_filter_amount, IsSuperAdmin())
-async def set_reward_filter(message: Message, state: FSMContext, bot: Bot):
-    await delete_previous_messages(message, state)
+async def set_reward_filter(message: Message, state: FSMContext):
+    data = await state.get_data()
+    prompt_id = data.get("prompt_message_id")
+
     try:
         reward = float(message.text.replace(",", "."))
     except ValueError:
         msg = await message.answer("Неверный формат. Введите число.")
+        await message.delete()
         await asyncio.sleep(3)
         await msg.delete()
         return
 
-    data = await state.get_data()
     platform = data.get("link_list_platform")
     await state.update_data(link_list_reward_filter=reward)
     await state.set_state(AdminState.LINK_LIST_VIEW)
     
-    # Имитируем callback для обновления списка
-    dummy_callback_message = await message.answer("Применяю фильтр...")
-    dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=dummy_callback_message)
-    await show_links_page(dummy_callback, state, platform, 1)
-    await dummy_callback_message.delete()
+    await message.delete()
+
+    # Имитируем callback, чтобы обновить список, редактируя исходное сообщение
+    if prompt_id:
+        dummy_callback = CallbackQuery(id="dummy", from_user=message.from_user, chat_instance="", message=Message(message_id=prompt_id, chat=message.chat))
+        await show_links_page(dummy_callback, state, platform, 1)
+
+
+@router.callback_query(F.data.startswith("admin_refs:toggle_sort:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
+async def toggle_tag_sort(callback: CallbackQuery, state: FSMContext):
+    platform = callback.data.split(":")[-1]
+    data = await state.get_data()
+    current_sort = data.get("link_list_sort_by_tag", False)
+    await state.update_data(link_list_sort_by_tag=not current_sort)
+    await show_links_page(callback, state, platform, 1)
 
 @router.callback_query(F.data.startswith("admin_refs:reset_filters:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def reset_all_filters(callback: CallbackQuery, state: FSMContext):
@@ -323,8 +328,14 @@ async def reset_all_filters(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_refs:delete_start:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def admin_delete_ref_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
     platform = callback.data.split(':')[2]
+    
+    links_count = await db_manager.db_get_links_count(platform)
+    if links_count == 0:
+        await callback.answer("База ссылок для этой платформы пуста. Нечего удалять.", show_alert=True)
+        return
+        
+    await callback.answer()
     await state.set_state(AdminState.DELETE_LINK_ID)
     await state.update_data(platform_for_deletion=platform)
     if callback.message:
@@ -380,20 +391,24 @@ async def admin_process_delete_ref_id(message: Message, state: FSMContext, bot: 
     temp_message = await message.answer(summary_text)
     await state.clear()
     
-    # Имитируем callback, чтобы вернуться к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message, 
-        data=f"admin_refs:list:{platform}:all",
-        bot=bot
+        data=f"admin_refs:list:{platform}:all"
     )
     await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
 @router.callback_query(F.data.startswith("admin_refs:return_start:"), AdminState.LINK_LIST_VIEW, IsSuperAdmin())
 async def admin_return_ref_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса возврата ссылки в 'available'."""
-    await callback.answer()
     platform = callback.data.split(':')[2]
+
+    links_count = await db_manager.db_get_links_count(platform)
+    if links_count == 0:
+        await callback.answer("База ссылок для этой платформы пуста. Нечего возвращать.", show_alert=True)
+        return
+
+    await callback.answer()
     await state.set_state(AdminState.RETURN_LINK_ID)
     await state.update_data(platform_for_return=platform)
     if callback.message:
@@ -437,12 +452,10 @@ async def admin_process_return_ref_id(message: Message, state: FSMContext, bot: 
     await state.clear()
     
     temp_message = await message.answer(result_text)
-    # Имитируем callback, чтобы вернуться к списку
     dummy_callback_query = CallbackQuery(
         id=str(message.message_id), from_user=message.from_user, chat_instance="dummy", 
         message=temp_message,
         data=f"admin_refs:list:{platform}:all",
-        bot=bot
     )
     await admin_view_refs_list(callback=dummy_callback_query, state=state)
 
@@ -467,7 +480,7 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     try:
         await callback.message.edit_caption(
-            caption=f"{original_caption}\n\n🤖 <b>Запущена проверка с помощью ИИ...</b>",
+            caption=f"{original_caption}\n\n🤖 **Запущена проверка с помощью ИИ...**",
             reply_markup=None 
         )
     except TelegramBadRequest:
@@ -493,10 +506,10 @@ async def admin_ocr_check(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if ocr_result.get('status') == 'success':
         summary = ocr_result.get('analysis_summary', 'Анализ завершен.')
         reasoning = ocr_result.get('reasoning', 'Без дополнительных комментариев.')
-        ai_summary_text = f"🤖 <b>Вердикт ИИ:</b>\n- {summary}\n- <b>Обоснование:</b> {reasoning}"
+        ai_summary_text = f"🤖 **Вердикт ИИ:**\n- {summary}\n- **Обоснование:** {reasoning}"
     else: 
         reason = ocr_result.get('message') or ocr_result.get('reason', 'Неизвестная ошибка')
-        ai_summary_text = (f"⚠️ <b>AI не уверен или произошла ошибка.</b>\n"
+        ai_summary_text = (f"⚠️ **AI не уверен или произошла ошибка.**\n"
                          f"Причина: {reason}\n"
                          f"Требуется ручная проверка.")
 
@@ -531,7 +544,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
     
     action_text = ""
     if action == "confirm":
-        action_text = f"✅ <b>ПОДТВЕРЖДЕНО</b> (@{callback.from_user.username})"
+        action_text = f"✅ **ПОДТВЕРЖДЕНО** (@{callback.from_user.username})"
         if context == "google_profile":
             await user_state.set_state(UserState.GOOGLE_REVIEW_LAST_REVIEWS_CHECK)
             prompt_msg = await bot.send_message(user_id, "Профиль прошел проверку. Пришлите скриншот последних отзывов.", reply_markup=inline.get_google_last_reviews_check_keyboard())
@@ -562,7 +575,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
                 await admin_state.update_data(gmail_user_id=user_id, prompt_message_id=prompt_msg.message_id)
     
     elif action == "warn":
-        action_text = f"⚠️ <b>ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ</b> (@{callback.from_user.username})"
+        action_text = f"⚠️ **ВЫДАЧА ПРЕДУПРЕЖДЕНИЯ** (@{callback.from_user.username})"
         platform = "gmail" if "gmail" in context else context.split('_')[0]
         prompt_msg = await bot.send_message(callback.from_user.id, f"✍️ Отправьте причину предупреждения для {user_id_str}.")
         await admin_state.set_state(AdminState.PROVIDE_WARN_REASON)
@@ -575,7 +588,7 @@ async def admin_verification_handler(callback: CallbackQuery, state: FSMContext,
         )
 
     elif action == "reject":
-        action_text = f"❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
+        action_text = f"❌ **ОТКЛОНЕН** (@{callback.from_user.username})"
         context_map = {"google_profile": "google_profile", "google_last_reviews": "google_last_reviews", "yandex_profile": "yandex_profile", "yandex_profile_screenshot": "yandex_profile", "gmail_device_model": "gmail_device_model"}
         rejection_context = context_map.get(context)
         if rejection_context:
@@ -623,7 +636,7 @@ async def admin_start_providing_text(callback: CallbackQuery, state: FSMContext,
         
         edit_text = f"✍️ Введите текст отзыва для ID: {user_id_str}"
         if photo_required == 'true':
-            edit_text += "\n\n❗️<b>ВНИМАНИЕ:</b> К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, текст отзыва."
+            edit_text += "\n\n❗️**ВНИМАНИЕ:** К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, текст отзыва."
 
         new_content = f"{(callback.message.caption or callback.message.text)}\n\n{edit_text}"
         
@@ -681,7 +694,7 @@ async def input_scenario_manually(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     edit_text = "✍️ Введите короткий сценарий/описание для генерации отзыва:"
     if data.get('photo_required'):
-        edit_text += "\n\n❗️<b>ВНИМАНИЕ:</b> К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, сценарий."
+        edit_text += "\n\n❗️**ВНИМАНИЕ:** К этому отзыву требуется фото. Отправьте сначала фото, а затем, ответом на него, сценарий."
 
     await callback.message.edit_text(edit_text, reply_markup=inline.get_cancel_inline_keyboard("cancel_action"))
     await state.set_state(AdminState.AI_AWAITING_SCENARIO)
@@ -710,7 +723,7 @@ async def select_scenario_from_template(callback: CallbackQuery, state: FSMConte
 
     await callback.message.edit_text(
         f"Выбран случайный шаблон из категории '{category}':\n\n"
-        f"<i>{random_scenario.text}</i>\n\n"
+        f"*{random_scenario.text}*\n\n"
         "Использовать этот сценарий для генерации?",
         reply_markup=inline.get_ai_template_use_keyboard()
     )
@@ -725,7 +738,6 @@ async def handle_template_action(callback: CallbackQuery, state: FSMContext):
         return
 
     if action == "confirm_use":
-        # Имитируем отправку сообщения со сценарием для запуска генерации
         dummy_message = callback.message
         dummy_message.text = scenario
         await admin_process_ai_scenario(dummy_message, state, callback.bot)
@@ -738,7 +750,6 @@ async def handle_template_action(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_for_edited_scenario_text, IsAdmin())
 async def process_edited_scenario(message: Message, state: FSMContext, bot: Bot):
-    # Этот обработчик теперь тоже запускает генерацию
     await admin_process_ai_scenario(message, state, bot)
 
 
@@ -801,8 +812,8 @@ async def admin_process_ai_scenario(message: Message, state: FSMContext, bot: Bo
         return
 
     moderation_text = (
-        "📄 <b>Сгенерированный текст отзыва:</b>\n\n"
-        f"<i>{generated_text}</i>\n\n"
+        "📄 **Сгенерированный текст отзыва:**\n\n"
+        f"*{generated_text}*\n\n"
         "Выберите следующее действие:"
     )
     
@@ -858,8 +869,8 @@ async def admin_process_ai_moderation(callback: CallbackQuery, state: FSMContext
             return
 
         new_moderation_text = (
-            "📄 <b>Новый сгенерированный текст отзыва:</b>\n\n"
-            f"<i>{generated_text}</i>\n\n"
+            "📄 **Новый сгенерированный текст отзыва:**\n\n"
+            f"*{generated_text}*\n\n"
             "Выберите следующее действие:"
         )
         await callback.message.edit_text(new_moderation_text, reply_markup=inline.get_ai_moderation_keyboard())
@@ -902,7 +913,7 @@ async def admin_final_approve(callback: CallbackQuery, bot: Bot, scheduler: Asyn
     success, message_text = await admin_logic.approve_review_to_hold_logic(review_id, bot, scheduler)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В <b>ХОЛДЕ</b> (@{callback.from_user.username})", reply_markup=None)
+        await callback.message.edit_caption(caption=f"{(callback.message.caption or '')}\n\n✅ В **ХОЛДЕ** (@{callback.from_user.username})", reply_markup=None)
 
 @router.callback_query(F.data.startswith('admin_final_reject:'), IsAdmin())
 async def admin_final_reject_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -962,7 +973,7 @@ async def admin_final_reject_process_reason(message: Message, state: FSMContext,
             original_message = await bot.edit_message_caption(
                 chat_id=responsible_admin,
                 message_id=review.admin_message_id,
-                caption=f"{(review.review_text or '')}\n\n❌ <b>ОТКЛОНЕН</b> (@{message.from_user.username})\nПричина: {reason}",
+                caption=f"{(review.review_text or '')}\n\n❌ **ОТКЛОНЕН** (@{message.from_user.username})\nПричина: {reason}",
                 reply_markup=None
             )
     except Exception as e:
@@ -1003,7 +1014,7 @@ async def final_verify_approve_handler(callback: CallbackQuery, bot: Bot):
     success, message_text = await admin_logic.approve_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n✅ <b>ОДОБРЕН И ВЫПЛАЧЕН</b> (@{callback.from_user.username})"
+        new_caption = (callback.message.caption or "") + f"\n\n✅ **ОДОБРЕН И ВЫПЛАЧЕН** (@{callback.from_user.username})"
         try:
             if callback.message.media_group_id:
                 await bot.edit_message_caption(
@@ -1028,7 +1039,7 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
         await state.update_data(review_id_for_intern_rejection=review_id)
         prompt_msg = await callback.message.answer(
             f"❗️Это была проверка стажера @{review.user.username}.\n"
-            f"✍️ <b>Введите причину отклонения.</b> Эта причина будет записана в историю ошибок стажера, и ему будет начислен штраф."
+            f"✍️ **Введите причину отклонения.** Эта причина будет записана в историю ошибок стажера, и ему будет начислен штраф."
         )
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         await callback.answer("Ожидание причины для стажера...")
@@ -1043,7 +1054,7 @@ async def final_verify_reject_handler(callback: CallbackQuery, bot: Bot, state: 
     success, message_text = await admin_logic.reject_final_review_logic(review_id, bot)
     await callback.answer(message_text, show_alert=True)
     if success and callback.message:
-        new_caption = (callback.message.caption or "") + f"\n\n❌ <b>ОТКЛОНЕН</b> (@{callback.from_user.username})"
+        new_caption = (callback.message.caption or "") + f"\n\n❌ **ОТКЛОНЕН** (@{callback.from_user.username})"
         try:
             if callback.message.media_group_id:
                 await bot.edit_message_caption(
@@ -1068,14 +1079,14 @@ async def show_reward_settings_menu(message_or_callback: Union[Message, Callback
     timer_hours_str = await db_manager.get_system_setting("reward_timer_hours")
     timer_hours = int(timer_hours_str) if timer_hours_str and timer_hours_str.isdigit() else 24
     
-    text = "⚙️ <b>Управление наградами для топа статистики</b>\n\n<b>Текущие настройки:</b>\n"
+    text = "**⚙️ Управление наградами для топа статистики**\n\n**Текущие настройки:**\n"
     if not settings:
         text += "Призовые места не настроены.\n"
     else:
         for setting in settings:
             text += f" • {setting.place}-е место: {setting.reward_amount} ⭐\n"
     
-    text += f"\n<b>Период выдачи:</b> раз в {timer_hours} часов."
+    text += f"\n**Период выдачи:** раз в {timer_hours} часов."
     
     markup = inline.get_reward_settings_menu_keyboard(timer_hours)
 
@@ -1206,7 +1217,7 @@ async def internships_main_menu(message: Message, state: FSMContext):
     
     stats = await db_manager.get_internship_stats_counts()
     await message.answer(
-        "<b>Панель управления стажировками</b>",
+        "**Панель управления стажировками**",
         reply_markup=await inline.get_admin_internships_main_menu(stats)
     )
 
@@ -1214,7 +1225,7 @@ async def internships_main_menu(message: Message, state: FSMContext):
 async def back_to_internships_main_menu(callback: CallbackQuery, state: FSMContext):
     stats = await db_manager.get_internship_stats_counts()
     await callback.message.edit_text(
-        "<b>Панель управления стажировками</b>",
+        "**Панель управления стажировками**",
         reply_markup=await inline.get_admin_internships_main_menu(stats)
     )
 
@@ -1300,7 +1311,7 @@ async def assign_task_start(message: Message, state: FSMContext):
     prompt_msg = await message.answer(
         f"Назначение задачи для @{candidate_app.username}.\n"
         f"Желаемые платформы: {candidate_app.platforms}\n\n"
-        "<b>Шаг 1/3:</b> Выберите тип задания.",
+        "**Шаг 1/3:** Выберите тип задания.",
         reply_markup=inline.get_admin_intern_task_setup_keyboard(candidate_id)
     )
     await state.update_data(prompt_message_id=prompt_msg.message_id)
@@ -1440,7 +1451,5 @@ async def process_mentor_rejection_reason(message: Message, state: FSMContext, b
         admin_username=admin_username
     )
     
-    # Уведомляем ментора о результате
     await message.answer(message_text)
-
     await state.clear()

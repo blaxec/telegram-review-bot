@@ -31,10 +31,9 @@ def build_post_keyboard(buttons_data: List[Dict[str, str]]) -> Optional[InlineKe
         return None
     builder = InlineKeyboardBuilder()
     for button in buttons_data:
-        # Простая проверка URL
         url = button['url']
         if not url.startswith(('http://', 'https://', 'tg://')):
-             url = f"http://{url}" # Пытаемся исправить, если протокол не указан
+             url = f"http://{url}" 
 
         builder.button(text=button['text'], url=url)
     builder.adjust(1)
@@ -62,14 +61,14 @@ async def get_preview_text(state: FSMContext) -> str:
     buttons_str = "\n".join(buttons_info) if buttons_info else "Нет"
 
     return (
-        "<b>Конструктор постов</b>\n\n"
-        "<i>Ниже показано, как будет выглядеть ваш пост. Используйте кнопки для редактирования.</i>\n"
+        "**Конструктор постов**\n\n"
+        "*Ниже показано, как будет выглядеть ваш пост. Используйте кнопки для редактирования.*\n"
         "-------------------------------------\n"
         f"{post_text if post_text else 'Текст еще не добавлен.'}\n"
         "-------------------------------------\n"
-        f"<b>Прикрепленные медиа ({len(media_list)}/10):</b>\n{media_str}\n\n"
-        f"<b>Прикрепленные кнопки:</b>\n{buttons_str}\n\n"
-        f"<b>Аудитория:</b> {audience_str}"
+        f"**Прикрепленные медиа ({len(media_list)}/10):**\n{media_str}\n\n"
+        f"**Прикрепленные кнопки:**\n{buttons_str}\n\n"
+        f"**Аудитория:** {audience_str}"
     )
 
 async def update_preview_message(bot: Bot, chat_id: int, state: FSMContext):
@@ -81,7 +80,6 @@ async def update_preview_message(bot: Bot, chat_id: int, state: FSMContext):
         
     try:
         preview_text = await get_preview_text(state)
-        # Пытаемся построить клавиатуру для проверки ссылок
         test_keyboard = build_post_keyboard(data.get("post_buttons", []))
         
         await bot.edit_message_text(
@@ -94,7 +92,6 @@ async def update_preview_message(bot: Bot, chat_id: int, state: FSMContext):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             logger.warning(f"Error updating preview message: {e}")
-            # Если ошибка в кнопках, уведомляем админа
             if "BUTTON_URL_INVALID" in str(e) or "buttons" in str(e).lower():
                  await bot.send_message(chat_id, "⚠️ Ошибка в URL кнопок. Проверьте правильность ссылок.")
 
@@ -113,18 +110,17 @@ async def delete_and_clear_prompt(message: Message, state: FSMContext):
 
 def validate_url(url: str) -> bool:
     """Простая валидация URL."""
-    # Разрешаем http, https и tg ссылки
     regex = re.compile(
-        r'^(?:http|ftp)s?://' # http:// or https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' # domain...
-        r'localhost|' # localhost...
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
-        r'(?::\d+)?' # optional port
+        r'^(?:http|ftp)s?://'
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'
+        r'localhost|'
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+        r'(?::\d+)?'
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     
     tg_regex = re.compile(r'^tg://\S+$', re.IGNORECASE)
 
-    return re.match(regex, url) is not None or re.match(tg_regex, url) is not None or url.startswith('/') # Разрешаем внутренние ссылки бота
+    return re.match(regex, url) is not None or re.match(tg_regex, url) is not None or url.startswith('/')
 
 # --- Основная логика ---
 
@@ -160,14 +156,12 @@ async def constructor_actions(callback: CallbackQuery, state: FSMContext, bot: B
             await callback.answer("Текст удален.")
         else:
             await state.update_data(awaiting_input='text')
-            # ИСПРАВЛЕНИЕ: Указан правильный режим разметки в подсказке
             prompt_msg = await callback.message.answer("Введите новый текст для поста. Для форматирования используйте HTML.", reply_markup=inline.get_cancel_inline_keyboard("post:cancel_input"))
             await state.update_data(prompt_message_id=prompt_msg.message_id)
             await callback.answer()
     elif action == "edit_media":
         await state.update_data(awaiting_input='media')
         media_count = len(data.get("post_media", []))
-        # ИСПРАВЛЕНИЕ: Лимит увеличен до 10
         prompt_msg = await callback.message.answer(f"Отправьте фото или видео. Лимит: 10 медиа. Добавлено: {media_count}.\nКогда закончите, нажмите 'Готово'.", reply_markup=inline.get_post_media_keyboard(has_media=bool(data.get('post_media'))))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         await callback.answer()
@@ -191,7 +185,6 @@ async def constructor_actions(callback: CallbackQuery, state: FSMContext, bot: B
             await callback.answer("❌ Нельзя отправить пустой пост!", show_alert=True)
             return
         
-        # Проверка кнопок перед отправкой
         try:
             build_post_keyboard(data.get("post_buttons", []))
         except Exception as e:
@@ -202,16 +195,15 @@ async def constructor_actions(callback: CallbackQuery, state: FSMContext, bot: B
         await callback.message.edit_text(f"Вы уверены, что хотите отправить этот пост {len(user_ids)} пользователям?", reply_markup=inline.get_post_confirm_send_keyboard())
     elif action == "show_format_help":
         await callback.answer("Отправляю инструкцию...", show_alert=False)
-        # ИСПРАВЛЕНИЕ: Рабочие HTML теги
         help_text = (
-            "<b>Доступные HTML теги:</b>\n\n"
-            "&lt;b&gt;Жирный&lt;/b&gt; -> <b>Жирный</b>\n"
-            "&lt;i&gt;Курсив&lt;/i&gt; -> <i>Курсив</i>\n"
+            "**Доступные HTML теги:**\n\n"
+            "&lt;b&gt;Жирный&lt;/b&gt; -> **Жирный**\n"
+            "&lt;i&gt;Курсив&lt;/i&gt; -> *Курсив*\n"
             "&lt;u&gt;Подчеркнутый&lt;/u&gt; -> <u>Подчеркнутый</u>\n"
             "&lt;s&gt;Зачеркнутый&lt;/s&gt; -> <s>Зачеркнутый</s>\n"
-            "&lt;code&gt;Моноширинный&lt;/code&gt; -> <code>Моноширинный</code>\n"
-            "&lt;a href='http://google.com'&gt;Ссылка&lt;/a&gt; -> <a href='http://google.com'>Ссылка</a>\n"
-            "&lt;tg-spoiler&gt;Спойлер&lt;/tg-spoiler&gt; -> <tg-spoiler>Спойлер</tg-spoiler>"
+            "&lt;code&gt;Моноширинный&lt;/code&gt; -> `Моноширинный`\n"
+            "&lt;a href='http://google.com'&gt;Ссылка&lt;/a&gt; -> [Ссылка](http://google.com)\n"
+            "&lt;tg-spoiler&gt;Спойлер&lt;/tg-spoiler&gt; -> ||Спойлер||"
         )
         await callback.message.answer(
             help_text,
@@ -229,7 +221,6 @@ async def constructor_sub_actions(callback: CallbackQuery, state: FSMContext, bo
             try: await bot.delete_message(callback.from_user.id, data.get('prompt_message_id'))
             except TelegramBadRequest: pass
         await callback.answer("Ввод отменен.")
-        # Если были в подменю, возвращаемся в него
         current_sub_menu = data.get('current_sub_menu')
         if current_sub_menu == 'buttons':
              await callback.message.edit_reply_markup(reply_markup=inline.get_post_buttons_manage_keyboard(data.get("post_buttons", [])))
@@ -260,11 +251,9 @@ async def delete_single_media(callback: CallbackQuery, state: FSMContext):
             deleted = media_list.pop(index)
             await state.update_data(post_media=media_list)
             await callback.answer(f"Удалено: {deleted['type']}")
-            # Обновляем клавиатуру списка медиа
             if media_list:
                 await callback.message.edit_reply_markup(reply_markup=inline.get_post_media_preview_keyboard(media_list))
             else:
-                # Если медиа не осталось, возвращаемся в конструктор
                 await update_preview_message(callback.bot, callback.from_user.id, state)
         else:
             await callback.answer("Ошибка: медиа не найдено.", show_alert=True)
@@ -277,7 +266,7 @@ async def delete_single_media(callback: CallbackQuery, state: FSMContext):
 async def add_button_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(AdminState.POST_AWAITING_BUTTON_TEXT)
-    await state.update_data(current_sub_menu='buttons') # Запоминаем, где мы
+    await state.update_data(current_sub_menu='buttons')
     prompt_msg = await callback.message.answer("Введите текст для кнопки:", reply_markup=inline.get_cancel_inline_keyboard("post:cancel_input"))
     await state.update_data(prompt_message_id=prompt_msg.message_id)
 
@@ -292,7 +281,6 @@ async def delete_button(callback: CallbackQuery, state: FSMContext):
             deleted = buttons_list.pop(index)
             await state.update_data(post_buttons=buttons_list)
             await callback.answer(f"Кнопка '{deleted['text']}' удалена.")
-            # Обновляем клавиатуру управления кнопками
             await callback.message.edit_reply_markup(reply_markup=inline.get_post_buttons_manage_keyboard(buttons_list))
         else:
             await callback.answer("Ошибка: кнопка не найдена.", show_alert=True)
@@ -308,7 +296,6 @@ async def process_input(message: Message, state: FSMContext, bot: Bot):
     awaiting_input = data.get("awaiting_input")
 
     if awaiting_input == 'text':
-        # ИСПРАВЛЕНИЕ: Используем message.html_text для сохранения форматирования
         await state.update_data(post_text=message.html_text)
         await delete_and_clear_prompt(message, state)
         await update_preview_message(bot, message.from_user.id, state)
@@ -321,7 +308,7 @@ async def process_input(message: Message, state: FSMContext, bot: Bot):
             template_name,
             data.get("post_text"),
             json.dumps(media_list),
-            json.dumps(buttons_list), # Сохраняем кнопки
+            json.dumps(buttons_list),
             message.from_user.id
         )
         await message.answer(result_msg, reply_markup=inline.get_close_post_keyboard())
@@ -351,11 +338,8 @@ async def process_button_url(message: Message, state: FSMContext, bot: Bot):
     """Получен URL кнопки, сохраняем."""
     url = message.text.strip()
     
-    # Простая валидация
     if not url.startswith(('http://', 'https://', 'tg://')):
-        # Пробуем добавить https
         url_with_https = f"https://{url}"
-        # Можно добавить более сложную проверку, но пока так
         url = url_with_https
 
     data = await state.get_data()
@@ -368,14 +352,11 @@ async def process_button_url(message: Message, state: FSMContext, bot: Bot):
     await delete_and_clear_prompt(message, state)
     await state.set_state(AdminState.POST_CONSTRUCTOR)
     
-    # Обновляем превью, которое должно быть в истории выше
     await update_preview_message(bot, message.from_user.id, state)
     
-    # Возвращаем меню управления кнопками
     preview_msg_id = data.get("preview_message_id")
     if preview_msg_id:
         try:
-             # Т.к. мы удалили промпт, нужно обновить клавиатуру на превью сообщении
              await bot.edit_message_reply_markup(
                  chat_id=message.chat.id,
                  message_id=preview_msg_id,
@@ -394,7 +375,6 @@ async def process_media_input(message: Message, state: FSMContext, bot: Bot):
     media_list = data.get("post_media", [])
     
     new_media = None
-    # ИСПРАВЛЕНИЕ: Логика для 10 медиа или 1 GIF
     has_gif = any(m['type'] == 'gif' for m in media_list)
     
     if message.animation:
@@ -427,7 +407,7 @@ async def process_media_input(message: Message, state: FSMContext, bot: Bot):
         await state.update_data(post_media=media_list)
         
     try:
-        await message.delete() # Удаляем сообщение с медиа от пользователя
+        await message.delete()
     except TelegramBadRequest: pass
 
     prompt_id = data.get('prompt_message_id')
@@ -483,18 +463,16 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
     audience_list = data.get("post_audience", [])
     user_ids = await db_manager.get_user_ids_for_broadcast(audience_list)
     
-    # Сохраняем данные перед очисткой состояния
     media_list = data.get("post_media", [])
     text = data.get("post_text", "")
     buttons_data = data.get("post_buttons", [])
     keyboard = build_post_keyboard(buttons_data)
 
-    await state.clear() # Очищаем состояние админа
+    await state.clear()
     
     success_count, error_count = 0, 0
     start_time = asyncio.get_event_loop().time()
 
-    # ИСПРАВЛЕНИЕ: Используем HTML parse_mode, так как текст сохранен как HTML
     parse_mode = "HTML"
 
     for user_id in user_ids:
@@ -513,15 +491,11 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
                 media_group = []
                 for i, media in enumerate(media_list):
                     InputMediaClass = InputMediaPhoto if media['type'] == 'photo' else InputMediaVideo
-                    # Подпись только к первому медиа, parse_mode тут не нужен, он задается при отправке группы
                     media_group.append(InputMediaClass(media=media['file_id'], caption=text if i == 0 else None, parse_mode=parse_mode if i==0 else None)) 
                 
-                # Отправляем медиагруппу (подпись прикрепится к первому файлу)
                 await bot.send_media_group(user_id, media_group)
                 
-                # Если есть кнопки, отправляем их отдельным сообщением
                 if keyboard:
-                    # Небольшая пауза, чтобы порядок сообщений не нарушился
                     await asyncio.sleep(0.05)
                     await bot.send_message(user_id, "👇", reply_markup=keyboard)
 
@@ -533,13 +507,13 @@ async def start_broadcasting(callback: CallbackQuery, state: FSMContext, bot: Bo
             logger.error(f"Broadcast failed for user {user_id} with unexpected error: {e}")
             error_count += 1
         
-        await asyncio.sleep(0.05) # Пауза между пользователями
+        await asyncio.sleep(0.05)
 
     end_time = asyncio.get_event_loop().time()
     total_time = end_time - start_time
     
     report_text = (
-        f"<b>Отчет о рассылке:</b>\n\n"
+        "*Отчет о рассылке:*\n\n"
         f"✅ Успешно отправлено: {success_count}\n"
         f"❌ Не доставлено (блок/ошибка): {error_count}\n"
         f"⏱️ Затрачено времени: {total_time:.2f} сек."
@@ -563,13 +537,11 @@ async def toggle_audience(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     await state.update_data(post_audience=audience_list)
     
-    # ИСПРАВЛЕНИЕ: Обновляем превью, чтобы показать изменения
     await update_preview_message(bot, callback.from_user.id, state)
     
-    # Обновляем саму клавиатуру аудитории (если она была открыта)
     try:
          await callback.message.edit_reply_markup(reply_markup=inline.get_post_audience_keyboard(audience_list))
     except TelegramBadRequest:
-         pass # Могло быть вызвано из другого меню
+         pass
 
     await callback.answer()

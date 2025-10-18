@@ -4,25 +4,22 @@ import os
 import logging
 from urllib.parse import urlparse
 from datetime import timedelta
-logger = logging.getLogger(__name__) # Fixed: 'name' is not defined, use __name__
+logger = logging.getLogger(__name__)
+
 #--- Основные настройки бота и ролей ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 #ID Главного Администратора (полный доступ)
 #Используется для эксклюзивных команд и как получатель критических уведомлений
 ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1") or 0)
-SUPER_ADMIN_ID = ADMIN_ID_1 # Создаем псевдоним для нового кода с фильтрами
+SUPER_ADMIN_ID = ADMIN_ID_1
 #ID второго администратора (если есть) для ролей по умолчанию
 ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2") or 0)
 #СПИСОК ВСЕХ АДМИНИСТРАТОРОВ (включая главного) для общей логики
-#Сначала берем ID из ADMIN_IDS, если их нет, формируем из ADMIN_ID_1 и ADMIN_ID_2
-#ЭТИ СПИСКИ СТАНУТ УСТАРЕВШИМИ ПОСЛЕ ПЕРЕХОДА НА ДИНАМИЧЕСКИЕ РОЛИ,
-#НО ОСТАВЛЕНЫ ДЛЯ ПЕРВОНАЧАЛЬНОЙ СИНХРОНИЗАЦИИ
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS")
 if ADMIN_IDS_STR:
     ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
 else:
     ADMIN_IDS = [admin_id for admin_id in [ADMIN_ID_1, ADMIN_ID_2] if admin_id != 0]
-#Гарантируем, что главный админ всегда в списке ADMIN_IDS
 if ADMIN_ID_1 and ADMIN_ID_1 not in ADMIN_IDS:
     ADMIN_IDS.insert(0, ADMIN_ID_1)
 #ID Тестировщиков для команды /skip (также станет устаревшим)
@@ -55,14 +52,12 @@ if not PAYMENT_PROVIDER_TOKEN:
     logger.warning("!!! Функция платного разбана будет недоступна (или будет работать в режиме заглушки).")
 #--- Награды (в звездах) ---
 class Rewards:
-# Устаревшие награды, будут заменены динамическими
     GOOGLE_REVIEW = 15.0
     YANDEX_WITH_TEXT = 50.0
     YANDEX_WITHOUT_TEXT = 15.0
     GMAIL_ACCOUNT = 5.0
     ADMIN_ADD_STARS = 999.0
-# Реферальные награды (теперь в процентах, эти значения устарели)
-    REFERRAL_REWARD_PERCENT = float(os.getenv("REFERRAL_REWARD_PERCENT", "5.0")) # 5%
+    REFERRAL_REWARD_PERCENT = float(os.getenv("REFERRAL_REWARD_PERCENT", "10.0")) # 10%
     REFERRAL_GOOGLE_REVIEW = 0.45 
     GMAIL_FOR_REFERRAL_USER = 4.5
     REFERRAL_GMAIL_ACCOUNT = 0.5
@@ -101,7 +96,7 @@ class Durations:
     DELETE_UNKNOWN_COMMAND_MESSAGE_DELAY = 10
     DELETE_ADMIN_REPLY_DELAY = 10
     DELETE_UNBAN_REQUEST_DELAY = 15
-    SCREENSHOT_SUBMIT_TIMEOUT_MINUTES = 5 # Новый таймер
+    SCREENSHOT_SUBMIT_TIMEOUT_MINUTES = 5
 #--- Лимиты и пороги ---
 class Limits:
     MIN_WITHDRAWAL_AMOUNT = 15.0
@@ -111,9 +106,9 @@ class Limits:
 
 #--- Экономика и игры ---
 TRANSFER_COMMISSION_PERCENT = float(os.getenv("TRANSFER_COMMISSION_PERCENT") or 5.0)
-STAKE_THRESHOLD_REWARD = float(os.getenv("STAKE_THRESHOLD_REWARD") or 50.0) # Залог за задания
-STAKE_AMOUNT = float(os.getenv("STAKE_AMOUNT") or 5.0) # Сумма залога
-NOVICE_HELP_AMOUNT = float(os.getenv("NOVICE_HELP_AMOUNT") or 0.5) # Сумма помощи новичкам
+STAKE_THRESHOLD_REWARD = float(os.getenv("STAKE_THRESHOLD_REWARD") or 50.0)
+STAKE_AMOUNT = float(os.getenv("STAKE_AMOUNT") or 5.0)
+NOVICE_HELP_AMOUNT = float(os.getenv("NOVICE_HELP_AMOUNT") or 0.5)
 
 #--- Депозитные планы ---
 DEPOSIT_PLANS = {

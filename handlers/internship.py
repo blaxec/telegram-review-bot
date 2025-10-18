@@ -1,3 +1,5 @@
+# file: handlers/internship.py
+
 import logging
 import asyncio
 from math import ceil
@@ -68,7 +70,6 @@ async def internship_entry_point(message: Message, state: FSMContext):
         }
         await message.answer(status_messages.get(application.status, "Статус вашей анкеты неизвестен."))
     else:
-        # --- ИСПРАВЛЕНИЕ: Вызываем правильную функцию клавиатуры ---
         await message.answer(
             "Открыта вакансия на позицию стажера!\n\n"
             "Мы ищем внимательных и ответственных людей для помощи в проверке заданий. "
@@ -95,17 +96,17 @@ async def show_intern_cabinet(message: Message, state: FSMContext):
     final_salary = salary - total_penalty
 
     text = (
-        "<b>Добро пожаловать в ваш рабочий кабинет!</b>\n\n"
-        "<b>Ваше текущее задание:</b>\n"
-        f" • Платформа: <code>{task.platform}</code>\n"
-        f" • Тип задачи: <code>{task.task_type}</code>\n\n"
-        "<b>Прогресс:</b>\n"
-        f" • Выполнено: <b>{task.current_progress} / {task.goal_count}</b>\n"
-        f" • Ошибок допущено: <b>{task.error_count}</b>\n\n"
-        "<b>Расчетная зарплата:</b>\n"
+        "**Добро пожаловать в ваш рабочий кабинет!**\n\n"
+        "**Ваше текущее задание:**\n"
+        f" • Платформа: `{task.platform}`\n"
+        f" • Тип задачи: `{task.task_type}`\n\n"
+        "**Прогресс:**\n"
+        f" • Выполнено: **{task.current_progress} / {task.goal_count}**\n"
+        f" • Ошибок допущено: **{task.error_count}**\n\n"
+        "**Расчетная зарплата:**\n"
         f" • Изначально: {salary:.2f} ⭐\n"
         f" • Штрафы: -{total_penalty:.2f} ⭐\n"
-        f" • <b>К выплате: {final_salary:.2f} ⭐</b>"
+        f" • **К выплате: {final_salary:.2f} ⭐**"
     )
     await message.answer(text, reply_markup=inline.get_intern_cabinet_keyboard(is_busy=user.is_busy_intern))
 
@@ -138,16 +139,16 @@ async def show_mistakes_history(callback: CallbackQuery, state: FSMContext):
     mistakes, total = await db_manager.get_intern_mistakes(callback.from_user.id, page=page)
     total_pages = ceil(total / 5) if total > 0 else 1
     
-    text = "<b>📜 История ваших ошибок:</b>\n\n"
+    text = "**📜 История ваших ошибок:**\n\n"
     if not mistakes:
         text += "Ошибок не найдено. Отличная работа!"
     else:
         for mistake in mistakes:
             date_str = mistake.created_at.strftime('%d.%m.%Y')
             text += (
-                f"<b>Дата:</b> {date_str} | <b>Штраф:</b> {mistake.penalty_amount:.2f} ⭐\n"
-                f"<b>Причина:</b> <i>{mistake.reason}</i>\n"
-                f"<i>(ID отзыва: {mistake.review_id})</i>\n\n"
+                f"**Дата:** {date_str} | **Штраф:** {mistake.penalty_amount:.2f} ⭐\n"
+                f"**Причина:** *{mistake.reason}*\n"
+                f"*(ID отзыва: {mistake.review_id})*\n\n"
             )
 
     await callback.message.edit_text(
@@ -193,7 +194,6 @@ async def process_age(message: Message, state: FSMContext):
         try:
             await msg.delete()
         except TelegramBadRequest: pass
-        # Повторно задаем вопрос
         prompt_msg = await message.answer("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
@@ -205,7 +205,6 @@ async def process_age(message: Message, state: FSMContext):
         try:
             await msg.delete()
         except TelegramBadRequest: pass
-        # Повторно задаем вопрос
         prompt_msg = await message.answer("Шаг 1/4: Укажите ваш возраст (например, 21).", reply_markup=inline.get_cancel_inline_keyboard("go_main_menu"))
         await state.update_data(prompt_message_id=prompt_msg.message_id)
         return
@@ -283,11 +282,11 @@ async def show_confirmation_screen(callback: CallbackQuery, state: FSMContext):
     platforms_text = ", ".join(sorted(list(data.get("selected_platforms", set()))))
     
     confirmation_text = (
-        "<b>Пожалуйста, проверьте вашу анкету:</b>\n\n"
-        f"<b>Возраст:</b> {data.get('age')}\n"
-        f"<b>Готовность работать:</b> {data.get('hours')} ч/день\n"
-        f"<b>Скорость ответа:</b> {data.get('response_time')}\n"
-        f"<b>Выбранные платформы:</b> {platforms_text}\n\n"
+        "**Пожалуйста, проверьте вашу анкету:**\n\n"
+        f"**Возраст:** {data.get('age')}\n"
+        f"**Готовность работать:** {data.get('hours')} ч/день\n"
+        f"**Скорость ответа:** {data.get('response_time')}\n"
+        f"**Выбранные платформы:** {platforms_text}\n\n"
         "Все верно? Если хотите что-то изменить, нажмите на соответствующую кнопку."
     )
     
@@ -316,8 +315,8 @@ async def confirm_application(callback: CallbackQuery, state: FSMContext, bot: B
         )
         
         admin_text = (
-            f"🔔 <b>Новая анкета на стажировку!</b>\n\n"
-            f"От: @{callback.from_user.username} (<code>{callback.from_user.id}</code>)\n"
+            f"🔔 **Новая анкета на стажировку!**\n\n"
+            f"От: @{callback.from_user.username} (`{callback.from_user.id}`)\n"
             f"Возраст: {data.get('age')}\n"
             f"Время: {data.get('hours')} ч/день\n"
             f"Скорость ответа: {data.get('response_time')}\n"
