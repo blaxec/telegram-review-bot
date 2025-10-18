@@ -19,8 +19,8 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
-    # --- ИЗМЕНЕНИЕ: Создаем тип с помощью чистого SQL, чтобы избежать конфликтов. ---
-    # Эта конструкция безопасна: она создаст тип, только если его еще нет.
+    # --- ИЗМЕНЕНИЕ: Используем чистый SQL для безопасного создания типа ---
+    # Эта команда создаст тип, только если он не существует.
     op.execute("""
         DO $$
         BEGIN
@@ -30,7 +30,7 @@ def upgrade() -> None:
         END$$;
     """)
     
-    # Определяем тип для SQLAlchemy, но запрещаем ему управлять созданием/удалением.
+    # Определяем тип для SQLAlchemy, но запрещаем ему управлять созданием.
     gender_enum_type = sa.Enum('any', 'male', 'female', name='gender_enum', create_type=False)
 
     op.add_column('links', sa.Column('reward_amount', sa.Float(), server_default=sa.text("'0.0'"), nullable=False))
@@ -42,6 +42,6 @@ def downgrade() -> None:
     op.drop_column('links', 'gender_requirement')
     op.drop_column('links', 'reward_amount')
     
-    # Эта миграция отвечает за удаление типа.
+    # Эта миграция отвечает за удаление типа при откате.
     op.execute("DROP TYPE IF EXISTS gender_enum")
     # ### end Alembic commands ###
